@@ -1,0 +1,127 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "配置 SeenzusAI MQTT Bridge",
+        "description": "先选择配对模式，再进入对应的配置表单。",
+        "data": {
+          "pairing_mode": "配对模式"
+        },
+        "sections": {}
+      },
+      "seamless": {
+        "title": "快速配对",
+        "description": "集成会连接 Seenzus API 创建网页配对会话并跳转到外部 Seenzus 页面完成授权。若 HAOS 无法解析默认域名，请改填当前网络可访问的 Seenzus API 地址。",
+        "data": {
+          "pairing_api_base": "Seenzus API 地址"
+        },
+        "sections": {}
+      },
+      "manual": {
+        "title": "手动配置",
+        "description": "填写手动配对参数，其余 MQTT 连接与高级参数默认折叠。",
+        "data": {},
+        "sections": {
+          "mqtt_settings": {
+            "name": "MQTT 连接参数",
+            "description": "默认折叠。首次配置或更换 Broker 时展开填写。",
+            "data": {
+              "mqtt_host": "MQTT Broker 地址",
+              "mqtt_port": "MQTT 端口",
+              "mqtt_username": "MQTT 用户名",
+              "mqtt_password": "MQTT 密码"
+            }
+          },
+          "advanced_settings": {
+            "name": "高级参数",
+            "description": "默认折叠。仅在需要自定义协议参数或状态事件推送时调整。",
+            "data": {
+              "topic_root": "V2 Topic 根路径",
+              "bridge_id": "Bridge ID（留空自动生成）",
+              "enable_state_events": "启用实体状态事件推送"
+            }
+          }
+        }
+      }
+    },
+    "error": {
+      "host_required": "MQTT Broker 地址不能为空",
+      "invalid_pairing_api_base": "Seenzus API 地址无效",
+      "quick_pair_session_failed": "创建快速配对会话失败，请检查 Seenzus API 地址、DNS 和服务状态",
+      "quick_pair_bootstrap_failed": "读取网页配对最终状态失败，请确认页面侧已经完成绑定",
+      "quick_pair_mqtt_missing": "后端未返回 MQTT 桥接配置，无法完成快速配对",
+      "quick_pair_callback_unavailable": "无法生成 Home Assistant 回跳地址，请检查当前访问地址或实例 URL 配置",
+      "quick_pair_authorization_failed": "外部授权未成功完成，请重新发起快速配对",
+      "quick_pair_callback_state_mismatch": "回跳状态校验失败，请重新发起快速配对",
+      "quick_pair_code_exchange_failed": "回跳成功但兑换桥接配置失败，请检查后端服务状态",
+      "quick_pair_callback_timeout": "未收到回跳确认，请确认外部页面已完成授权并返回 Home Assistant",
+      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
+    },
+    "abort": {
+      "already_configured": "SeenzusAI MQTT Bridge 已经配置过了，只允许添加一个实例",
+      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "修改 SeenzusAI MQTT Bridge 配置",
+        "description": "先选择配对模式，再进入对应的配置表单。保存后自动重载集成立即生效。",
+        "data": {
+          "pairing_mode": "配对模式"
+        },
+        "sections": {}
+      },
+      "seamless": {
+        "title": "快速配对",
+        "description": "重新发起外部 Seenzus 快速配对。保存后会使用 Seenzus API 创建网页配对会话，授权成功后浏览器会直接回跳到 Home Assistant 并自动刷新 MQTT 桥接配置。",
+        "data": {
+          "pairing_api_base": "Seenzus API 地址"
+        },
+        "sections": {}
+      },
+      "manual": {
+        "title": "手动配置",
+        "description": "填写手动配对参数，其余 MQTT 连接与高级参数默认折叠。",
+        "data": {},
+        "sections": {
+          "mqtt_settings": {
+            "name": "MQTT 连接参数",
+            "description": "默认折叠。修改 Broker 地址、端口或账号时展开。",
+            "data": {
+              "mqtt_host": "MQTT Broker 地址",
+              "mqtt_port": "MQTT 端口",
+              "mqtt_username": "MQTT 用户名",
+              "mqtt_password": "MQTT 密码"
+            }
+          },
+          "advanced_settings": {
+            "name": "高级参数",
+            "description": "默认折叠。修改协议参数或状态事件推送开关时展开。",
+            "data": {
+              "topic_root": "V2 Topic 根路径",
+              "bridge_id": "Bridge ID（留空自动生成）",
+              "enable_state_events": "启用实体状态事件推送"
+            }
+          }
+        }
+      }
+    },
+    "error": {
+      "host_required": "MQTT Broker 地址不能为空",
+      "invalid_pairing_api_base": "Seenzus API 地址无效",
+      "quick_pair_session_failed": "创建快速配对会话失败，请检查 Seenzus API 地址、DNS 和服务状态",
+      "quick_pair_bootstrap_failed": "读取网页配对最终状态失败，请确认页面侧已经完成绑定",
+      "quick_pair_mqtt_missing": "后端未返回 MQTT 桥接配置，无法完成快速配对",
+      "quick_pair_callback_unavailable": "无法生成 Home Assistant 回跳地址，请检查当前访问地址或实例 URL 配置",
+      "quick_pair_authorization_failed": "外部授权未成功完成，请重新发起快速配对",
+      "quick_pair_callback_state_mismatch": "回跳状态校验失败，请重新发起快速配对",
+      "quick_pair_code_exchange_failed": "回跳成功但兑换桥接配置失败，请检查后端服务状态",
+      "quick_pair_callback_timeout": "未收到回跳确认，请确认外部页面已完成授权并返回 Home Assistant",
+      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
+    },
+    "abort": {
+      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
+    }
+  }
+}
