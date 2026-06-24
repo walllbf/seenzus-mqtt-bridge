@@ -38,7 +38,10 @@
             "data": {
               "topic_root": "V2 Topic 根路径",
               "bridge_id": "Bridge ID（留空自动生成）",
-              "enable_state_events": "启用实体状态事件推送"
+              "enable_state_events": "启用实体状态事件推送",
+              "allow_dangerous_services": "允许调用危险服务（hassio / shell_command / python_script 等，默认关闭）",
+              "enable_template_api": "允许模板渲染 API /api/template（默认关闭）",
+              "expose_full_config": "返回完整 /api/config（含家庭位置坐标，默认关闭）"
             }
           }
         }
@@ -101,7 +104,10 @@
             "data": {
               "topic_root": "V2 Topic 根路径",
               "bridge_id": "Bridge ID（留空自动生成）",
-              "enable_state_events": "启用实体状态事件推送"
+              "enable_state_events": "启用实体状态事件推送",
+              "allow_dangerous_services": "允许调用危险服务（hassio / shell_command / python_script 等，默认关闭）",
+              "enable_template_api": "允许模板渲染 API /api/template（默认关闭）",
+              "expose_full_config": "返回完整 /api/config（含家庭位置坐标，默认关闭）"
             }
           }
         }

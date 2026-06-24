@@ -14,6 +14,9 @@ CONF_SOURCE_ID = "source_id"
 CONF_SOURCE_TYPE = "source_type"
 CONF_SOURCE_NAME = "source_name"
 CONF_ENABLE_STATE_EVENTS = "enable_state_events"
+CONF_ENABLE_TEMPLATE_API = "enable_template_api"
+CONF_ALLOW_DANGEROUS_SERVICES = "allow_dangerous_services"
+CONF_EXPOSE_FULL_CONFIG = "expose_full_config"
 CONF_PAIRING_API_BASE = "pairing_api_base"
 CONF_PAIRING_MODE = "pairing_mode"
 CONF_PAIRING_SESSION_ID = "pairing_session_id"
@@ -39,6 +42,12 @@ PAIRING_STATUS_MQTT_AUTH_FAILED = "mqtt_auth_failed"
 DEFAULT_MQTT_PORT      = 1883
 DEFAULT_TOPIC_ROOT = "seenzus/v2"
 DEFAULT_ENABLE_STATE_EVENTS = True
+# Security defaults: deny/redact. The MQTT command channel has no app-layer
+# auth, so the safe baseline blocks RCE-class services, arbitrary template
+# rendering and home-location exposure. Operators opt back in per-switch.
+DEFAULT_ENABLE_TEMPLATE_API = False
+DEFAULT_ALLOW_DANGEROUS_SERVICES = False
+DEFAULT_EXPOSE_FULL_CONFIG = False
 DEFAULT_PAIRING_MODE = PAIRING_MODE_SEAMLESS
 DEFAULT_PAIRING_API_BASE = "https://test.neuroncloud.ai/gatewayka/seenzus"
 CONFIG_SOURCE_MANUAL = "manual"

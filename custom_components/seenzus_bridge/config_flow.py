@@ -28,7 +28,10 @@ from .const import (
     CONF_ADVANCED_SETTINGS,
     CONF_BRIDGE_ID,
     CONF_CONFIG_SOURCE,
+    CONF_ALLOW_DANGEROUS_SERVICES,
     CONF_ENABLE_STATE_EVENTS,
+    CONF_ENABLE_TEMPLATE_API,
+    CONF_EXPOSE_FULL_CONFIG,
     CONF_MQTT_HOST,
     CONF_MQTT_PASSWORD,
     CONF_MQTT_PORT,
@@ -41,7 +44,10 @@ from .const import (
     CONF_SOURCE_NAME,
     CONF_SOURCE_TYPE,
     CONF_TOPIC_ROOT,
+    DEFAULT_ALLOW_DANGEROUS_SERVICES,
     DEFAULT_ENABLE_STATE_EVENTS,
+    DEFAULT_ENABLE_TEMPLATE_API,
+    DEFAULT_EXPOSE_FULL_CONFIG,
     DEFAULT_PAIRING_API_BASE,
     DEFAULT_MQTT_PORT,
     DEFAULT_PAIRING_MODE,
@@ -172,6 +178,18 @@ def _schema(pairing_mode: str, defaults: dict | None = None) -> vol.Schema:
                 vol.Optional(
                     CONF_ENABLE_STATE_EVENTS,
                     default=d.get(CONF_ENABLE_STATE_EVENTS, DEFAULT_ENABLE_STATE_EVENTS),
+                ): BooleanSelector(),
+                vol.Optional(
+                    CONF_ALLOW_DANGEROUS_SERVICES,
+                    default=d.get(CONF_ALLOW_DANGEROUS_SERVICES, DEFAULT_ALLOW_DANGEROUS_SERVICES),
+                ): BooleanSelector(),
+                vol.Optional(
+                    CONF_ENABLE_TEMPLATE_API,
+                    default=d.get(CONF_ENABLE_TEMPLATE_API, DEFAULT_ENABLE_TEMPLATE_API),
+                ): BooleanSelector(),
+                vol.Optional(
+                    CONF_EXPOSE_FULL_CONFIG,
+                    default=d.get(CONF_EXPOSE_FULL_CONFIG, DEFAULT_EXPOSE_FULL_CONFIG),
                 ): BooleanSelector(),
             }
         ),
