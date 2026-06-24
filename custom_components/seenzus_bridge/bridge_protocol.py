@@ -19,7 +19,7 @@ class BridgeTopics:
 
 def _normalize_topic_root(topic_root: str) -> str:
     root = (topic_root or "").strip().strip("/")
-    return root or "savant/v2"
+    return root or "seenzus/v2"
 
 
 def _sanitize_bridge_id(raw_bridge_id: str) -> str:

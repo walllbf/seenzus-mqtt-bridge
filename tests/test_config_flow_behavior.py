@@ -924,8 +924,8 @@ def test_record_quick_pair_diagnostic_creates_persistent_notification(monkeypatc
         {
             "hass": hass,
             "message": "快速配对失败：quick_pair_session_failed\n\nhttp_status=500 | message=boom",
-            "title": "SavanAI Bridge 快速配对诊断",
-            "notification_id": "savanai_bridge_quick_pair_diagnostic",
+            "title": "Seenzus Bridge 快速配对诊断",
+            "notification_id": "seenzus_bridge_quick_pair_diagnostic",
         }
     ]
 

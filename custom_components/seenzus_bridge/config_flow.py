@@ -1,4 +1,4 @@
-"""Config Flow - SavanAI Bridge UI 配置."""
+"""Config Flow - Seenzus Bridge UI 配置."""
 from __future__ import annotations
 
 import asyncio
@@ -362,7 +362,7 @@ class _QuickPairFlowMixin:
                 try:
                     redirect_uri, callback_state, callback_state_token = _build_quick_pair_callback_context(
                         self.hass,
-                        getattr(self, "flow_id", "savant-quick-pair"),
+                        getattr(self, "flow_id", "seenzus-quick-pair"),
                         self._flow_manager,
                     )
                 except (NoURLAvailableError, RuntimeError, ValueError):

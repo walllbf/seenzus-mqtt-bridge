@@ -1,7 +1,7 @@
 """常量定义 - 不引入任何第三方依赖，供 config_flow 安全导入."""
 
 DOMAIN = "seenzus_bridge"
-BRIDGE_VERSION = "0.1.2"
+BRIDGE_VERSION = "0.1.4"
 
 # 用户可配置项
 CONF_MQTT_HOST      = "mqtt_host"
@@ -49,7 +49,7 @@ DEFAULT_ENABLE_TEMPLATE_API = False
 DEFAULT_ALLOW_DANGEROUS_SERVICES = False
 DEFAULT_EXPOSE_FULL_CONFIG = False
 DEFAULT_PAIRING_MODE = PAIRING_MODE_SEAMLESS
-DEFAULT_PAIRING_API_BASE = "https://test.neuroncloud.ai/gatewayka/seenzus"
+DEFAULT_PAIRING_API_BASE = "https://seenzus.ai/api/seenzus"
 CONFIG_SOURCE_MANUAL = "manual"
 CONFIG_SOURCE_WEB_PAIR = "web_pair"
 

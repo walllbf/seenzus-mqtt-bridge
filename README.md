@@ -75,7 +75,7 @@ config/custom_components/seenzus_bridge/
 | MQTT Broker 地址 | 手动配置时填写的公网 MQTT 地址 | - |
 | MQTT 端口 | Broker 端口 | `1883` |
 | MQTT 用户名/密码 | Broker 认证 | 空 |
-| V2 Topic 根路径 | v2 协议根路径 | `savant/v2` |
+| V2 Topic 根路径 | v2 协议根路径 | `seenzus/v2` |
 | Bridge ID | 留空自动生成稳定 ID | 自动 |
 | 启用实体状态事件推送 | 推送 `state` 通道 | `true` |
 | Seenzus API 地址 | 手动 MQTT 桥接配置时不使用 | 空 |
@@ -84,11 +84,31 @@ config/custom_components/seenzus_bridge/
 
 ---
 
+## 🔒 安全部署（重要）
+
+本插件通过公网 MQTT 接收命令并**直接执行 Home Assistant 内部 API（无需 HA Token）**，等于为你的 HA 开放一条远程控制通道。命令通道本身没有应用层鉴权——**安全完全依赖 MQTT Broker 的 Topic ACL 与凭证**。请务必：
+
+- **专用 Broker + 强密码**：不要与不可信方共用 Broker；为本桥单独分配账号。
+- **按 bridge 配置 Topic ACL**：`{topicRoot}/bridge/{bridgeId}/command/+` 的 **publish 权限只授予可信后端**；`result / state / presence / catalog` 的 subscribe 权限也应限制到可信方。`bridgeId` 会通过 retained `presence`/`catalog` 广播，不可视为秘密。
+- **启用 TLS**：尽量使用 8883/TLS 连接 Broker，避免凭证与设备状态明文传输。
+
+### 默认安全开关（v0.1.4+）
+
+执行层默认采用「最小暴露」策略，以下能力默认关闭，仅在确有需要时于「手动配置 → 高级参数」逐项打开：
+
+| 开关 | 默认 | 打开后 |
+|---|---|---|
+| 允许模板渲染 API | 关 | 放行 `POST /api/template`（任意 Jinja 渲染，信息泄露面大） |
+| 允许调用危险服务 | 关 | 放行 `hassio.*` / `shell_command.*` / `python_script.*` / `supervisor.*` 与 `homeassistant.stop` / `restart`；默认这些返回 403，普通设备控制（如 `light.turn_on`）不受影响 |
+| 返回完整 config | 关 | `GET /api/config` 返回含家庭经纬度 / 实例 URL 的完整配置；默认裁剪这些敏感字段 |
+
+---
+
 ## MQTT Topic 规范（v2）
 
 设：
 
-- `topicRoot = savant/v2`
+- `topicRoot = seenzus/v2`
 - `bridgeId = ha-xxxx`
 
 则：
@@ -103,7 +123,7 @@ config/custom_components/seenzus_bridge/
 Topic:
 
 ```text
-savant/v2/bridge/ha-demo/command/550e8400-e29b-41d4-a716-446655440000
+seenzus/v2/bridge/ha-demo/command/550e8400-e29b-41d4-a716-446655440000
 ```
 
 Payload:
@@ -125,7 +145,7 @@ Payload:
 Topic:
 
 ```text
-savant/v2/bridge/ha-demo/result/550e8400-e29b-41d4-a716-446655440000
+seenzus/v2/bridge/ha-demo/result/550e8400-e29b-41d4-a716-446655440000
 ```
 
 Payload:
@@ -146,7 +166,7 @@ Payload:
 Topic:
 
 ```text
-savant/v2/bridge/ha-demo/state/light.living_room
+seenzus/v2/bridge/ha-demo/state/light.living_room
 ```
 
 Payload:
@@ -352,48 +372,32 @@ docs/quick-pair-flow.zh-CN.md
 
 ## 版本变更记录
 
+### v0.1.4 (2026-06-24)
+
+- 命令执行层引入默认安全策略：模板渲染、危险服务调用、完整 `GET /api/config` 默认关闭，可在「手动配置 → 高级参数」逐项放开
+- `GET /api/config` 默认裁剪家庭经纬度与实例 URL 等敏感字段
+- 快速配对默认地址切换到生产环境 `https://seenzus.ai/api/seenzus`
+- 统一品牌为 Seenzus，修复诊断实体过滤前缀（`seenzusai_mqtt_bridge_`，兼容旧前缀）
+- 默认 Topic 根路径统一为 `seenzus/v2`
+- 新增 README「安全部署」章节
+
 ### v0.1.3 (2026-06-24) — 首个 HACS 公开发布
 
-- 快速配对从“外部页 + 轮询 session 状态”改为“外部页授权成功后直接回跳 HA callback + code exchange 自动收尾”
-- 后端 `web-pairing/session` 新增 `redirectUri/state` 契约，`complete` 支持 302 回跳，新增 callback code exchange 接口
-- 插件新增回跳状态校验、授权失败/超时/兑换失败错误提示，并补齐 callback 测试覆盖
+- HACS 合规结构、MIT 许可证、hassfest + HACS Action CI 校验
+- 快速配对：外部页授权成功后直接回跳 HA callback + code exchange 自动回写 MQTT 配置
+- 配置页两段式模式选择（快速配对 / 手动），保存后自动重载集成
+- 后端 `web-pairing/session` 新增 `redirectUri/state` 契约，新增 callback code exchange 接口
+- 新增回跳状态校验、授权失败/超时/兑换失败错误提示与 callback 测试覆盖
 
-> 以下为公开发布前的内部迭代记录(内部版本号,仅供参考)。
+### v0.1.2 — 早期迭代
 
-### v3.0.8
-
-- 快速配对改为“外部授权 + callback code exchange 自动回写 MQTT”流程
-- 快速配对页不再展示 MQTT 与高级参数，手动配置完全独立
-- quick pair 运行态新增 `config_source`，并补充 `waiting_external_auth / mqtt_config_received / bridge_starting / bridge_ready` 相关步骤可观察性
-- 插件测试总数更新为 `57`
-
-### v3.0.7
-
-- 配置页改为真正的“两段式模式选择”，先选模式再进入对应表单
-- 快速配对支持本地 `http://IP:port` 形式的 Seenzus API 地址
-- 配对状态实体与日志新增 `pairing_last_step / pairing_last_api_base`
-
-### v3.0.6
-
-- 移除旧无感配对链路，只保留 web-pairing 快速配对
-- 配置页改为“两段式模式选择”，先选快速配对/手动配置，再进入对应表单
-- 配对状态传感器新增 `pairing_mode / pairing_expires_at / pairing_bound_at`
-
-### v3.0.5
-
-- 配置页改为单页折叠分组，保存后自动重载集成
+- 配置页改为单页折叠分组，保存后自动重载
 - 过滤桥自身诊断实体，避免 `state` 自激循环
-- 当 `bridgeId` / `topicRoot` 变化时，自动清理旧桥 retained `presence`
+- 当 `bridgeId` / `topicRoot` 变化时清理旧桥 retained `presence`
+- 修复状态事件监听导致的 MQTT 发布回路
 
-### v3.0.4
+### v0.1.1 — 初始版本
 
-- 修复桥自身诊断传感器被重复镜像到 `state` 的问题
-
-### v3.0.3
-
-- 修复状态事件监听导致的 MQTT 发布回路问题
-
-### v3.0.2
-
-- 引入单页折叠配置
-- 配置保存后自动 reload，使 `enable_state_events` 等参数立即生效
+- 按 `bridgeId` 隔离 Topic，命令 / 结果 / 状态三通道
+- 运行在 HA 本地，通过公网 MQTT 实现云端与局域网双向联通
+- 支持快速配对与手动 MQTT 桥接两种配置方式
