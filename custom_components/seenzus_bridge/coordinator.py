@@ -34,7 +34,10 @@ from .const import (
     CONFIG_SOURCE_WEB_PAIR,
     CONF_BRIDGE_ID,
     CONF_CONFIG_SOURCE,
+    CONF_ALLOW_DANGEROUS_SERVICES,
     CONF_ENABLE_STATE_EVENTS,
+    CONF_ENABLE_TEMPLATE_API,
+    CONF_EXPOSE_FULL_CONFIG,
     CONF_MQTT_HOST,
     CONF_MQTT_PASSWORD,
     CONF_MQTT_PORT,
@@ -47,7 +50,10 @@ from .const import (
     CONF_SOURCE_NAME,
     CONF_SOURCE_TYPE,
     CONF_TOPIC_ROOT,
+    DEFAULT_ALLOW_DANGEROUS_SERVICES,
     DEFAULT_ENABLE_STATE_EVENTS,
+    DEFAULT_ENABLE_TEMPLATE_API,
+    DEFAULT_EXPOSE_FULL_CONFIG,
     DEFAULT_MQTT_PORT,
     DEFAULT_TOPIC_ROOT,
     PAIRING_MODE_MANUAL,
@@ -62,7 +68,7 @@ from .const import (
     normalize_pairing_mode,
 )
 from .entity_filters import looks_like_internal_bridge_entity_id, name_has_model_marker
-from .ha_dispatcher import dispatch
+from .ha_dispatcher import DispatchPolicy, dispatch
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -166,6 +172,16 @@ class BridgeCoordinator:
             if "not authorized" in lowered or "code:135" in lowered:
                 self.pairing_status = PAIRING_STATUS_MQTT_AUTH_FAILED
                 self.pairing_last_error = message
+
+    def _dispatch_policy(self) -> DispatchPolicy:
+        conf = self._conf()
+        return DispatchPolicy(
+            allow_template=bool(conf.get(CONF_ENABLE_TEMPLATE_API, DEFAULT_ENABLE_TEMPLATE_API)),
+            allow_dangerous_services=bool(
+                conf.get(CONF_ALLOW_DANGEROUS_SERVICES, DEFAULT_ALLOW_DANGEROUS_SERVICES)
+            ),
+            expose_full_config=bool(conf.get(CONF_EXPOSE_FULL_CONFIG, DEFAULT_EXPOSE_FULL_CONFIG)),
+        )
 
     def _resolve_topics(self) -> BridgeTopics:
         conf = self._conf()
@@ -497,7 +513,7 @@ class BridgeCoordinator:
                 )
                 return
 
-            result = await dispatch(self.hass, method, path, body)
+            result = await dispatch(self.hass, method, path, body, self._dispatch_policy())
             await self._publish_result(
                 client,
                 effective_msg_id,
