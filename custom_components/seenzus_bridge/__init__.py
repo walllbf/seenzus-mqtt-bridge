@@ -1,4 +1,4 @@
-"""SavanAI Bridge - MQTT v2 bridge with pairing support."""
+"""Seenzus Bridge - MQTT v2 bridge with pairing support."""
 from __future__ import annotations
 
 # Permanent re-export surface pinned by the test suite: tests import
@@ -41,7 +41,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         await coordinator.async_start()
     except Exception as err:  # noqa: BLE001
-        _LOGGER.exception("SavanAI Bridge failed to start: %s", err)
+        _LOGGER.exception("Seenzus Bridge failed to start: %s", err)
         raise ConfigEntryNotReady(f"start_failed:{err}") from err
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

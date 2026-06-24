@@ -211,8 +211,8 @@ def _record_quick_pair_diagnostic(hass: HomeAssistant, reason: str, diagnostic: 
         persistent_notification.async_create(
             hass,
             f"快速配对失败：{reason}\n\n{formatted}",
-            title="SavanAI Bridge 快速配对诊断",
-            notification_id="savanai_bridge_quick_pair_diagnostic",
+            title="Seenzus Bridge 快速配对诊断",
+            notification_id="seenzus_bridge_quick_pair_diagnostic",
         )
     except Exception:  # noqa: BLE001
         pass

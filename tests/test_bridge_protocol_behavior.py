@@ -38,7 +38,7 @@ def test_keeps_retained_topics_when_bridge_identity_is_unchanged() -> None:
 
 def test_detects_internal_bridge_metric_sensor() -> None:
     assert looks_like_internal_bridge_entity_id(
-        "sensor.savanai_bridge_zhuang_tai_tui_song_ci_shu"
+        "sensor.seenzusai_mqtt_bridge_zhuang_tai_tui_song_ci_shu"
     )
 
 

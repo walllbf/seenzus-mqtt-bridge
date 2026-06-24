@@ -4,6 +4,10 @@ from __future__ import annotations
 
 
 _INTERNAL_ENTITY_PREFIXES = (
+    "sensor.seenzusai_mqtt_bridge_",
+    "binary_sensor.seenzusai_mqtt_bridge_",
+    "update.seenzusai_mqtt_bridge_",
+    # Legacy pre-rename prefix kept so older installs stay filtered.
     "sensor.savanai_bridge_",
     "binary_sensor.savanai_bridge_",
     "update.savanai_bridge_",
