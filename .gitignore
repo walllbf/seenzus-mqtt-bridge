@@ -21,6 +21,7 @@ lib64/
 # Virtual environments
 .env
 .venv
+.venv-test/
 env/
 venv/
 ENV/

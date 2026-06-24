@@ -1,8 +1,8 @@
-﻿# SeenzusAI MQTT Bridge (HAOS Plugin) v3
+﻿# SeenzusAI MQTT Bridge (HAOS Plugin)
 
 SeenzusAI MQTT Bridge 运行在 Home Assistant 本地，通过公网 MQTT 实现云端与局域网 HA 的双向联通，无需内网穿透。
 
-v3 重构重点：
+主要特性：
 
 - 按 `bridgeId` 隔离 Topic
 - 命令 / 结果 / 状态 三通道
@@ -352,11 +352,13 @@ docs/quick-pair-flow.zh-CN.md
 
 ## 版本变更记录
 
-### 当前开发中变更（待发布）
+### v0.1.3 (2026-06-24) — 首个 HACS 公开发布
 
 - 快速配对从“外部页 + 轮询 session 状态”改为“外部页授权成功后直接回跳 HA callback + code exchange 自动收尾”
 - 后端 `web-pairing/session` 新增 `redirectUri/state` 契约，`complete` 支持 302 回跳，新增 callback code exchange 接口
 - 插件新增回跳状态校验、授权失败/超时/兑换失败错误提示，并补齐 callback 测试覆盖
+
+> 以下为公开发布前的内部迭代记录(内部版本号,仅供参考)。
 
 ### v3.0.8
 
