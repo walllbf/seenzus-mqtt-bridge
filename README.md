@@ -372,6 +372,12 @@ docs/quick-pair-flow.zh-CN.md
 
 ## 版本变更记录
 
+### v0.1.6 (2026-06-25)
+
+- 更新集成图标为正式 Seenzus 图标（v0.1.5 打包的是占位图；升级到本版后 HA 集成界面将显示新图标）
+- 仓库更名为 `seenzus-mqtt-bridge`，更新 `documentation` / `issue_tracker` 链接
+- 文档统一归入 `docs/`，新增图文安装指南 `docs/haos-seenzus-mqtt-bridge-guide.zh-CN.md`
+
 ### v0.1.5 (2026-06-25)
 
 - 统一显示品牌为 **Seenzus**（原 SeenzusAI）：集成显示名改为 `Seenzus MQTT Bridge`
