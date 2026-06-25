@@ -4,9 +4,9 @@
   "codeowners": ["@walllbf"],
   "config_flow": true,
   "dependencies": ["http"],
-  "documentation": "https://github.com/walllbf/seenzusai-mqtt-bridge",
+  "documentation": "https://github.com/walllbf/seenzus-mqtt-bridge",
   "iot_class": "cloud_push",
-  "issue_tracker": "https://github.com/walllbf/seenzusai-mqtt-bridge/issues",
+  "issue_tracker": "https://github.com/walllbf/seenzus-mqtt-bridge/issues",
   "requirements": ["aiohttp>=3.9.0", "aiomqtt>=2.0.0"],
   "version": "0.1.5"
 }
