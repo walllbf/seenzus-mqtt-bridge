@@ -6,19 +6,6 @@
 
 ---
 
-## 📷 截图说明（维护者请注意）
-
-| 步骤 | 截图 | 状态 |
-|---|---|---|
-| 登录页 | `images/01-haos-login.png` | ✅ 可用 |
-| 登录后首页 | `images/02-haos-after-login.png` | ✅ 可用 |
-| 集成列表 | `images/03-haos-integrations.png` | ✅ 可用 |
-| 搜索集成 | `images/05-haos-search-savantai-bridge.png` | ⚠️ **旧品牌**，需重截为搜索「Seenzus」 |
-| 外部授权页 | `images/06-savantai-login.png` | ⚠️ **旧品牌**，需重截为 Seenzus 授权页 |
-| HACS 安装 / 选模式 / 填地址 / 配对成功 / 传感器 | — | ❌ **待补截图**（正文已标注位置） |
-
----
-
 ## 前置条件
 
 - Home Assistant **2026.3 或更高版本**
@@ -42,7 +29,11 @@
 3. 在 HACS 中搜索 **Seenzus MQTT Bridge** → 进入 → **Download（下载）**
 4. **重启 Home Assistant**
 
-> 📷 **待补截图**：HACS 自定义仓库添加界面、搜索到 Seenzus MQTT Bridge 的下载页。
+![HACS 添加自定义仓库](images/04-hacs-custom-repo.png)
+
+![在 HACS 中找到 Seenzus MQTT Bridge](images/04b-hacs-download.png)
+
+![下载 Seenzus MQTT Bridge](images/04b-hacs-download2.png)
 
 ### 备选：手动安装
 
@@ -90,9 +81,7 @@ custom_components/
 
 点击右下角 **添加集成**，搜索 **Seenzus MQTT Bridge**：
 
-![搜索 Seenzus MQTT Bridge](images/05-haos-search-savantai-bridge.png)
-
-> ⚠️ 上图为旧品牌截图，流程一致；请重新截取「搜索 Seenzus」的界面替换。
+![搜索 Seenzus MQTT Bridge](images/05-search-seenzus.png)
 
 ---
 
@@ -103,7 +92,7 @@ custom_components/
 - **快速配对（推荐）** — 对应 `seamless`，通过 Seenzus 外部授权自动完成 MQTT 配置
 - **手动配置（高级）** — 对应 `manual`，自行填写 MQTT 桥接参数
 
-> 📷 **待补截图**：配对模式选择页。
+![选择配对模式](images/07-select-mode.png)
 
 ---
 
@@ -119,7 +108,7 @@ https://seenzus.ai/api/seenzus
 
 > 仅当 HAOS 无法访问默认域名（如纯内网联调）时，才改为当前网络可访问的地址。
 
-> 📷 **待补截图**：填写 Seenzus API 地址的表单页。
+![填写 Seenzus API 地址](images/08-api-base.png)
 
 ### 2. 外部授权
 
@@ -131,9 +120,8 @@ https://seenzus.ai/ha-pairing?session_id=...&redirect_uri=...&bridge_name=Seenzu
 
 在该页 **登录你的 Seenzus 账号**，确认页面显示的桥接名为 `Seenzus MQTT Bridge`，点击 **快速配对 / 确认绑定**：
 
-![Seenzus 配对授权页](images/06-savantai-login.png)
+![Seenzus 配对授权页](images/06-pairing-authorize.png)
 
-> ⚠️ 上图为旧品牌截图；请重新截取 `seenzus.ai/ha-pairing` 授权页替换。
 > ⏱️ 配对会话有有效期（约数分钟），请在过期前完成授权；超时后重新发起即可。
 
 ### 3. 自动完成
@@ -146,7 +134,7 @@ https://seenzus.ai/ha-pairing?session_id=...&redirect_uri=...&bridge_name=Seenzu
 
 插件随即自动兑换 MQTT 桥接配置（host / port / username / password / topicRoot / bridgeId）并创建集成实例 —— **无需手动重启**。
 
-> 📷 **待补截图**：配对成功、集成创建完成的提示页。
+![配对成功，集成已创建](images/09-pairing-success.png)
 
 ---
 
@@ -189,7 +177,7 @@ https://seenzus.ai/ha-pairing?session_id=...&redirect_uri=...&bridge_name=Seenzu
 
 在状态传感器的属性里可看到：`bridge_id`、`mqtt_connected=true`、`pairing_status=bound`（快速配对）。
 
-> 📷 **待补截图**：集成卡片 + 状态传感器属性面板。
+![状态传感器属性](images/10-status-sensor.png)
 
 ---
 
