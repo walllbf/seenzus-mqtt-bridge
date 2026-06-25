@@ -84,7 +84,7 @@ from .quick_pair import (  # noqa: F401
 
 
 CONF_MQTT_SETTINGS = "mqtt_settings"
-PLUGIN_NAME = "SeenzusAI MQTT Bridge"
+PLUGIN_NAME = "Seenzus MQTT Bridge"
 section = getattr(data_entry_flow_module, "section", lambda schema, _config: schema)
 _LOGGER = logging.getLogger(__name__)
 

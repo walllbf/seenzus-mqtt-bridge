@@ -76,7 +76,7 @@ def test_status_sensor_pins_identity_attributes_and_device_info() -> None:
     sensor = BridgeStatusSensor(coordinator, entry)
 
     assert sensor._attr_unique_id == f"{entry.entry_id}_status"
-    assert sensor._attr_name == "SeenzusAI MQTT Bridge 状态"
+    assert sensor._attr_name == "Seenzus MQTT Bridge 状态"
     assert sensor._attr_entity_category is None
     assert sensor.native_value == "运行中"
     assert sensor.icon == "mdi:check-network"
@@ -93,7 +93,7 @@ def test_status_sensor_pins_identity_attributes_and_device_info() -> None:
     }
     assert sensor.device_info == {
         "identifiers": {("seenzus_bridge", entry.entry_id)},
-        "name": "SeenzusAI MQTT Bridge",
+        "name": "Seenzus MQTT Bridge",
         "manufacturer": "Custom",
         "model": "MQTT ↔ HTTP Bridge",
         "entry_type": "service",
@@ -120,7 +120,7 @@ def test_metric_sensor_maps_key_to_coordinator_counter(key, name, icon, expected
     sensor = BridgeMetricSensor(coordinator, entry, key, name, icon)
 
     assert sensor._attr_unique_id == f"{entry.entry_id}_{key}"
-    assert sensor._attr_name == f"SeenzusAI MQTT Bridge {name}"
+    assert sensor._attr_name == f"Seenzus MQTT Bridge {name}"
     assert sensor._attr_icon == icon
     assert sensor._attr_entity_category is EntityCategory.DIAGNOSTIC
     assert sensor.native_value == expected

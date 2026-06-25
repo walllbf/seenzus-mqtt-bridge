@@ -86,7 +86,7 @@ class BridgeStatusSensor(_BridgeBaseSensor):
     def __init__(self, coordinator: BridgeCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_status"
-        self._attr_name      = "SeenzusAI MQTT Bridge 状态"
+        self._attr_name      = "Seenzus MQTT Bridge 状态"
         self._attr_entity_category = None
 
     @property
@@ -119,7 +119,7 @@ class BridgeStatusSensor(_BridgeBaseSensor):
     def device_info(self) -> dict[str, Any]:
         return {
             "identifiers":  {(DOMAIN, self._entry.entry_id)},
-            "name":         "SeenzusAI MQTT Bridge",
+            "name":         "Seenzus MQTT Bridge",
             "manufacturer": "Custom",
             "model":        "MQTT ↔ HTTP Bridge",
             "entry_type":   "service",
@@ -135,7 +135,7 @@ class BridgeMetricSensor(_BridgeBaseSensor):
             raise ValueError(f"Unknown bridge metric key: {key}")
         self._key = key
         self._attr_unique_id = f"{entry.entry_id}_{key}"
-        self._attr_name = f"SeenzusAI MQTT Bridge {name}"
+        self._attr_name = f"Seenzus MQTT Bridge {name}"
         self._attr_icon = icon
 
     @property
@@ -151,7 +151,7 @@ class BridgePairingStateSensor(_BridgeBaseSensor):
     def __init__(self, coordinator: BridgeCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_pairing_status"
-        self._attr_name = "SeenzusAI MQTT Bridge 配对状态"
+        self._attr_name = "Seenzus MQTT Bridge 配对状态"
 
     @property
     def native_value(self) -> str:
