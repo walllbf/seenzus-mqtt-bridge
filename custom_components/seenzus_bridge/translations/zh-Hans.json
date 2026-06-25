@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "配置 SeenzusAI MQTT Bridge",
+        "title": "配置 Seenzus MQTT Bridge",
         "description": "先选择配对模式，再进入对应的配置表单。",
         "data": {
           "pairing_mode": "配对模式"
@@ -61,14 +61,14 @@
       "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
     },
     "abort": {
-      "already_configured": "SeenzusAI MQTT Bridge 已经配置过了，只允许添加一个实例",
+      "already_configured": "Seenzus MQTT Bridge 已经配置过了，只允许添加一个实例",
       "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "修改 SeenzusAI MQTT Bridge 配置",
+        "title": "修改 Seenzus MQTT Bridge 配置",
         "description": "先选择配对模式，再进入对应的配置表单。保存后自动重载集成立即生效。",
         "data": {
           "pairing_mode": "配对模式"

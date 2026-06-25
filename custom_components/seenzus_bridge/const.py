@@ -1,7 +1,7 @@
 """常量定义 - 不引入任何第三方依赖，供 config_flow 安全导入."""
 
 DOMAIN = "seenzus_bridge"
-BRIDGE_VERSION = "0.1.4"
+BRIDGE_VERSION = "0.1.5"
 
 # 用户可配置项
 CONF_MQTT_HOST      = "mqtt_host"

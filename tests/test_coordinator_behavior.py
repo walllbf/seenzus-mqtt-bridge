@@ -113,7 +113,7 @@ async def test_publish_state_from_event_ignores_bridge_internal_entity(coordinat
     coordinator._topics = build_topics("savant/v2", "ha-demo")
 
     await coordinator._publish_state_from_event(
-        make_state_changed_event("sensor.seenzusai_mqtt_bridge_zhuang_tai_tui_song_ci_shu")
+        make_state_changed_event("sensor.seenzus_mqtt_bridge_zhuang_tai_tui_song_ci_shu")
     )
 
     assert coordinator._mqtt_client.published == []
@@ -208,7 +208,7 @@ async def test_get_states_command_publishes_full_state_snapshot(coordinator) -> 
     coordinator._topics = build_topics("savant/v2", "ha-demo")
     coordinator._command_prefix = coordinator._topics.command_sub[:-2]
     coordinator.hass.states.set("light.living_room", state="on", attributes={"friendly_name": "Living Room"})
-    coordinator.hass.states.set("sensor.seenzusai_mqtt_bridge_zhuang_tai_tui_song_ci_shu", state="1")
+    coordinator.hass.states.set("sensor.seenzus_mqtt_bridge_zhuang_tai_tui_song_ci_shu", state="1")
 
     await coordinator._handle_v2_command(
         "snapshot-1",

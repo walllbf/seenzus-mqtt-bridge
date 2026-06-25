@@ -1,6 +1,6 @@
-﻿# SeenzusAI MQTT Bridge (HAOS Plugin)
+﻿# Seenzus MQTT Bridge (HAOS Plugin)
 
-SeenzusAI MQTT Bridge 运行在 Home Assistant 本地，通过公网 MQTT 实现云端与局域网 HA 的双向联通，无需内网穿透。
+Seenzus MQTT Bridge 运行在 Home Assistant 本地，通过公网 MQTT 实现云端与局域网 HA 的双向联通，无需内网穿透。
 
 主要特性：
 
@@ -26,7 +26,7 @@ Client/Cloud
 MQTT Broker
          │
          ▼
-SeenzusAI MQTT Bridge (HAOS)
+Seenzus MQTT Bridge (HAOS)
   ├─ 执行 HA 内部 API（无需 HA Token）
   ├─ 回发 result
   └─ 推送 state/presence
@@ -40,7 +40,7 @@ SeenzusAI MQTT Bridge (HAOS)
 
 1. HA -> HACS -> Integrations
 2. 添加自定义仓库（类型 Integration）
-3. 安装 `SeenzusAI MQTT Bridge`
+3. 安装 `Seenzus MQTT Bridge`
 4. 重启 Home Assistant
 
 ### 手动安装
@@ -57,7 +57,7 @@ config/custom_components/seenzus_bridge/
 
 ## 配置项
 
-在 HA -> 设置 -> 设备与服务 -> 添加集成 -> `SeenzusAI MQTT Bridge`。
+在 HA -> 设置 -> 设备与服务 -> 添加集成 -> `Seenzus MQTT Bridge`。
 
 当前配置页行为：
 
@@ -199,7 +199,7 @@ Payload:
 补充说明：
 
 - `state` 是事件流，不是快照缓存；默认不使用 retain
-- 插件会过滤自己创建的诊断实体（如 `sensor.seenzus_bridge_*`），不会再把这些内部状态镜像到 MQTT
+- 插件会过滤自己创建的诊断实体（如 `sensor.seenzus_mqtt_bridge_*`），不会再把这些内部状态镜像到 MQTT
 - 插件会过滤名称（friendly_name）中带星号 `*` 的实体（部分集成用 `*` 标注型号/变体），既不上报 `state` 也不进入 `catalog`
 - 通过 MQTT 命令触发的状态回显，`source` 可能为 `command`
 - 通过 HA 内部真实状态变化触发的状态事件，`source` 可能为 `ha_state_changed`
@@ -274,7 +274,7 @@ entry 已包含 web_pair 写入的 mqtt + bridge 绑定上下文
 
 ## 监控与排障
 
-插件会创建传感器：`SeenzusAI MQTT Bridge 状态`，包含：
+插件会创建传感器：`Seenzus MQTT Bridge 状态`，包含：
 
 - `request_count`, `result_count`, `state_push_count`, `error_count`
 - `topic_root`, `bridge_id`
@@ -287,7 +287,7 @@ entry 已包含 web_pair 写入的 mqtt + bridge 绑定上下文
 配对接口调用可观察性：
 
 - 快速配对会记录创建 web session、外部授权完成、MQTT 配置落地、bridge 启动等步骤日志
-- 也可以直接在 `SeenzusAI MQTT Bridge 配对状态` 实体属性里查看 `pairing_last_step` 和 `pairing_last_api_base`
+- 也可以直接在 `Seenzus MQTT Bridge 配对状态` 实体属性里查看 `pairing_last_step` 和 `pairing_last_api_base`
 
 关于 `presence`：
 
@@ -371,6 +371,11 @@ docs/quick-pair-flow.zh-CN.md
 ---
 
 ## 版本变更记录
+
+### v0.1.5 (2026-06-25)
+
+- 统一显示品牌为 **Seenzus**（原 SeenzusAI）：集成显示名改为 `Seenzus MQTT Bridge`
+- 诊断实体 entity_id 前缀随之变为 `seenzus_mqtt_bridge_`；`entity_filters` 同步更新并保留旧前缀（`seenzusai_mqtt_bridge_` / `savanai_bridge_`）兼容旧安装
 
 ### v0.1.4 (2026-06-24)
 
