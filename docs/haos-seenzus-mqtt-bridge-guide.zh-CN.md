@@ -123,11 +123,18 @@ https://seenzus.ai/api/seenzus
 
 ### 2. 外部授权
 
-提交后浏览器会跳转到 Seenzus 授权页，登录并点击 **快速配对 / 确认绑定**：
+提交后浏览器会跳转到 Seenzus 配对页：
 
-![Seenzus 授权页](images/06-savantai-login.png)
+```text
+https://seenzus.ai/ha-pairing?session_id=...&redirect_uri=...&bridge_name=Seenzus+MQTT+Bridge
+```
 
-> ⚠️ 上图为旧品牌截图；请重新截取 Seenzus 授权页替换。
+在该页 **登录你的 Seenzus 账号**，确认页面显示的桥接名为 `Seenzus MQTT Bridge`，点击 **快速配对 / 确认绑定**：
+
+![Seenzus 配对授权页](images/06-savantai-login.png)
+
+> ⚠️ 上图为旧品牌截图；请重新截取 `seenzus.ai/ha-pairing` 授权页替换。
+> ⏱️ 配对会话有有效期（约数分钟），请在过期前完成授权；超时后重新发起即可。
 
 ### 3. 自动完成
 
