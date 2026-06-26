@@ -177,8 +177,26 @@ def build_device_catalog_payload(
     for device in catalog:
         entities = device["entities"]
         device["entityCount"] = len(entities)
+        device["availableEntityCount"] = sum(
+            1 for entity in entities if entity.get("available")
+        )
         device["primaryDomain"] = resolve_primary_domain(entities)
-        device["online"] = any(entity.get("available") for entity in entities)
+        # `online` keeps any()-semantics (wire contract); derive it from the
+        # count so the availability predicate lives in exactly one place.
+        device["online"] = device["availableEntityCount"] > 0
+        # `primaryAvailable` exposes core-function availability for stricter
+        # consumers. A device can expose several entities of its primary domain
+        # (e.g. two light entities), so aggregate over all of them rather than
+        # picking the first in state-iteration order (non-deterministic).
+        primary_entities = [
+            entity for entity in entities
+            if entity.get("domain") == device["primaryDomain"]
+        ]
+        device["primaryAvailable"] = (
+            any(entity.get("available") for entity in primary_entities)
+            if primary_entities
+            else None
+        )
 
     catalog.sort(key=lambda item: (-int(item.get("entityCount", 0)), str(item.get("name", "")).lower()))
     payload: dict[str, Any] = {
