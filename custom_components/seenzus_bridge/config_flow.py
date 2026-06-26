@@ -295,24 +295,31 @@ def _sanitize_app_return_url(value: object) -> str | None:
 
     * printable ASCII only — rejects whitespace, control bytes and zero-width /
       non-ASCII homograph chars that could spoof the visible link;
-    * no markdown-structural chars ``()[]<>"`` or backtick that would corrupt
-      the link destination;
+    * no markdown-structural chars ``()[]<>"`` / backtick, nor the HA
+      placeholder delimiters ``{}`` — all could corrupt the rendered link;
     * deny script/data style schemes; require an authority (``//host``), which
       allows ``http(s)://…`` and app deep links like ``seenzus://…`` while
-      excluding opaque schemes such as ``mailto:`` / ``tel:`` / ``foo:bar``.
+      excluding opaque schemes such as ``mailto:`` / ``tel:`` / ``foo:bar``;
+    * reject userinfo (``user@host``) — a trusted-looking ``@`` prefix would let
+      the link navigate to a different host than the one shown.
+
+    Note: IPv6-literal hosts (``[::1]``) are not supported — they need the
+    bracket chars rejected above; the backend contract uses domain hosts.
     """
     text = str(value or "").strip()
     if not text:
         return None
     if not all("!" <= ch <= "~" for ch in text):
         return None
-    if any(c in text for c in '()[]<>"`'):
+    if any(c in text for c in '()[]<>"`{}'):
         return None
     parsed = urlparse(text)
     scheme = parsed.scheme.lower()
     if not scheme or scheme in _APP_RETURN_URL_DENY_SCHEMES:
         return None
-    return text if parsed.netloc else None
+    if not parsed.netloc or "@" in parsed.netloc:
+        return None
+    return text
 
 
 def _async_show_form_compat(
@@ -361,8 +368,11 @@ def _async_show_form_compat(
 def _show_quick_pair_complete_form(flow, app_return_url: str):
     """Show the post-bind finish page carrying the 'return to app' link.
 
-    Degrades gracefully on cores lacking ``last_step`` / ``description_placeholders``;
-    without placeholders the link can't render, so the user simply finishes here.
+    On cores that accept ``last_step`` / ``description_placeholders`` (every HA
+    version this integration supports) the link renders normally. The bare
+    fallback for cores predating ``description_placeholders`` would leave the
+    description's ``{app_return_url}`` token unsubstituted; that path is older
+    than our minimum HA and effectively unreachable.
     """
     return _async_show_form_compat(
         flow,
