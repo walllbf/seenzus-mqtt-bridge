@@ -288,27 +288,31 @@ _APP_RETURN_URL_DENY_SCHEMES = {"javascript", "data", "vbscript", "file", "blob"
 def _sanitize_app_return_url(value: object) -> str | None:
     """Validate a backend-supplied app return URL before rendering it as a link.
 
-    Returns the trimmed URL when safe, else None. Rejects script/data style
-    schemes and any value carrying whitespace or markdown-structural characters
-    that would corrupt the surrounding ``[label](url)`` link.
+    The URL is rendered into a markdown ``[label](url)`` link on the finish
+    page, so validation is strict (the backend contract,
+    docs/HANDOFF_APP_RETURN_URL.zh-CN.md §4, already forbids the rejected forms;
+    this is spec-aligned defense-in-depth):
+
+    * printable ASCII only — rejects whitespace, control bytes and zero-width /
+      non-ASCII homograph chars that could spoof the visible link;
+    * no markdown-structural chars ``()[]<>"`` or backtick that would corrupt
+      the link destination;
+    * deny script/data style schemes; require an authority (``//host``), which
+      allows ``http(s)://…`` and app deep links like ``seenzus://…`` while
+      excluding opaque schemes such as ``mailto:`` / ``tel:`` / ``foo:bar``.
     """
     text = str(value or "").strip()
     if not text:
         return None
-    # Reject whitespace and every markdown-structural char that could terminate
-    # or distort the link destination ( ) [ ] < > " and backtick. The backend
-    # contract (docs/HANDOFF_APP_RETURN_URL.zh-CN.md §4) already forbids these in
-    # return URLs, so this is both spec-aligned and defense-in-depth.
-    if any(ch.isspace() for ch in text) or any(c in text for c in '()[]<>"`'):
+    if not all("!" <= ch <= "~" for ch in text):
+        return None
+    if any(c in text for c in '()[]<>"`'):
         return None
     parsed = urlparse(text)
     scheme = parsed.scheme.lower()
     if not scheme or scheme in _APP_RETURN_URL_DENY_SCHEMES:
         return None
-    if scheme in {"http", "https"}:
-        return text if parsed.netloc else None
-    # Custom app deep link (e.g. seenzus://pairing/done): require a payload.
-    return text if (parsed.netloc or parsed.path) else None
+    return text if parsed.netloc else None
 
 
 def _async_show_form_compat(

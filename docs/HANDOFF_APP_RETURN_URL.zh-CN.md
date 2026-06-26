@@ -50,8 +50,8 @@ payload 顶层返回 `appReturnMode: "redirect" | "link"`，缺省按 `link`。`
 
 1. **白名单**：只回显 scheme/host/path 前缀匹配已注册 App 的地址；不匹配则不返回该字段。
 2. **禁危险 scheme**：`javascript:` / `data:` / `vbscript:` / `file:` / `blob:`。
-3. **只允许**：`http`、`https`（须有 host）与已注册自定义 scheme（如 `seenzus://`）。
-4. **字符约束**：值内不得含空格、换行或 `(` `)`。
+3. **必须带 `//host` 授权部分**：`http(s)://…` 或 App deep link `seenzus://…`。**不接受** opaque 形式（`mailto:`、`tel:`、`seenzus:done` 这种无 `//host` 的）——插件会拒绝。
+4. **字符约束**：必须是可打印 ASCII（`0x21`–`0x7E`）；非 ASCII 字符请先 percent-encode。不得含空格/控制字符/零宽字符，也不得含 `(` `)` `[` `]` `<` `>` `"` 反引号（会破坏收尾页 markdown 链接）。
 5. 方式 A 透传时，**先校验再持久化/回显**。
 
 ## 1.5 契约示例
