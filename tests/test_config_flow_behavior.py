@@ -941,7 +941,10 @@ def test_record_quick_pair_diagnostic_creates_persistent_notification(monkeypatc
         ),
         ("seenzus://pairing/done?session=wps_1", "seenzus://pairing/done?session=wps_1"),
         ("  https://app.seenzus.ai/x  ", "https://app.seenzus.ai/x"),
-        ("seenzus:done", "seenzus:done"),
+        # opaque schemes without //host are rejected (no authority)
+        ("seenzus:done", None),
+        ("mailto:victim@example.com", None),
+        ("tel:+10000000000", None),
         ("javascript:alertOne", None),
         ("data:text/html,hello", None),
         ("https://exa mple.com", None),
@@ -951,6 +954,11 @@ def test_record_quick_pair_diagnostic_creates_persistent_notification(monkeypatc
         ('https://example.com/x"y', None),
         ("https://example.com/x<y>", None),
         ("https://example.com/x`y", None),
+        # non-printable-ASCII: zero-width, BOM, control byte, non-ASCII homograph
+        ("https://app.seenzus.ai​/x", None),
+        ("https://app.seenzus.ai﻿/x", None),
+        ("https://app.seenzus.ai\x00/x", None),
+        ("https://app.seenzús.ai/x", None),
         ("https://", None),
         ("", None),
         (None, None),
