@@ -11,6 +11,7 @@ class PairingSessionCreateResult:
     ok: bool
     session_id: str
     pairing_page_url: str = ""
+    app_return_url: str | None = None
     expires_at: str | None = None
     status: str = ""
     message: str | None = None
@@ -32,6 +33,7 @@ class PairingCallbackResult:
     source_name: str | None = None
     config_source: str | None = None
     confirmed_at: str | None = None
+    app_return_url: str | None = None
     mqtt: dict[str, object] | None = None
     message: str | None = None
     request_url: str | None = None
@@ -54,6 +56,7 @@ class PairingStatusResult:
     source_name: str | None = None
     expires_at: str | None = None
     confirmed_at: str | None = None
+    app_return_url: str | None = None
     mqtt: dict[str, object] | None = None
     message: str | None = None
     request_url: str | None = None
