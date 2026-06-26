@@ -945,6 +945,11 @@ def test_record_quick_pair_diagnostic_creates_persistent_notification(monkeypatc
         ("seenzus:done", None),
         ("mailto:victim@example.com", None),
         ("tel:+10000000000", None),
+        # userinfo '@' authority (phishing: trusted-looking prefix, real host differs)
+        ("https://app.seenzus.ai@evil.example/x", None),
+        ("https://user@host/x", None),
+        # HA placeholder delimiters in the value
+        ("https://app.seenzus.ai/x?y={z}", None),
         ("javascript:alertOne", None),
         ("data:text/html,hello", None),
         ("https://exa mple.com", None),
