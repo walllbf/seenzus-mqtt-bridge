@@ -22,9 +22,11 @@ from seenzus_bridge.config_flow import (
     _build_quick_pair_callback_context,
     _flatten_form_input,
     _mode_schema,
+    _sanitize_app_return_url,
     _schema,
     _validate,
 )
+from seenzus_bridge.pairing_bootstrap import _read_app_return_url
 from seenzus_bridge.const import (
     CONF_BRIDGE_ID,
     CONF_CONFIG_SOURCE,
@@ -928,6 +930,137 @@ def test_record_quick_pair_diagnostic_creates_persistent_notification(monkeypatc
             "notification_id": "seenzus_bridge_quick_pair_diagnostic",
         }
     ]
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (
+            "https://app.seenzus.ai/integrations/ha?bound=1",
+            "https://app.seenzus.ai/integrations/ha?bound=1",
+        ),
+        ("seenzus://pairing/done?session=wps_1", "seenzus://pairing/done?session=wps_1"),
+        ("  https://app.seenzus.ai/x  ", "https://app.seenzus.ai/x"),
+        ("seenzus:done", "seenzus:done"),
+        ("javascript:alertOne", None),
+        ("data:text/html,hello", None),
+        ("https://exa mple.com", None),
+        ("https://example.com/a(b)", None),
+        ("https://example.com/x?a]b", None),
+        ("https://example.com/x[1]", None),
+        ('https://example.com/x"y', None),
+        ("https://example.com/x<y>", None),
+        ("https://example.com/x`y", None),
+        ("https://", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_sanitize_app_return_url(value, expected) -> None:
+    assert _sanitize_app_return_url(value) == expected
+
+
+def test_read_app_return_url_accepts_key_aliases() -> None:
+    assert _read_app_return_url({"appReturnUrl": " seenzus://done "}) == "seenzus://done"
+    assert _read_app_return_url({"returnUrl": "https://x/y"}) == "https://x/y"
+    assert _read_app_return_url({"foo": "bar"}) is None
+    assert _read_app_return_url({}) is None
+
+
+@pytest.mark.asyncio
+async def test_seamless_captures_app_return_url_from_session(monkeypatch) -> None:
+    flow = SavanAIBridgeConfigFlow()
+    flow.hass = FakeHass()
+    monkeypatch.setattr(flow, "_async_current_entries", lambda: [])
+    monkeypatch.setattr(
+        "seenzus_bridge.config_flow._build_quick_pair_callback_context",
+        lambda *_args, **_kwargs: (
+            f"http://homeassistant.local:8123{QUICK_PAIR_CALLBACK_PATH}",
+            "pairing-state",
+            "jwt-state",
+        ),
+    )
+
+    async def _fake_create_web_pairing_session(**_kwargs):
+        return _result_obj(
+            {
+                "ok": True,
+                "session_id": "wps_1",
+                "pairing_page_url": "https://app.savant.xxx/web-pairing/wps_1",
+                "app_return_url": "seenzus://pairing/done",
+            }
+        )
+
+    monkeypatch.setattr(
+        "seenzus_bridge.config_flow.create_web_pairing_session",
+        _fake_create_web_pairing_session,
+    )
+    flow.async_external_step = lambda *, step_id, url, description_placeholders=None: {
+        "type": "external",
+        "step_id": step_id,
+        "url": url,
+    }
+
+    await flow.async_step_seamless({})
+
+    assert flow._quick_pair_app_return_url == "seenzus://pairing/done"
+
+
+@pytest.mark.asyncio
+async def test_seamless_finish_shows_return_step_then_creates_entry() -> None:
+    flow = SavanAIBridgeConfigFlow()
+    flow.hass = FakeHass()
+    flow._quick_pair_api_base = "https://api.savant.xxx/api"
+    flow._quick_pair_session_id = "wps_1"
+    flow._quick_pair_page_url = "https://app.savant.xxx/web-pairing/wps_1"
+    flow._quick_pair_exchange_result = _result_obj(
+        {
+            "ok": True,
+            "session_id": "wps_1",
+            "config_source": "web_pair",
+            "confirmed_at": "2026-04-20T12:01:22Z",
+            "app_return_url": "seenzus://pairing/done?session=wps_1",
+            "mqtt": {
+                "host": "broker.example.com",
+                "port": 1883,
+                "username": "user-1",
+                "password": "pass-1",
+                "topicRoot": "savant/v2",
+                "bridgeId": "ha-web-bridge",
+            },
+        }
+    )
+    shown: dict = {}
+
+    def _show_form(*, step_id, data_schema, description_placeholders=None, last_step=None):
+        shown.update(
+            step_id=step_id,
+            description_placeholders=description_placeholders,
+            last_step=last_step,
+        )
+        return {"type": "form", "step_id": step_id}
+
+    flow.async_show_form = _show_form
+    created: list[dict] = []
+    flow.async_create_entry = lambda *, title, data: created.append(data) or {
+        "type": "create_entry",
+        "data": data,
+    }
+
+    # First the finish step surfaces the return link without creating the entry.
+    result = await flow.async_step_seamless_finish()
+    assert result == {"type": "form", "step_id": "seamless_complete"}
+    assert shown["description_placeholders"] == {
+        "app_return_url": "seenzus://pairing/done?session=wps_1"
+    }
+    assert shown["last_step"] is True
+    assert created == []
+
+    # Submitting the finish page creates the entry with the bootstrapped config.
+    submit = await flow.async_step_seamless_complete({})
+    assert submit["type"] == "create_entry"
+    assert created and created[0]["mqtt_host"] == "broker.example.com"
+    assert created[0][CONF_BRIDGE_ID] == "ha-web-bridge"
 
 
 def _async_result(values: dict):

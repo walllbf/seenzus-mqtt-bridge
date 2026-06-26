@@ -41,5 +41,8 @@ ENV/
 *.log
 .cursor/
 
+# Claude Code (local worktrees / settings)
+.claude/
+
 # Pytest
 .pytest_cache/
