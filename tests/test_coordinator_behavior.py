@@ -274,6 +274,95 @@ async def test_publish_device_catalog_groups_entities_under_devices(monkeypatch)
         "light.kitchen",
         "sensor.kitchen_power",
     ]
+    device = payload["devices"][0]
+    assert device["entityCount"] == 2
+    assert device["availableEntityCount"] == 2
+    assert device["online"] is True
+    assert device["primaryAvailable"] is True
+
+
+@pytest.mark.asyncio
+async def test_device_catalog_reports_partial_availability(monkeypatch) -> None:
+    """A device with some unavailable entities reports counts and stays online."""
+    hass = FakeHass()
+    entry = FakeConfigEntry(data={"mqtt_host": "broker.example.com"})
+    entity_registry = FakeEntityRegistry()
+    device_registry = FakeDeviceRegistry()
+    entity_registry.add("light.living_room", device_id="device-living", name="Light")
+    entity_registry.add("select.living_room_power_on", device_id="device-living", name="Power On State")
+    device_registry.add("device-living", name="Living Room Lamp")
+    monkeypatch.setattr(er, "async_get", lambda _hass: entity_registry)
+    monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
+    coordinator = BridgeCoordinator(hass, entry)
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    hass.states.set("light.living_room", state="on")
+    hass.states.set("select.living_room_power_on", state="unavailable")
+
+    await coordinator._publish_device_catalog(coordinator._mqtt_client, source="test")
+
+    payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
+    device = payload["devices"][0]
+    assert device["entityCount"] == 2
+    assert device["availableEntityCount"] == 1
+    assert device["online"] is True  # any() semantics preserved
+    assert device["primaryAvailable"] is True  # primary domain (light) available
+
+
+@pytest.mark.asyncio
+async def test_device_catalog_primary_offline_with_live_secondary(monkeypatch) -> None:
+    """Core function unavailable but a secondary entity alive: online vs primaryAvailable diverge."""
+    hass = FakeHass()
+    entry = FakeConfigEntry(data={"mqtt_host": "broker.example.com"})
+    entity_registry = FakeEntityRegistry()
+    device_registry = FakeDeviceRegistry()
+    entity_registry.add("light.living_room", device_id="device-living", name="Light")
+    entity_registry.add("sensor.living_room_power", device_id="device-living", name="Power")
+    device_registry.add("device-living", name="Living Room Lamp")
+    monkeypatch.setattr(er, "async_get", lambda _hass: entity_registry)
+    monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
+    coordinator = BridgeCoordinator(hass, entry)
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    hass.states.set("light.living_room", state="unavailable")
+    hass.states.set("sensor.living_room_power", state="5", attributes={"device_class": "power"})
+
+    await coordinator._publish_device_catalog(coordinator._mqtt_client, source="test")
+
+    payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
+    device = payload["devices"][0]
+    assert device["primaryDomain"] == "light"
+    assert device["availableEntityCount"] == 1
+    assert device["online"] is True  # secondary sensor keeps any() true
+    assert device["primaryAvailable"] is False  # but the light itself is down
+
+
+@pytest.mark.asyncio
+async def test_device_catalog_primary_available_aggregates_multiple_primary_entities(monkeypatch) -> None:
+    """Multiple entities of the primary domain: primaryAvailable is any()-over-all, not first-iterated."""
+    hass = FakeHass()
+    entry = FakeConfigEntry(data={"mqtt_host": "broker.example.com"})
+    entity_registry = FakeEntityRegistry()
+    device_registry = FakeDeviceRegistry()
+    entity_registry.add("light.ceiling_a", device_id="device-living", name="Ceiling A")
+    entity_registry.add("light.ceiling_b", device_id="device-living", name="Ceiling B")
+    device_registry.add("device-living", name="Living Room Lamp")
+    monkeypatch.setattr(er, "async_get", lambda _hass: entity_registry)
+    monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
+    coordinator = BridgeCoordinator(hass, entry)
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    # First-iterated primary entity is unavailable, second is on — first() would misreport offline.
+    hass.states.set("light.ceiling_a", state="unavailable")
+    hass.states.set("light.ceiling_b", state="on")
+
+    await coordinator._publish_device_catalog(coordinator._mqtt_client, source="test")
+
+    payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
+    device = payload["devices"][0]
+    assert device["primaryDomain"] == "light"
+    assert device["availableEntityCount"] == 1
+    assert device["primaryAvailable"] is True  # a working light exists, regardless of iteration order
 
 
 @pytest.mark.asyncio

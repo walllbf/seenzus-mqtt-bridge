@@ -269,8 +269,10 @@ savant/v2/bridge/ha-demo/catalog
       "model": "L1",
       "areaId": "kitchen",
       "entityCount": 2,
+      "availableEntityCount": 2,
       "primaryDomain": "light",
       "online": true,
+      "primaryAvailable": true,
       "entities": [
         {
           "entityId": "light.kitchen",
@@ -297,11 +299,17 @@ savant/v2/bridge/ha-demo/catalog
 - `ts`: 快照生成时间
 - `devices`: 设备列表
 - `deviceCount`: 设备数量
-- `entityCount`: 所有设备下实体总数
+- `entityCount`(顶层): 所有设备下实体总数
 - `correlationMsgId`: 可选，command 触发时用于关联请求
+
+`devices[]` 内每个设备对象字段：
+
 - `deviceId`: HA device registry 的 device id；没有 registry 设备时，使用 `entityId` 构造独立设备
-- `online`: 当前设备下任一实体 `available=true` 即为 true
+- `entityCount`(设备级): 该设备下实体数量
+- `availableEntityCount`: 该设备下 `available=true` 的实体数量;配合设备级 `entityCount` 可体现「部分掉线」程度
+- `online`: 当前设备下任一实体 `available=true` 即为 true(语义不变;等价于 `availableEntityCount > 0`)
 - `primaryDomain`: 根据实体 domain 优先级推断的主 domain
+- `primaryAvailable`: 主域(`primaryDomain`)**任一**实体可用即为 true,反映设备核心功能是否在线;无主域实体时为 `null`。需要更贴近用户体感的在线判断时,优先用此字段而非 `online`
 
 ### 5.7 过滤规则
 
