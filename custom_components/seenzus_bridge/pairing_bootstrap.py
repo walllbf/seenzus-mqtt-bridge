@@ -141,6 +141,22 @@ def _read_message(data: object, fallback: str) -> str:
     return _redact_secrets(raw) if isinstance(raw, str) else str(raw)
 
 
+def _read_app_return_url(payload: dict) -> str | None:
+    """Return the backend-supplied app return URL, if any.
+
+    The app passes a deep link / page URL it wants the user bounced back to
+    after binding; the backend echoes it on the session and pairing responses.
+    Tolerates a few key spellings; validation/sanitization happens in the flow.
+    """
+    if not isinstance(payload, dict):
+        return None
+    for key in ("appReturnUrl", "appReturnUri", "returnUrl", "returnUri"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _read_ok(payload: dict, data: object) -> bool:
     """Effective success flag: payload `ok`, falling back to the gateway `isSuccess`.
 
@@ -298,6 +314,7 @@ async def create_web_pairing_session(
             or payload.get("pairingUrl")
             or ""
         ),
+        app_return_url=_read_app_return_url(payload),
         expires_at=str(payload.get("expiresAt", "")) or None,
         status=str(payload.get("status", "")),
         message=_read_message(data, "ok"),
@@ -347,6 +364,7 @@ async def fetch_web_pairing_session_status(
         source_name=str(payload.get("sourceName", "")) or None,
         expires_at=str(payload.get("expiresAt", "")) or None,
         confirmed_at=str(payload.get("confirmedAt", "")) or None,
+        app_return_url=_read_app_return_url(payload),
         mqtt=payload.get("mqtt") if isinstance(payload.get("mqtt"), dict) else None,
         message=_read_message(data, "ok"),
         request_url=url,
@@ -401,6 +419,7 @@ async def exchange_web_pairing_callback_code(
         source_name=str(payload.get("sourceName", "")) or None,
         config_source=str(payload.get("configSource", "")) or None,
         confirmed_at=str(payload.get("confirmedAt", "")) or None,
+        app_return_url=_read_app_return_url(payload),
         mqtt=payload.get("mqtt") if isinstance(payload.get("mqtt"), dict) else None,
         message=_read_message(data, "ok"),
         request_url=url,
