@@ -19,7 +19,7 @@
       },
       "seamless_complete": {
         "title": "配对完成",
-        "description": "Seenzus MQTT Bridge 已成功绑定。点击下方链接返回 Seenzus 应用继续后续设置；点击「提交」结束并关闭本向导。\n\n👉 [返回 Seenzus 应用]({app_return_url})",
+        "description": "Seenzus MQTT Bridge 已成功绑定。⚠️ 请先点击「提交」完成添加，否则关闭向导需重新配对；完成后再点下方链接返回 Seenzus 应用。\n\n👉 [返回 Seenzus 应用]({app_return_url})",
         "data": {}
       },
       "manual": {
@@ -90,7 +90,7 @@
       },
       "seamless_complete": {
         "title": "配对完成",
-        "description": "Seenzus MQTT Bridge 已成功绑定。点击下方链接返回 Seenzus 应用继续后续设置；点击「提交」结束并关闭本向导。\n\n👉 [返回 Seenzus 应用]({app_return_url})",
+        "description": "Seenzus MQTT Bridge 已成功绑定。⚠️ 请先点击「提交」完成添加，否则关闭向导需重新配对；完成后再点下方链接返回 Seenzus 应用。\n\n👉 [返回 Seenzus 应用]({app_return_url})",
         "data": {}
       },
       "manual": {
