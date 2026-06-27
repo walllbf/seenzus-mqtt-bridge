@@ -278,21 +278,119 @@ def _diagnostic_from_result(
     return diagnostic
 
 
+# Schemes that must never be rendered as a clickable markdown link — a
+# backend-supplied return URL flows straight into the seamless_complete step's
+# description, so a javascript:/data: payload would otherwise be one tap from
+# execution. http(s) and custom app deep-link schemes (seenzus://…) are allowed.
+_APP_RETURN_URL_DENY_SCHEMES = {"javascript", "data", "vbscript", "file", "blob"}
+
+
+def _sanitize_app_return_url(value: object) -> str | None:
+    """Validate a backend-supplied app return URL before rendering it as a link.
+
+    The URL is rendered into a markdown ``[label](url)`` link on the finish
+    page, so validation is strict (the backend contract,
+    docs/HANDOFF_APP_RETURN_URL.zh-CN.md §4, already forbids the rejected forms;
+    this is spec-aligned defense-in-depth):
+
+    * printable ASCII only — rejects whitespace, control bytes and zero-width /
+      non-ASCII homograph chars that could spoof the visible link;
+    * no markdown-structural chars ``()[]<>"`` / backtick, nor the HA
+      placeholder delimiters ``{}`` — all could corrupt the rendered link;
+    * deny script/data style schemes; require an authority (``//host``), which
+      allows ``http(s)://…`` and app deep links like ``seenzus://…`` while
+      excluding opaque schemes such as ``mailto:`` / ``tel:`` / ``foo:bar``;
+    * reject userinfo (``user@host``) — a trusted-looking ``@`` prefix would let
+      the link navigate to a different host than the one shown.
+
+    Note: IPv6-literal hosts (``[::1]``) are not supported — they need the
+    bracket chars rejected above; the backend contract uses domain hosts.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if not all("!" <= ch <= "~" for ch in text):
+        return None
+    if any(c in text for c in '()[]<>"`{}'):
+        return None
+    parsed = urlparse(text)
+    scheme = parsed.scheme.lower()
+    if not scheme or scheme in _APP_RETURN_URL_DENY_SCHEMES:
+        return None
+    if not parsed.netloc or "@" in parsed.netloc:
+        return None
+    return text
+
+
+def _async_show_form_compat(
+    flow,
+    *,
+    step_id: str,
+    data_schema: vol.Schema,
+    errors: dict[str, str] | None = None,
+    description_placeholders: dict[str, str] | None = None,
+    last_step: bool | None = None,
+):
+    """Call ``async_show_form``, degrading on cores lacking newer kwargs.
+
+    ``errors`` is always supported; ``description_placeholders`` and ``last_step``
+    are the version-gated ones. We try the richest signature first, then drop
+    ``last_step``, then drop ``description_placeholders`` — so an older core
+    still renders the form (without the link/placeholder) instead of raising.
+    Single home for the TypeError fallback ladder shared by the finish page and
+    the diagnostic form.
+    """
+    base: dict = {"step_id": step_id, "data_schema": data_schema}
+    if errors is not None:
+        base["errors"] = errors
+
+    variants: list[dict] = []
+    richest = dict(base)
+    if description_placeholders is not None:
+        richest["description_placeholders"] = description_placeholders
+    if last_step is not None:
+        richest["last_step"] = last_step
+    variants.append(richest)
+    if last_step is not None and description_placeholders is not None:
+        variants.append({**base, "description_placeholders": description_placeholders})
+    if richest != base:
+        variants.append(base)
+
+    last_exc: TypeError | None = None
+    for kwargs in variants:
+        try:
+            return flow.async_show_form(**kwargs)
+        except TypeError as exc:
+            last_exc = exc
+    raise last_exc  # pragma: no cover
+
+
+def _show_quick_pair_complete_form(flow, app_return_url: str):
+    """Show the post-bind finish page carrying the 'return to app' link.
+
+    On cores that accept ``last_step`` / ``description_placeholders`` (every HA
+    version this integration supports) the link renders normally. The bare
+    fallback for cores predating ``description_placeholders`` would leave the
+    description's ``{app_return_url}`` token unsubstituted; that path is older
+    than our minimum HA and effectively unreachable.
+    """
+    return _async_show_form_compat(
+        flow,
+        step_id="seamless_complete",
+        data_schema=vol.Schema({}),
+        description_placeholders={"app_return_url": app_return_url},
+        last_step=True,
+    )
+
+
 def _show_form_with_diagnostic(flow, *, step_id: str, data_schema: vol.Schema, errors: dict[str, str], diagnostic: dict[str, str] | None = None):
-    placeholders = {"quick_pair_diagnostic": _format_quick_pair_diagnostic(diagnostic or {})}
-    try:
-        return flow.async_show_form(
-            step_id=step_id,
-            data_schema=data_schema,
-            errors=errors,
-            description_placeholders=placeholders,
-        )
-    except TypeError:
-        return flow.async_show_form(
-            step_id=step_id,
-            data_schema=data_schema,
-            errors=errors,
-        )
+    return _async_show_form_compat(
+        flow,
+        step_id=step_id,
+        data_schema=data_schema,
+        errors=errors,
+        description_placeholders={"quick_pair_diagnostic": _format_quick_pair_diagnostic(diagnostic or {})},
+    )
 
 
 # ──────────────────────────────────────────────
@@ -325,6 +423,10 @@ class _QuickPairFlowMixin:
         self._quick_pair_exchange_result = None
         self._quick_pair_finish_error: str | None = None
         self._quick_pair_diagnostic: dict[str, str] = {}
+        # App return link (backend-supplied) and the entry data held back so the
+        # seamless_complete finish page can surface the link before we create it.
+        self._quick_pair_app_return_url: str | None = None
+        self._quick_pair_entry_data: dict | None = None
 
     def _reshow_seamless_form(self, error_key: str) -> config_entries.ConfigFlowResult:
         """Re-show the seamless form after a failure, seeded with the active api base."""
@@ -349,7 +451,31 @@ class _QuickPairFlowMixin:
             _record_quick_pair_diagnostic(self.hass, "quick_pair_mqtt_missing", self._quick_pair_diagnostic)
             return self._reshow_seamless_form("quick_pair_mqtt_missing")
 
-        return self.async_create_entry(title=self._entry_title, data=data)
+        self._quick_pair_entry_data = data
+        # A confirmed return URL on the final result wins over the one captured
+        # when the session was created; keep the latter as fallback.
+        result_return_url = _sanitize_app_return_url(getattr(status_result, "app_return_url", None))
+        if result_return_url:
+            self._quick_pair_app_return_url = result_return_url
+        return self._finish_quick_pair()
+
+    def _finish_quick_pair(self) -> config_entries.ConfigFlowResult:
+        """Create the entry, first surfacing the app return link when present."""
+        data = self._quick_pair_entry_data or {}
+        if not self._quick_pair_app_return_url:
+            return self.async_create_entry(title=self._entry_title, data=data)
+        return _show_quick_pair_complete_form(self, self._quick_pair_app_return_url)
+
+    async def async_step_seamless_complete(self, user_input: dict | None = None):
+        """Submit handler for the finish page: create the held-back entry.
+
+        The page itself is first rendered by ``_finish_quick_pair``; HA only
+        invokes this step when the user submits it (``user_input={}``), so this
+        just commits the entry built earlier.
+        """
+        if not self._quick_pair_entry_data:
+            return self.async_abort(reason="quick_pair_missing_context")
+        return self.async_create_entry(title=self._entry_title, data=self._quick_pair_entry_data)
 
     async def async_step_seamless(self, user_input: dict | None = None):
         errors: dict[str, str] = {}
@@ -390,6 +516,9 @@ class _QuickPairFlowMixin:
                         self._quick_pair_callback_state_token = callback_state_token
                         self._quick_pair_exchange_result = None
                         self._quick_pair_finish_error = None
+                        self._quick_pair_app_return_url = _sanitize_app_return_url(
+                            getattr(result, "app_return_url", None)
+                        )
                         self._quick_pair_diagnostic = _diagnostic_from_result(result)
                         return await self.async_step_seamless_authorize()
 

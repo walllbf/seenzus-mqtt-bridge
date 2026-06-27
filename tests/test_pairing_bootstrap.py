@@ -56,6 +56,7 @@ class _FakeClientSession:
                     "sourceName": "HA Bridge",
                     "configSource": "web_pair",
                     "confirmedAt": "2026-04-20T12:01:22Z",
+                    "appReturnUrl": "seenzus://pairing/done",
                     "mqtt": {
                         "host": "broker.example.com",
                         "port": 1883,
@@ -74,6 +75,7 @@ class _FakeClientSession:
                     "ok": True,
                     "sessionId": "wps_abc123",
                     "pairingPageUrl": "https://app.seenzus.xxx/web-pairing/wps_abc123",
+                    "appReturnUrl": "seenzus://pairing/done",
                     "expiresAt": "2026-04-20T12:05:00Z",
                     "status": "pending",
                 },
@@ -95,6 +97,7 @@ class _FakeClientSession:
                     "sourceType": "haos_bridge",
                     "sourceName": "HA Bridge",
                     "confirmedAt": "2026-04-20T12:01:22Z",
+                    "appReturnUrl": "seenzus://pairing/done",
                     "mqtt": {
                         "host": "broker.example.com",
                         "port": 1883,
@@ -222,6 +225,7 @@ async def test_create_web_pairing_session_posts_expected_payload(monkeypatch) ->
     assert result.ok is True
     assert result.session_id == "wps_abc123"
     assert result.pairing_page_url == "https://app.seenzus.xxx/web-pairing/wps_abc123"
+    assert result.app_return_url == "seenzus://pairing/done"
     assert result.request_url == "https://app.seenzus.xxx/api/integrations/ha/web-pairing/session"
     assert result.http_status == 200
     assert fake_session.calls[0]["url"] == "https://app.seenzus.xxx/api/integrations/ha/web-pairing/session"
@@ -293,6 +297,7 @@ async def test_fetch_web_pairing_session_status_reads_backend_status(monkeypatch
     assert result.source_id == "ha-bridge-ha-web-bridge"
     assert result.source_type == "haos_bridge"
     assert result.source_name == "HA Bridge"
+    assert result.app_return_url == "seenzus://pairing/done"
     assert result.mqtt == {
         "host": "broker.example.com",
         "port": 1883,
@@ -326,6 +331,7 @@ async def test_exchange_web_pairing_callback_code_posts_expected_payload(monkeyp
     assert result.source_type == "haos_bridge"
     assert result.source_name == "HA Bridge"
     assert result.config_source == "web_pair"
+    assert result.app_return_url == "seenzus://pairing/done"
     assert result.mqtt == {
         "host": "broker.example.com",
         "port": 1883,
