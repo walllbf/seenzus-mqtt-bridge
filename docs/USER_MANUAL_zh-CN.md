@@ -59,7 +59,7 @@
 - `MQTT Broker 地址`：你的 MQTT 服务器地址
 - `MQTT 端口`：默认 `1883`
 - `MQTT 用户名/密码`：按你的 Broker 账号填写
-- `V2 Topic 根路径`：默认 `savant/v2`，一般不用改
+- `V2 Topic 根路径`：默认 `seenzus/v2`，一般不用改
 - `Bridge ID`：留空会自动生成（推荐留空）
 - `启用实体状态事件推送`：建议开启
 

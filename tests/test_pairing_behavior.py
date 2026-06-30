@@ -18,7 +18,7 @@ async def test_manual_pairing_does_not_call_backend_pairing(monkeypatch) -> None
     )
     monkeypatch.setattr(er, "async_get", lambda _hass: FakeEntityRegistry())
     coordinator = BridgeCoordinator(hass, entry)
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
 
     await coordinator._try_pairing()
 
@@ -41,7 +41,7 @@ async def test_try_pairing_marks_bound_for_web_pair_source(monkeypatch) -> None:
     )
     monkeypatch.setattr(er, "async_get", lambda _hass: FakeEntityRegistry())
     coordinator = BridgeCoordinator(hass, entry)
-    coordinator._topics = build_topics("savant/v2", "ha-web-bridge")
+    coordinator._topics = build_topics("seenzus/v2", "ha-web-bridge")
 
     await coordinator._try_pairing()
 
@@ -63,7 +63,7 @@ async def test_try_pairing_waits_when_seamless_config_is_not_web_pair(monkeypatc
     )
     monkeypatch.setattr(er, "async_get", lambda _hass: FakeEntityRegistry())
     coordinator = BridgeCoordinator(hass, entry)
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
 
     await coordinator._try_pairing()
 

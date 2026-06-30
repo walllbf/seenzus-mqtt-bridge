@@ -64,7 +64,7 @@ def test_status_sensor_pins_identity_attributes_and_device_info() -> None:
     entry = FakeConfigEntry(
         data={
             "bridge_id": "ha-web-bridge",
-            "topic_root": "savant/v2",
+            "topic_root": "seenzus/v2",
             "source_id": "ha-bridge-ha-web-bridge",
             "source_type": "haos_bridge",
             "source_name": "HA Bridge",
@@ -84,7 +84,7 @@ def test_status_sensor_pins_identity_attributes_and_device_info() -> None:
         "raw_status": "active",
         "last_request": None,
         "last_error": None,
-        "topic_root": "savant/v2",
+        "topic_root": "seenzus/v2",
         "bridge_id": "ha-web-bridge",
         "source_id": "ha-bridge-ha-web-bridge",
         "source_type": "haos_bridge",
