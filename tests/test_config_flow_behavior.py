@@ -37,6 +37,7 @@ from seenzus_bridge.const import (
 )
 from seenzus_bridge.quick_pair import (
     QUICK_PAIR_CALLBACK_PAYLOAD_LIMIT,
+    _clear_quick_pair_notifications,
     _notify_app_return,
     _record_quick_pair_diagnostic,
 )
@@ -933,9 +934,10 @@ def test_record_quick_pair_diagnostic_creates_persistent_notification(monkeypatc
     ]
 
 
-def test_notify_app_return_creates_persistent_notification(monkeypatch) -> None:
+def test_notify_app_return_creates_notification_and_clears_diagnostic(monkeypatch) -> None:
     hass = FakeHass()
     created: list[dict] = []
+    dismissed: list[str] = []
 
     def _fake_async_create(target_hass, message, *, title=None, notification_id=None):
         created.append(
@@ -949,7 +951,10 @@ def test_notify_app_return_creates_persistent_notification(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "seenzus_bridge.quick_pair.persistent_notification",
-        SimpleNamespace(async_create=_fake_async_create),
+        SimpleNamespace(
+            async_create=_fake_async_create,
+            async_dismiss=lambda target_hass, notification_id: dismissed.append(notification_id),
+        ),
     )
 
     _notify_app_return(hass, "seenzus://pairing/done?session=wps_1")
@@ -962,6 +967,24 @@ def test_notify_app_return_creates_persistent_notification(monkeypatch) -> None:
             "notification_id": "seenzus_bridge_app_return",
         }
     ]
+    # Success supersedes a prior failure: the diagnostic notification is cleared.
+    assert dismissed == ["seenzus_bridge_quick_pair_diagnostic"]
+
+
+def test_clear_quick_pair_notifications_dismisses_both(monkeypatch) -> None:
+    hass = FakeHass()
+    dismissed: list[str] = []
+
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair.persistent_notification",
+        SimpleNamespace(
+            async_dismiss=lambda target_hass, notification_id: dismissed.append(notification_id),
+        ),
+    )
+
+    _clear_quick_pair_notifications(hass)
+
+    assert dismissed == ["seenzus_bridge_app_return", "seenzus_bridge_quick_pair_diagnostic"]
 
 
 @pytest.mark.parametrize(
@@ -1067,7 +1090,8 @@ async def test_seamless_finish_creates_entry_with_return_link(monkeypatch) -> No
         SimpleNamespace(
             async_create=lambda hass, message, *, title=None, notification_id=None: notified.append(
                 {"message": message, "notification_id": notification_id}
-            )
+            ),
+            async_dismiss=lambda hass, notification_id: None,
         ),
     )
     flow = SavanAIBridgeConfigFlow()
