@@ -78,6 +78,7 @@ from .quick_pair import (  # noqa: F401
     SavanAIQuickPairCallbackView,
     _build_quick_pair_callback_context,
     _format_quick_pair_diagnostic,
+    _notify_app_return,
     _pop_quick_pair_callback_payload,
     _record_quick_pair_diagnostic,
 )
@@ -442,6 +443,12 @@ class _QuickPairFlowMixin:
         On the manual / no-link path we create the entry plainly.
         """
         if self._quick_pair_app_return_url:
+            # Durable, path-independent surface for the return link: the
+            # create-entry success page shows it inline on the first-time config
+            # flow, but that page is transient and the options / re-pair flow
+            # doesn't render a create_entry description at all — the notification
+            # covers both paths and survives the success dialog being closed.
+            _notify_app_return(self.hass, self._quick_pair_app_return_url)
             return self.async_create_entry(
                 title=self._entry_title,
                 data=data,

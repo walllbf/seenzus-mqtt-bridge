@@ -216,3 +216,26 @@ def _record_quick_pair_diagnostic(hass: HomeAssistant, reason: str, diagnostic: 
         )
     except Exception:  # noqa: BLE001
         pass
+
+
+def _notify_app_return(hass: HomeAssistant, app_return_url: str) -> None:
+    """Surface the backend's 'return to Seenzus app' link as a persistent notification.
+
+    The create-entry success page already carries this link on the first-time
+    config flow, but that page is transient (one dialog) and the options /
+    re-pair flow does not render a create_entry description at all. A persistent
+    notification gives every pairing path one durable, dismissable surface for
+    the link, and survives the success dialog being closed. ``app_return_url`` is
+    already sanitised by ``_sanitize_app_return_url`` before it reaches here.
+    Same defensive try/except as the diagnostic helper for FakeHass / restricted
+    environments lacking a full ``hass`` surface.
+    """
+    try:
+        persistent_notification.async_create(
+            hass,
+            f"Seenzus MQTT Bridge 已成功绑定。\n\n👉 [返回 Seenzus 应用]({app_return_url})",
+            title="Seenzus Bridge 配对完成",
+            notification_id="seenzus_bridge_app_return",
+        )
+    except Exception:  # noqa: BLE001
+        pass
