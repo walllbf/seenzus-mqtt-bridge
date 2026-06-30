@@ -37,6 +37,7 @@ from seenzus_bridge.const import (
 )
 from seenzus_bridge.quick_pair import (
     QUICK_PAIR_CALLBACK_PAYLOAD_LIMIT,
+    _notify_app_return,
     _record_quick_pair_diagnostic,
 )
 from tests.helpers import FakeConfig, FakeConfigEntry, FakeHass
@@ -932,6 +933,37 @@ def test_record_quick_pair_diagnostic_creates_persistent_notification(monkeypatc
     ]
 
 
+def test_notify_app_return_creates_persistent_notification(monkeypatch) -> None:
+    hass = FakeHass()
+    created: list[dict] = []
+
+    def _fake_async_create(target_hass, message, *, title=None, notification_id=None):
+        created.append(
+            {
+                "hass": target_hass,
+                "message": message,
+                "title": title,
+                "notification_id": notification_id,
+            }
+        )
+
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair.persistent_notification",
+        SimpleNamespace(async_create=_fake_async_create),
+    )
+
+    _notify_app_return(hass, "seenzus://pairing/done?session=wps_1")
+
+    assert created == [
+        {
+            "hass": hass,
+            "message": "Seenzus MQTT Bridge 已成功绑定。\n\n👉 [返回 Seenzus 应用](seenzus://pairing/done?session=wps_1)",
+            "title": "Seenzus Bridge 配对完成",
+            "notification_id": "seenzus_bridge_app_return",
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     "value,expected",
     [
@@ -1028,7 +1060,16 @@ async def test_seamless_captures_app_return_url_from_session(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_seamless_finish_creates_entry_with_return_link() -> None:
+async def test_seamless_finish_creates_entry_with_return_link(monkeypatch) -> None:
+    notified: list[dict] = []
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair.persistent_notification",
+        SimpleNamespace(
+            async_create=lambda hass, message, *, title=None, notification_id=None: notified.append(
+                {"message": message, "notification_id": notification_id}
+            )
+        ),
+    )
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
@@ -1076,6 +1117,14 @@ async def test_seamless_finish_creates_entry_with_return_link() -> None:
     assert created[0]["description_placeholders"] == {
         "app_return_url": "seenzus://pairing/done?session=wps_1"
     }
+    # The same link is also pushed as a durable persistent notification, so the
+    # options / re-pair path (no create_entry success page) still surfaces it.
+    assert notified == [
+        {
+            "message": "Seenzus MQTT Bridge 已成功绑定。\n\n👉 [返回 Seenzus 应用](seenzus://pairing/done?session=wps_1)",
+            "notification_id": "seenzus_bridge_app_return",
+        }
+    ]
 
 
 def _async_result(values: dict):
