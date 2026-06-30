@@ -37,6 +37,8 @@ from seenzus_bridge.const import (
 )
 from seenzus_bridge.quick_pair import (
     QUICK_PAIR_CALLBACK_PAYLOAD_LIMIT,
+    _clear_quick_pair_notifications,
+    _notify_app_return,
     _record_quick_pair_diagnostic,
 )
 from tests.helpers import FakeConfig, FakeConfigEntry, FakeHass
@@ -932,6 +934,59 @@ def test_record_quick_pair_diagnostic_creates_persistent_notification(monkeypatc
     ]
 
 
+def test_notify_app_return_creates_notification_and_clears_diagnostic(monkeypatch) -> None:
+    hass = FakeHass()
+    created: list[dict] = []
+    dismissed: list[str] = []
+
+    def _fake_async_create(target_hass, message, *, title=None, notification_id=None):
+        created.append(
+            {
+                "hass": target_hass,
+                "message": message,
+                "title": title,
+                "notification_id": notification_id,
+            }
+        )
+
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair.persistent_notification",
+        SimpleNamespace(
+            async_create=_fake_async_create,
+            async_dismiss=lambda target_hass, notification_id: dismissed.append(notification_id),
+        ),
+    )
+
+    _notify_app_return(hass, "seenzus://pairing/done?session=wps_1")
+
+    assert created == [
+        {
+            "hass": hass,
+            "message": "Seenzus MQTT Bridge 已成功绑定。\n\n👉 [返回 Seenzus 应用](seenzus://pairing/done?session=wps_1)",
+            "title": "Seenzus Bridge 配对完成",
+            "notification_id": "seenzus_bridge_app_return",
+        }
+    ]
+    # Success supersedes a prior failure: the diagnostic notification is cleared.
+    assert dismissed == ["seenzus_bridge_quick_pair_diagnostic"]
+
+
+def test_clear_quick_pair_notifications_dismisses_both(monkeypatch) -> None:
+    hass = FakeHass()
+    dismissed: list[str] = []
+
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair.persistent_notification",
+        SimpleNamespace(
+            async_dismiss=lambda target_hass, notification_id: dismissed.append(notification_id),
+        ),
+    )
+
+    _clear_quick_pair_notifications(hass)
+
+    assert dismissed == ["seenzus_bridge_app_return", "seenzus_bridge_quick_pair_diagnostic"]
+
+
 @pytest.mark.parametrize(
     "value,expected",
     [
@@ -1028,7 +1083,17 @@ async def test_seamless_captures_app_return_url_from_session(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_seamless_finish_shows_return_step_then_creates_entry() -> None:
+async def test_seamless_finish_creates_entry_with_return_link(monkeypatch) -> None:
+    notified: list[dict] = []
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair.persistent_notification",
+        SimpleNamespace(
+            async_create=lambda hass, message, *, title=None, notification_id=None: notified.append(
+                {"message": message, "notification_id": notification_id}
+            ),
+            async_dismiss=lambda hass, notification_id: None,
+        ),
+    )
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
@@ -1051,37 +1116,39 @@ async def test_seamless_finish_shows_return_step_then_creates_entry() -> None:
             },
         }
     )
-    shown: dict = {}
-
-    def _show_form(*, step_id, data_schema, description_placeholders=None, last_step=None):
-        shown.update(
-            step_id=step_id,
-            description_placeholders=description_placeholders,
-            last_step=last_step,
-        )
-        return {"type": "form", "step_id": step_id}
-
-    flow.async_show_form = _show_form
     created: list[dict] = []
-    flow.async_create_entry = lambda *, title, data: created.append(data) or {
-        "type": "create_entry",
-        "data": data,
-    }
 
-    # First the finish step surfaces the return link without creating the entry.
+    def _create_entry(*, title, data, description=None, description_placeholders=None):
+        created.append(
+            {
+                "data": data,
+                "description": description,
+                "description_placeholders": description_placeholders,
+            }
+        )
+        return {"type": "create_entry", "data": data}
+
+    flow.async_create_entry = _create_entry
+
+    # The entry is created immediately; the return link rides on HA's native
+    # create-entry success page (description="app_return"), so tapping it can
+    # never abandon the flow before the binding is committed.
     result = await flow.async_step_seamless_finish()
-    assert result == {"type": "form", "step_id": "seamless_complete"}
-    assert shown["description_placeholders"] == {
+    assert result["type"] == "create_entry"
+    assert created and created[0]["data"]["mqtt_host"] == "broker.example.com"
+    assert created[0]["data"][CONF_BRIDGE_ID] == "ha-web-bridge"
+    assert created[0]["description"] == "app_return"
+    assert created[0]["description_placeholders"] == {
         "app_return_url": "seenzus://pairing/done?session=wps_1"
     }
-    assert shown["last_step"] is True
-    assert created == []
-
-    # Submitting the finish page creates the entry with the bootstrapped config.
-    submit = await flow.async_step_seamless_complete({})
-    assert submit["type"] == "create_entry"
-    assert created and created[0]["mqtt_host"] == "broker.example.com"
-    assert created[0][CONF_BRIDGE_ID] == "ha-web-bridge"
+    # The same link is also pushed as a durable persistent notification, so the
+    # options / re-pair path (no create_entry success page) still surfaces it.
+    assert notified == [
+        {
+            "message": "Seenzus MQTT Bridge 已成功绑定。\n\n👉 [返回 Seenzus 应用](seenzus://pairing/done?session=wps_1)",
+            "notification_id": "seenzus_bridge_app_return",
+        }
+    ]
 
 
 def _async_result(values: dict):
