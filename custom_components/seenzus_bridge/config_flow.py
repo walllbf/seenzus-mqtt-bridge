@@ -332,32 +332,21 @@ def _async_show_form_compat(
     data_schema: vol.Schema,
     errors: dict[str, str] | None = None,
     description_placeholders: dict[str, str] | None = None,
-    last_step: bool | None = None,
 ):
-    """Call ``async_show_form``, degrading on cores lacking newer kwargs.
+    """Call ``async_show_form``, degrading on cores lacking ``description_placeholders``.
 
-    ``errors`` is always supported; ``description_placeholders`` and ``last_step``
-    are the version-gated ones. We try the richest signature first, then drop
-    ``last_step``, then drop ``description_placeholders`` — so an older core
-    still renders the form (without the link/placeholder) instead of raising.
-    Single home for the TypeError fallback ladder shared by the finish page and
-    the diagnostic form.
+    ``errors`` is always supported; ``description_placeholders`` is the
+    version-gated kwarg. We try with it first, then drop it — so an older core
+    still renders the form (without the placeholder) instead of raising. Shared
+    by the diagnostic form and the re-shown seamless form.
     """
     base: dict = {"step_id": step_id, "data_schema": data_schema}
     if errors is not None:
         base["errors"] = errors
 
-    variants: list[dict] = []
-    richest = dict(base)
+    variants: list[dict] = [base]
     if description_placeholders is not None:
-        richest["description_placeholders"] = description_placeholders
-    if last_step is not None:
-        richest["last_step"] = last_step
-    variants.append(richest)
-    if last_step is not None and description_placeholders is not None:
-        variants.append({**base, "description_placeholders": description_placeholders})
-    if richest != base:
-        variants.append(base)
+        variants.insert(0, {**base, "description_placeholders": description_placeholders})
 
     last_exc: TypeError | None = None
     for kwargs in variants:
