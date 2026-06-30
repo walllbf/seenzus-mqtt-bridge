@@ -1028,7 +1028,7 @@ async def test_seamless_captures_app_return_url_from_session(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_seamless_finish_shows_return_step_then_creates_entry() -> None:
+async def test_seamless_finish_creates_entry_with_return_link() -> None:
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
@@ -1051,37 +1051,31 @@ async def test_seamless_finish_shows_return_step_then_creates_entry() -> None:
             },
         }
     )
-    shown: dict = {}
-
-    def _show_form(*, step_id, data_schema, description_placeholders=None, last_step=None):
-        shown.update(
-            step_id=step_id,
-            description_placeholders=description_placeholders,
-            last_step=last_step,
-        )
-        return {"type": "form", "step_id": step_id}
-
-    flow.async_show_form = _show_form
     created: list[dict] = []
-    flow.async_create_entry = lambda *, title, data: created.append(data) or {
-        "type": "create_entry",
-        "data": data,
-    }
 
-    # First the finish step surfaces the return link without creating the entry.
+    def _create_entry(*, title, data, description=None, description_placeholders=None):
+        created.append(
+            {
+                "data": data,
+                "description": description,
+                "description_placeholders": description_placeholders,
+            }
+        )
+        return {"type": "create_entry", "data": data}
+
+    flow.async_create_entry = _create_entry
+
+    # The entry is created immediately; the return link rides on HA's native
+    # create-entry success page (description="app_return"), so tapping it can
+    # never abandon the flow before the binding is committed.
     result = await flow.async_step_seamless_finish()
-    assert result == {"type": "form", "step_id": "seamless_complete"}
-    assert shown["description_placeholders"] == {
+    assert result["type"] == "create_entry"
+    assert created and created[0]["data"]["mqtt_host"] == "broker.example.com"
+    assert created[0]["data"][CONF_BRIDGE_ID] == "ha-web-bridge"
+    assert created[0]["description"] == "app_return"
+    assert created[0]["description_placeholders"] == {
         "app_return_url": "seenzus://pairing/done?session=wps_1"
     }
-    assert shown["last_step"] is True
-    assert created == []
-
-    # Submitting the finish page creates the entry with the bootstrapped config.
-    submit = await flow.async_step_seamless_complete({})
-    assert submit["type"] == "create_entry"
-    assert created and created[0]["mqtt_host"] == "broker.example.com"
-    assert created[0][CONF_BRIDGE_ID] == "ha-web-bridge"
 
 
 def _async_result(values: dict):
