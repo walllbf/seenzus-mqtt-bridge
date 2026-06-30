@@ -279,7 +279,7 @@ def _diagnostic_from_result(
 
 
 # Schemes allowed to be rendered as a clickable markdown link. A backend-supplied
-# return URL flows straight into the seamless_complete step's description, so an
+# return URL flows straight into the create-entry success page description, so an
 # allow-list (not a deny-list) keeps a javascript:/data:/intent: payload from
 # being one tap from execution: only the forms the backend contract actually
 # sends — an http(s) universal link or the seenzus:// app deep link — survive.
@@ -368,32 +368,6 @@ def _async_show_form_compat(
     raise last_exc  # pragma: no cover
 
 
-def _show_quick_pair_complete_form(flow, app_return_url: str):
-    """Show the post-bind finish page carrying the 'return to app' link.
-
-    The link is rendered via ``description_placeholders``; we try with
-    ``last_step`` first, then without it, but never drop the placeholders
-    themselves — a core too old to accept them would otherwise render the
-    literal ``{app_return_url}`` token as a dead link. On that (effectively
-    unreachable, pre-minimum-HA) core we let ``TypeError`` propagate so the
-    caller falls back to creating the entry without the link.
-    """
-    placeholders = {"app_return_url": app_return_url}
-    try:
-        return flow.async_show_form(
-            step_id="seamless_complete",
-            data_schema=vol.Schema({}),
-            description_placeholders=placeholders,
-            last_step=True,
-        )
-    except TypeError:
-        return flow.async_show_form(
-            step_id="seamless_complete",
-            data_schema=vol.Schema({}),
-            description_placeholders=placeholders,
-        )
-
-
 def _show_form_with_diagnostic(flow, *, step_id: str, data_schema: vol.Schema, errors: dict[str, str], diagnostic: dict[str, str] | None = None):
     return _async_show_form_compat(
         flow,
@@ -434,10 +408,10 @@ class _QuickPairFlowMixin:
         self._quick_pair_exchange_result = None
         self._quick_pair_finish_error: str | None = None
         self._quick_pair_diagnostic: dict[str, str] = {}
-        # App return link (backend-supplied) and the entry data held back so the
-        # seamless_complete finish page can surface the link before we create it.
+        # App return link (backend-supplied), surfaced on HA's native create-entry
+        # success page after the entry is committed (so the link can never abandon
+        # the flow before it completes).
         self._quick_pair_app_return_url: str | None = None
-        self._quick_pair_entry_data: dict | None = None
 
     def _reshow_seamless_form(self, error_key: str) -> config_entries.ConfigFlowResult:
         """Re-show the seamless form after a failure, seeded with the active api base."""
@@ -462,38 +436,30 @@ class _QuickPairFlowMixin:
             _record_quick_pair_diagnostic(self.hass, "quick_pair_mqtt_missing", self._quick_pair_diagnostic)
             return self._reshow_seamless_form("quick_pair_mqtt_missing")
 
-        self._quick_pair_entry_data = data
         # A confirmed return URL on the final result wins over the one captured
         # when the session was created; keep the latter as fallback.
         result_return_url = _sanitize_app_return_url(getattr(status_result, "app_return_url", None))
         if result_return_url:
             self._quick_pair_app_return_url = result_return_url
-        return self._finish_quick_pair()
+        return self._finish_quick_pair(data)
 
-    def _finish_quick_pair(self) -> config_entries.ConfigFlowResult:
-        """Create the entry, first surfacing the app return link when present."""
-        data = self._quick_pair_entry_data or {}
-        if not self._quick_pair_app_return_url:
-            return self.async_create_entry(title=self._entry_title, data=data)
-        try:
-            return _show_quick_pair_complete_form(self, self._quick_pair_app_return_url)
-        except TypeError:
-            # Core too old to accept description_placeholders: don't strand the
-            # user on a finish page whose link is the unsubstituted
-            # ``{app_return_url}`` token — just create the entry (losing only the
-            # convenience link). Effectively unreachable on supported HA versions.
-            return self.async_create_entry(title=self._entry_title, data=data)
+    def _finish_quick_pair(self, data: dict) -> config_entries.ConfigFlowResult:
+        """Create the entry, attaching the app return link to the success page.
 
-    async def async_step_seamless_complete(self, user_input: dict | None = None):
-        """Submit handler for the finish page: create the held-back entry.
-
-        The page itself is first rendered by ``_finish_quick_pair``; HA only
-        invokes this step when the user submits it (``user_input={}``), so this
-        just commits the entry built earlier.
+        The link is surfaced on HA's native create-entry success screen via the
+        ``app_return`` create_entry description (``config.create_entry.app_return``).
+        The entry is therefore committed *before* the link is ever shown, so
+        tapping the link cannot abandon the flow and strand a confirmed binding.
+        On the manual / no-link path we create the entry plainly.
         """
-        if not self._quick_pair_entry_data:
-            return self.async_abort(reason="quick_pair_missing_context")
-        return self.async_create_entry(title=self._entry_title, data=self._quick_pair_entry_data)
+        if self._quick_pair_app_return_url:
+            return self.async_create_entry(
+                title=self._entry_title,
+                data=data,
+                description="app_return",
+                description_placeholders={"app_return_url": self._quick_pair_app_return_url},
+            )
+        return self.async_create_entry(title=self._entry_title, data=data)
 
     async def async_step_seamless(self, user_input: dict | None = None):
         errors: dict[str, str] = {}
