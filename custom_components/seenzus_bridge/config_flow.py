@@ -278,11 +278,12 @@ def _diagnostic_from_result(
     return diagnostic
 
 
-# Schemes that must never be rendered as a clickable markdown link — a
-# backend-supplied return URL flows straight into the seamless_complete step's
-# description, so a javascript:/data: payload would otherwise be one tap from
-# execution. http(s) and custom app deep-link schemes (seenzus://…) are allowed.
-_APP_RETURN_URL_DENY_SCHEMES = {"javascript", "data", "vbscript", "file", "blob"}
+# Schemes allowed to be rendered as a clickable markdown link. A backend-supplied
+# return URL flows straight into the seamless_complete step's description, so an
+# allow-list (not a deny-list) keeps a javascript:/data:/intent: payload from
+# being one tap from execution: only the forms the backend contract actually
+# sends — an http(s) universal link or the seenzus:// app deep link — survive.
+_APP_RETURN_URL_ALLOW_SCHEMES = {"http", "https", "seenzus"}
 
 
 def _sanitize_app_return_url(value: object) -> str | None:
@@ -295,11 +296,13 @@ def _sanitize_app_return_url(value: object) -> str | None:
 
     * printable ASCII only — rejects whitespace, control bytes and zero-width /
       non-ASCII homograph chars that could spoof the visible link;
-    * no markdown-structural chars ``()[]<>"`` / backtick, nor the HA
-      placeholder delimiters ``{}`` — all could corrupt the rendered link;
-    * deny script/data style schemes; require an authority (``//host``), which
-      allows ``http(s)://…`` and app deep links like ``seenzus://…`` while
-      excluding opaque schemes such as ``mailto:`` / ``tel:`` / ``foo:bar``;
+    * no markdown-structural chars ``()[]<>"`` / backtick, the backslash
+      (browsers fold it to a forward slash, so it could smuggle a different host
+      past ``urlparse``), nor the HA placeholder delimiters ``{}`` — all could
+      corrupt the rendered link or spoof the host;
+    * allow only ``http(s)://…`` and the ``seenzus://…`` app deep link — an
+      allow-list, so opaque schemes (``mailto:`` / ``tel:`` / ``foo:bar``) and
+      unexpected app/intent schemes are rejected even with a ``//host`` authority;
     * reject userinfo (``user@host``) — a trusted-looking ``@`` prefix would let
       the link navigate to a different host than the one shown.
 
@@ -311,11 +314,11 @@ def _sanitize_app_return_url(value: object) -> str | None:
         return None
     if not all("!" <= ch <= "~" for ch in text):
         return None
-    if any(c in text for c in '()[]<>"`{}'):
+    if any(c in text for c in '()[]<>"`{}\\'):
         return None
     parsed = urlparse(text)
     scheme = parsed.scheme.lower()
-    if not scheme or scheme in _APP_RETURN_URL_DENY_SCHEMES:
+    if scheme not in _APP_RETURN_URL_ALLOW_SCHEMES:
         return None
     if not parsed.netloc or "@" in parsed.netloc:
         return None
@@ -368,19 +371,27 @@ def _async_show_form_compat(
 def _show_quick_pair_complete_form(flow, app_return_url: str):
     """Show the post-bind finish page carrying the 'return to app' link.
 
-    On cores that accept ``last_step`` / ``description_placeholders`` (every HA
-    version this integration supports) the link renders normally. The bare
-    fallback for cores predating ``description_placeholders`` would leave the
-    description's ``{app_return_url}`` token unsubstituted; that path is older
-    than our minimum HA and effectively unreachable.
+    The link is rendered via ``description_placeholders``; we try with
+    ``last_step`` first, then without it, but never drop the placeholders
+    themselves — a core too old to accept them would otherwise render the
+    literal ``{app_return_url}`` token as a dead link. On that (effectively
+    unreachable, pre-minimum-HA) core we let ``TypeError`` propagate so the
+    caller falls back to creating the entry without the link.
     """
-    return _async_show_form_compat(
-        flow,
-        step_id="seamless_complete",
-        data_schema=vol.Schema({}),
-        description_placeholders={"app_return_url": app_return_url},
-        last_step=True,
-    )
+    placeholders = {"app_return_url": app_return_url}
+    try:
+        return flow.async_show_form(
+            step_id="seamless_complete",
+            data_schema=vol.Schema({}),
+            description_placeholders=placeholders,
+            last_step=True,
+        )
+    except TypeError:
+        return flow.async_show_form(
+            step_id="seamless_complete",
+            data_schema=vol.Schema({}),
+            description_placeholders=placeholders,
+        )
 
 
 def _show_form_with_diagnostic(flow, *, step_id: str, data_schema: vol.Schema, errors: dict[str, str], diagnostic: dict[str, str] | None = None):
@@ -464,7 +475,14 @@ class _QuickPairFlowMixin:
         data = self._quick_pair_entry_data or {}
         if not self._quick_pair_app_return_url:
             return self.async_create_entry(title=self._entry_title, data=data)
-        return _show_quick_pair_complete_form(self, self._quick_pair_app_return_url)
+        try:
+            return _show_quick_pair_complete_form(self, self._quick_pair_app_return_url)
+        except TypeError:
+            # Core too old to accept description_placeholders: don't strand the
+            # user on a finish page whose link is the unsubstituted
+            # ``{app_return_url}`` token — just create the entry (losing only the
+            # convenience link). Effectively unreachable on supported HA versions.
+            return self.async_create_entry(title=self._entry_title, data=data)
 
     async def async_step_seamless_complete(self, user_input: dict | None = None):
         """Submit handler for the finish page: create the held-back entry.
