@@ -62,7 +62,7 @@ class _FakeClientSession:
                         "port": 1883,
                         "username": "user-1",
                         "password": "pass-1",
-                        "topicRoot": "savant/v2",
+                        "topicRoot": "seenzus/v2",
                         "bridgeId": "ha-web-bridge",
                         "configSource": "web_pair",
                     },
@@ -103,7 +103,7 @@ class _FakeClientSession:
                         "port": 1883,
                         "username": "user-1",
                         "password": "pass-1",
-                        "topicRoot": "savant/v2",
+                        "topicRoot": "seenzus/v2",
                         "bridgeId": "ha-web-bridge",
                     },
                 },
@@ -153,7 +153,7 @@ class _NestedSecretClientSession(_FakeClientSession):
             {
                 "ok": True,
                 "sessionId": "wps_nested",
-                "pairingPageUrl": "https://app.savant.xxx/web-pairing/wps_nested",
+                "pairingPageUrl": "https://app.seenzus.xxx/web-pairing/wps_nested",
                 "status": "pending",
                 "password": {"value": "leakme"},
                 "tokens": ["leak1", "leak2"],
@@ -169,7 +169,7 @@ class _DeepNestedSecretClientSession(_FakeClientSession):
             {
                 "ok": True,
                 "sessionId": "wps_deep",
-                "pairingPageUrl": "https://app.savant.xxx/web-pairing/wps_deep",
+                "pairingPageUrl": "https://app.seenzus.xxx/web-pairing/wps_deep",
                 "status": "pending",
                 "password": {"creds": {"value": "leakme"}},
             },
@@ -184,7 +184,7 @@ class _ArrayOfObjectsSecretClientSession(_FakeClientSession):
             {
                 "ok": True,
                 "sessionId": "wps_arr",
-                "pairingPageUrl": "https://app.savant.xxx/web-pairing/wps_arr",
+                "pairingPageUrl": "https://app.seenzus.xxx/web-pairing/wps_arr",
                 "status": "pending",
                 "tokens": [{"value": "leakA"}, {"nested": {"value": "leakB"}}],
             },
@@ -303,7 +303,7 @@ async def test_fetch_web_pairing_session_status_reads_backend_status(monkeypatch
         "port": 1883,
         "username": "user-1",
         "password": "pass-1",
-        "topicRoot": "savant/v2",
+        "topicRoot": "seenzus/v2",
         "bridgeId": "ha-web-bridge",
     }
     assert fake_session.calls[0]["url"] == "https://api.seenzus.xxx/integrations/ha/web-pairing/session/wps_abc123"
@@ -337,7 +337,7 @@ async def test_exchange_web_pairing_callback_code_posts_expected_payload(monkeyp
         "port": 1883,
         "username": "user-1",
         "password": "pass-1",
-        "topicRoot": "savant/v2",
+        "topicRoot": "seenzus/v2",
         "bridgeId": "ha-web-bridge",
         "configSource": "web_pair",
     }
@@ -358,7 +358,7 @@ async def test_response_summary_redacts_mqtt_password(monkeypatch) -> None:
     )
 
     result = await fetch_web_pairing_session_status(
-        api_base="https://api.savant.xxx",
+        api_base="https://api.seenzus.xxx",
         session_id="wps_abc123",
     )
 
@@ -381,7 +381,7 @@ async def test_pairing_logs_never_carry_mqtt_password(monkeypatch, caplog) -> No
 
     with caplog.at_level(logging.DEBUG):
         result = await exchange_web_pairing_callback_code(
-            api_base="https://api.savant.xxx",
+            api_base="https://api.seenzus.xxx",
             code="cb_code_123",
             state="jwt-state",
             session_id="wps_abc123",
@@ -401,7 +401,7 @@ async def test_response_summary_masks_object_and_array_secret_values(monkeypatch
     )
 
     result = await create_web_pairing_session(
-        api_base="https://app.savant.xxx/api",
+        api_base="https://app.seenzus.xxx/api",
         bridge_name="SavanAI Bridge",
         bridge_version="3.0.7",
         ha_version="2026.3.0",
@@ -425,7 +425,7 @@ async def test_response_summary_masks_2level_nested_object_secret(monkeypatch) -
     )
 
     result = await create_web_pairing_session(
-        api_base="https://app.savant.xxx/api",
+        api_base="https://app.seenzus.xxx/api",
         bridge_name="SavanAI Bridge",
         bridge_version="3.0.7",
         ha_version="2026.3.0",
@@ -447,7 +447,7 @@ async def test_response_summary_masks_array_of_objects_secret(monkeypatch) -> No
     )
 
     result = await create_web_pairing_session(
-        api_base="https://app.savant.xxx/api",
+        api_base="https://app.seenzus.xxx/api",
         bridge_name="SavanAI Bridge",
         bridge_version="3.0.7",
         ha_version="2026.3.0",
@@ -470,7 +470,7 @@ async def test_failure_message_and_error_code_are_redacted(monkeypatch) -> None:
     )
 
     result = await create_web_pairing_session(
-        api_base="https://app.savant.xxx/api",
+        api_base="https://app.seenzus.xxx/api",
         bridge_name="SavanAI Bridge",
         bridge_version="3.0.7",
         ha_version="2026.3.0",

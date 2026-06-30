@@ -35,13 +35,13 @@ from tests.helpers import (
 
 pytestmark = pytest.mark.timeout(10)
 
-PRESENCE_TOPIC = "savant/v2/bridge/ha-demo/presence"
-CATALOG_TOPIC = "savant/v2/bridge/ha-demo/catalog"
-COMMAND_SUB = "savant/v2/bridge/ha-demo/command/+"
+PRESENCE_TOPIC = "seenzus/v2/bridge/ha-demo/presence"
+CATALOG_TOPIC = "seenzus/v2/bridge/ha-demo/catalog"
+COMMAND_SUB = "seenzus/v2/bridge/ha-demo/command/+"
 
 HAPPY_ENTRY_DATA = {
     "mqtt_host": "broker.example.com",
-    "topic_root": "savant/v2",
+    "topic_root": "seenzus/v2",
     "bridge_id": "ha-demo",
     "pairing_mode": "manual",
     "enable_state_events": False,
@@ -105,7 +105,7 @@ async def test_loop_missing_host_marks_error_and_waits_for_external_auth(monkeyp
         monkeypatch,
         data={
             "pairing_mode": "seamless",
-            "topic_root": "savant/v2",
+            "topic_root": "seenzus/v2",
             "bridge_id": "ha-demo",
         },
     )
@@ -154,7 +154,7 @@ async def test_loop_happy_connect_subscribes_then_presence_snapshot_catalog(monk
 
         states = [item for item in client.published if "/state/" in item["topic"]]
         assert [item["topic"] for item in states] == [
-            "savant/v2/bridge/ha-demo/state/light.living_room"
+            "seenzus/v2/bridge/ha-demo/state/light.living_room"
         ]
         assert states[0]["qos"] == 0
         assert json.loads(states[0]["payload"])["source"] == "startup_snapshot"
@@ -192,7 +192,7 @@ async def test_loop_publishes_startup_snapshot_once_across_reconnect_cycles(monk
     first_cycle, second_cycle = fake.clients
     assert [item["topic"] for item in first_cycle.published] == [
         PRESENCE_TOPIC,
-        "savant/v2/bridge/ha-demo/state/light.living_room",
+        "seenzus/v2/bridge/ha-demo/state/light.living_room",
         CATALOG_TOPIC,
     ]
     # Reconnect re-asserts presence AND the retained catalog (durable topology truth —
@@ -240,7 +240,7 @@ async def test_loop_defers_startup_snapshot_until_ha_started(monkeypatch) -> Non
             await real_sleep(0)
 
         topics = [item["topic"] for item in client.published]
-        assert "savant/v2/bridge/ha-demo/state/light.living_room" in topics
+        assert "seenzus/v2/bridge/ha-demo/state/light.living_room" in topics
         assert CATALOG_TOPIC in topics
         assert coordinator._initial_snapshot_done is True
         assert coordinator.status == "active"
@@ -252,7 +252,7 @@ async def test_loop_defers_startup_snapshot_until_ha_started(monkeypatch) -> Non
 async def test_loop_routes_command_message_to_published_result(monkeypatch) -> None:
     command_payload = json.dumps({"method": "GET", "path": "/api/states/light.demo"})
     message = FakeMqttMessage(
-        "savant/v2/bridge/ha-demo/command/cmd-route-1", command_payload
+        "seenzus/v2/bridge/ha-demo/command/cmd-route-1", command_payload
     )
     coordinator, fake = _make_coordinator(
         monkeypatch,
@@ -271,7 +271,7 @@ async def test_loop_routes_command_message_to_published_result(monkeypatch) -> N
         client = fake.clients[0]
         results = [item for item in client.published if "/result/" in item["topic"]]
         assert [item["topic"] for item in results] == [
-            "savant/v2/bridge/ha-demo/result/cmd-route-1"
+            "seenzus/v2/bridge/ha-demo/result/cmd-route-1"
         ]
         result_payload = json.loads(results[0]["payload"])
         assert result_payload["msgId"] == "cmd-route-1"
@@ -282,7 +282,7 @@ async def test_loop_routes_command_message_to_published_result(monkeypatch) -> N
         followups = [
             json.loads(item["payload"])
             for item in client.published
-            if item["topic"] == "savant/v2/bridge/ha-demo/state/light.demo"
+            if item["topic"] == "seenzus/v2/bridge/ha-demo/state/light.demo"
         ]
         assert any(
             payload.get("correlationMsgId") == "cmd-route-1"

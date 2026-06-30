@@ -14,7 +14,7 @@
 
 默认约定：
 
-- `topicRoot = savant/v2`
+- `topicRoot = seenzus/v2`
 - `bridgeId = ha-xxxx`
 
 topic 模板如下：
@@ -27,7 +27,7 @@ topic 模板如下：
 
 补充说明：
 
-- `topicRoot` 会去掉首尾 `/`，空值回退为 `savant/v2`
+- `topicRoot` 会去掉首尾 `/`，空值回退为 `seenzus/v2`
 - `bridgeId` 来自配置；如果未配置，插件使用 `ha-{entry_id前12位}`；配置值会转小写，并把非法字符替换成 `-`
 - 插件订阅 command 时使用 `{topicRoot}/bridge/{bridgeId}/command/+`
 - 当前实现里 `presence` 和 `catalog` 使用 `retain=true`
@@ -55,7 +55,7 @@ topic 模板如下：
 示例：
 
 ```text
-savant/v2/bridge/ha-demo/command/550e8400-e29b-41d4-a716-446655440000
+seenzus/v2/bridge/ha-demo/command/550e8400-e29b-41d4-a716-446655440000
 ```
 
 ### 2.4 Payload
@@ -105,7 +105,7 @@ savant/v2/bridge/ha-demo/command/550e8400-e29b-41d4-a716-446655440000
 示例：
 
 ```text
-savant/v2/bridge/ha-demo/result/550e8400-e29b-41d4-a716-446655440000
+seenzus/v2/bridge/ha-demo/result/550e8400-e29b-41d4-a716-446655440000
 ```
 
 ### 3.4 Payload
@@ -171,7 +171,7 @@ savant/v2/bridge/ha-demo/result/550e8400-e29b-41d4-a716-446655440000
 示例：
 
 ```text
-savant/v2/bridge/ha-demo/state/light.living_room
+seenzus/v2/bridge/ha-demo/state/light.living_room
 ```
 
 ### 4.4 Payload
@@ -244,7 +244,7 @@ savant/v2/bridge/ha-demo/state/light.living_room
 示例：
 
 ```text
-savant/v2/bridge/ha-demo/catalog
+seenzus/v2/bridge/ha-demo/catalog
 ```
 
 ### 5.4 触发时机
@@ -344,7 +344,7 @@ savant/v2/bridge/ha-demo/catalog
 示例：
 
 ```text
-savant/v2/bridge/ha-demo/presence
+seenzus/v2/bridge/ha-demo/presence
 ```
 
 ### 6.4 Payload

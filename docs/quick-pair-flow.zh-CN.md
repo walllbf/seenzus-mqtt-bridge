@@ -52,7 +52,7 @@ sequenceDiagram
 用户在 HA 添加集成时选择“快速配对”，插件要求用户填写 `Seenzus API 地址`，例如：
 
 ```text
-https://test.neuroncloud.ai/gatewayka/savantai
+https://test.neuroncloud.ai/gatewayka/seenzus
 ```
 
 插件随后构造 HA callback 上下文：
@@ -231,7 +231,7 @@ http://localhost:5000/api/integrations/ha/web-pairing/session/{sessionId}/author
 原因是浏览器不会把 `localhost` 的登录 cookie 发送给远程 API 域名。开发环境需配合：
 
 ```text
-VITE_API_PROXY_TARGET=https://test.neuroncloud.ai/gatewayka/savantai
+VITE_API_PROXY_TARGET=https://test.neuroncloud.ai/gatewayka/seenzus
 ```
 
 ---
@@ -378,7 +378,7 @@ POST /integrations/ha/web-pairing/callback/exchange
     "port": 1883,
     "username": "<mqtt_username>",
     "password": "<mqtt_password>",
-    "topicRoot": "savant/v2",
+    "topicRoot": "seenzus/v2",
     "bridgeId": "<bridge_id>",
     "clientId": "<bridge_id>"
   }
@@ -432,7 +432,7 @@ _build_quick_pair_entry_data()
   "mqtt_port": 1883,
   "mqtt_username": "<mqtt_username>",
   "mqtt_password": "<mqtt_password>",
-  "topic_root": "savant/v2",
+  "topic_root": "seenzus/v2",
   "bridge_id": "<bridge_id>",
   "source_id": "ha-bridge-<bridge_id>",
   "source_type": "haos_bridge",
@@ -484,27 +484,27 @@ aiomqtt.Client(
 插件 bridge topic 由 `topic_root` 和 `bridge_id` 生成。默认：
 
 ```text
-topic_root = savant/v2
+topic_root = seenzus/v2
 bridge_id = bridge-xxxx
 ```
 
 常用 topic：
 
 ```text
-savant/v2/bridge/{bridgeId}/command/{msgId}
-savant/v2/bridge/{bridgeId}/result/{msgId}
-savant/v2/bridge/{bridgeId}/state/{entityId}
-savant/v2/bridge/{bridgeId}/presence
-savant/v2/bridge/{bridgeId}/catalog
+seenzus/v2/bridge/{bridgeId}/command/{msgId}
+seenzus/v2/bridge/{bridgeId}/result/{msgId}
+seenzus/v2/bridge/{bridgeId}/state/{entityId}
+seenzus/v2/bridge/{bridgeId}/presence
+seenzus/v2/bridge/{bridgeId}/catalog
 ```
 
 后端 MQTT consumer 订阅：
 
 ```text
-savant/v2/bridge/+/state/+
-savant/v2/bridge/+/catalog
-savant/v2/bridge/+/presence
-savant/v2/bridge/+/result/+
+seenzus/v2/bridge/+/state/+
+seenzus/v2/bridge/+/catalog
+seenzus/v2/bridge/+/presence
+seenzus/v2/bridge/+/result/+
 ```
 
 ---
@@ -537,7 +537,7 @@ msgId = catalog_{Guid.NewGuid():N}
 5. 通过 MQTT 向插件发布命令：
 
 ```text
-savant/v2/bridge/{bridgeId}/command/{msgId}
+seenzus/v2/bridge/{bridgeId}/command/{msgId}
 ```
 
 命令 payload：
@@ -556,13 +556,13 @@ savant/v2/bridge/{bridgeId}/command/{msgId}
 2. 发布命令结果：
 
 ```text
-savant/v2/bridge/{bridgeId}/result/{msgId}
+seenzus/v2/bridge/{bridgeId}/result/{msgId}
 ```
 
 3. 同时尝试发布 catalog snapshot：
 
 ```text
-savant/v2/bridge/{bridgeId}/catalog
+seenzus/v2/bridge/{bridgeId}/catalog
 ```
 
 后端兼容两种来源写入 cache：
@@ -654,21 +654,21 @@ MQTT disconnected: [code:135] Not authorized
 - `GET /integrations/ha/web-pairing/session/{sessionId}` 返回的 `mqtt.username/password`
 - HA `.storage/core.config_entries` 里落地的 `mqtt_username/mqtt_password`
 - broker 账号是否允许 client 连接
-- broker ACL 是否允许 `savant/v2/#`
+- broker ACL 是否允许 `seenzus/v2/#`
 
 ### 11.4 设备列表为空但 MQTT 能看到 result
 
 如果 MQTT 只看到：
 
 ```text
-savant/v2/bridge/{bridgeId}/command/catalog_xxx
-savant/v2/bridge/{bridgeId}/result/catalog_xxx
+seenzus/v2/bridge/{bridgeId}/command/catalog_xxx
+seenzus/v2/bridge/{bridgeId}/result/catalog_xxx
 ```
 
 但没有：
 
 ```text
-savant/v2/bridge/{bridgeId}/catalog
+seenzus/v2/bridge/{bridgeId}/catalog
 ```
 
 旧后端不会写入 catalog cache。当前后端已兼容 `result/catalog_xxx`，只要 result payload 的 `data.devices` 存在，就会写入 cache。
@@ -714,24 +714,24 @@ mosquitto_sub \
   -p 1883 \
   -u admin \
   -P 'Neuron@1234' \
-  -t 'savant/v2/bridge/#' \
+  -t 'seenzus/v2/bridge/#' \
   -v
 ```
 
 查询匿名 web pairing session：
 
 ```bash
-curl "https://test.neuroncloud.ai/gatewayka/savantai/integrations/ha/web-pairing/session/{sessionId}"
+curl "https://test.neuroncloud.ai/gatewayka/seenzus/integrations/ha/web-pairing/session/{sessionId}"
 ```
 
 查询设备目录：
 
 ```bash
-curl "https://test.neuroncloud.ai/gatewayka/savantai/integrations/ha/bridges/{bridgeId}/device-catalog?refresh=true"
+curl "https://test.neuroncloud.ai/gatewayka/seenzus/integrations/ha/bridges/{bridgeId}/device-catalog?refresh=true"
 ```
 
 查询桥接诊断：
 
 ```bash
-curl "https://test.neuroncloud.ai/gatewayka/savantai/integrations/ha/bridges/{bridgeId}/diagnostics"
+curl "https://test.neuroncloud.ai/gatewayka/seenzus/integrations/ha/bridges/{bridgeId}/diagnostics"
 ```

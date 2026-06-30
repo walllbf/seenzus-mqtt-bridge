@@ -111,8 +111,8 @@ from bridge_protocol import build_topics
 
 
 def test_build_topics_uses_expected_presence_topic():
-    topics = build_topics("savant/v2", "ha-demo")
-    assert topics.presence_topic == "savant/v2/bridge/ha-demo/presence"
+    topics = build_topics("seenzus/v2", "ha-demo")
+    assert topics.presence_topic == "seenzus/v2/bridge/ha-demo/presence"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -124,8 +124,8 @@ Expected: FAIL because the new pytest test file does not exist yet
 
 ```python
 def test_build_topics_uses_expected_presence_topic():
-    topics = build_topics("savant/v2", "ha-demo")
-    assert topics.presence_topic == "savant/v2/bridge/ha-demo/presence"
+    topics = build_topics("seenzus/v2", "ha-demo")
+    assert topics.presence_topic == "seenzus/v2/bridge/ha-demo/presence"
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -178,12 +178,12 @@ Expected: PASS for the internal-entity filtering case
 ```python
 async def test_prepare_for_reload_clears_previous_retained_presence_when_bridge_changes(coordinator, fake_client):
     coordinator._mqtt_client = fake_client
-    coordinator._topics = build_topics("savant/v2", "ha-old")
-    coordinator._resolve_topics = lambda: build_topics("savant/v2", "ha-new")
+    coordinator._topics = build_topics("seenzus/v2", "ha-old")
+    coordinator._resolve_topics = lambda: build_topics("seenzus/v2", "ha-new")
 
     await coordinator.async_prepare_for_reload()
 
-    assert fake_client.published[0]["topic"] == "savant/v2/bridge/ha-old/presence"
+    assert fake_client.published[0]["topic"] == "seenzus/v2/bridge/ha-old/presence"
     assert fake_client.published[0]["payload"] == ""
     assert fake_client.published[0]["retain"] is True
 ```

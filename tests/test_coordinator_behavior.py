@@ -24,7 +24,7 @@ def coordinator(monkeypatch):
     entry = FakeConfigEntry(
         data={
             "mqtt_host": "broker.example.com",
-            "topic_root": "savant/v2",
+            "topic_root": "seenzus/v2",
             "enable_state_events": True,
         }
     )
@@ -84,7 +84,7 @@ async def test_presence_includes_mqtt_and_pairing_diagnostics() -> None:
         ),
     )
     coordinator._mqtt_client = AsyncFakeMQTTClient()
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
     coordinator.mqtt_connected = True
     coordinator.pairing_mode = "seamless"
     coordinator.config_source = "web_pair"
@@ -94,7 +94,7 @@ async def test_presence_includes_mqtt_and_pairing_diagnostics() -> None:
 
     await coordinator._publish_presence("online")
 
-    assert coordinator._mqtt_client.published[0]["topic"] == "savant/v2/bridge/ha-demo/presence"
+    assert coordinator._mqtt_client.published[0]["topic"] == "seenzus/v2/bridge/ha-demo/presence"
     assert coordinator._mqtt_client.published[0]["retain"] is True
     payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
     assert payload["mqttConnected"] is True
@@ -110,7 +110,7 @@ async def test_presence_includes_mqtt_and_pairing_diagnostics() -> None:
 @pytest.mark.asyncio
 async def test_publish_state_from_event_ignores_bridge_internal_entity(coordinator) -> None:
     coordinator._mqtt_client = AsyncFakeMQTTClient()
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
 
     await coordinator._publish_state_from_event(
         make_state_changed_event("sensor.seenzus_mqtt_bridge_zhuang_tai_tui_song_ci_shu")
@@ -126,7 +126,7 @@ async def test_state_publish_failure_counts_one_error_with_state_publish_failed_
             raise RuntimeError("broker gone")
 
     coordinator._mqtt_client = _FailingPublishClient()
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
     event = make_state_changed_event("light.demo", state="on")
     coordinator._pending_state_events["light.demo"] = event
 
@@ -142,7 +142,7 @@ async def test_state_publish_failure_counts_one_error_with_state_publish_failed_
 @pytest.mark.asyncio
 async def test_publish_state_from_event_publishes_regular_entity_state(coordinator) -> None:
     coordinator._mqtt_client = AsyncFakeMQTTClient()
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
 
     await coordinator._publish_state_from_event(
         make_state_changed_event(
@@ -153,7 +153,7 @@ async def test_publish_state_from_event_publishes_regular_entity_state(coordinat
     )
 
     assert coordinator._mqtt_client.published[0]["topic"] == (
-        "savant/v2/bridge/ha-demo/state/fan.dmaker_cn_740506461_p5c_s_2_fan"
+        "seenzus/v2/bridge/ha-demo/state/fan.dmaker_cn_740506461_p5c_s_2_fan"
     )
     payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
     assert payload["entityId"] == "fan.dmaker_cn_740506461_p5c_s_2_fan"
@@ -163,7 +163,7 @@ async def test_publish_state_from_event_publishes_regular_entity_state(coordinat
 @pytest.mark.asyncio
 async def test_publish_state_from_event_ignores_model_marked_entity(coordinator) -> None:
     coordinator._mqtt_client = AsyncFakeMQTTClient()
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
 
     await coordinator._publish_state_from_event(
         make_state_changed_event(
@@ -179,7 +179,7 @@ async def test_publish_state_from_event_ignores_model_marked_entity(coordinator)
 @pytest.mark.asyncio
 async def test_get_states_command_skips_model_marked_entity(coordinator) -> None:
     coordinator._mqtt_client = AsyncFakeMQTTClient()
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
     coordinator._command_prefix = coordinator._topics.command_sub[:-2]
     coordinator.hass.states.set(
         "light.living_room", state="on", attributes={"friendly_name": "Living Room"}
@@ -199,13 +199,13 @@ async def test_get_states_command_skips_model_marked_entity(coordinator) -> None
         for item in coordinator._mqtt_client.published
         if "/state/" in item["topic"]
     ]
-    assert state_topics == ["savant/v2/bridge/ha-demo/state/light.living_room"]
+    assert state_topics == ["seenzus/v2/bridge/ha-demo/state/light.living_room"]
 
 
 @pytest.mark.asyncio
 async def test_get_states_command_publishes_full_state_snapshot(coordinator) -> None:
     coordinator._mqtt_client = AsyncFakeMQTTClient()
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
     coordinator._command_prefix = coordinator._topics.command_sub[:-2]
     coordinator.hass.states.set("light.living_room", state="on", attributes={"friendly_name": "Living Room"})
     coordinator.hass.states.set("sensor.seenzus_mqtt_bridge_zhuang_tai_tui_song_ci_shu", state="1")
@@ -221,7 +221,7 @@ async def test_get_states_command_publishes_full_state_snapshot(coordinator) -> 
         if "/state/" in item["topic"]
     ]
     assert [item["topic"] for item in state_messages] == [
-        "savant/v2/bridge/ha-demo/state/light.living_room"
+        "seenzus/v2/bridge/ha-demo/state/light.living_room"
     ]
     payload = json.loads(state_messages[0]["payload"])
     assert payload["entityId"] == "light.living_room"
@@ -256,13 +256,13 @@ async def test_publish_device_catalog_groups_entities_under_devices(monkeypatch)
     monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
     coordinator = BridgeCoordinator(hass, entry)
     coordinator._mqtt_client = AsyncFakeMQTTClient()
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
     hass.states.set("light.kitchen", state="on", attributes={"friendly_name": "Kitchen"})
     hass.states.set("sensor.kitchen_power", state="5", attributes={"device_class": "power", "unit_of_measurement": "W"})
 
     await coordinator._publish_device_catalog(coordinator._mqtt_client, source="test")
 
-    assert coordinator._mqtt_client.published[0]["topic"] == "savant/v2/bridge/ha-demo/catalog"
+    assert coordinator._mqtt_client.published[0]["topic"] == "seenzus/v2/bridge/ha-demo/catalog"
     assert coordinator._mqtt_client.published[0]["retain"] is True
     payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
     assert payload["bridgeId"] == "ha-demo"
@@ -295,7 +295,7 @@ async def test_device_catalog_reports_partial_availability(monkeypatch) -> None:
     monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
     coordinator = BridgeCoordinator(hass, entry)
     coordinator._mqtt_client = AsyncFakeMQTTClient()
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
     hass.states.set("light.living_room", state="on")
     hass.states.set("select.living_room_power_on", state="unavailable")
 
@@ -323,7 +323,7 @@ async def test_device_catalog_primary_offline_with_live_secondary(monkeypatch) -
     monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
     coordinator = BridgeCoordinator(hass, entry)
     coordinator._mqtt_client = AsyncFakeMQTTClient()
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
     hass.states.set("light.living_room", state="unavailable")
     hass.states.set("sensor.living_room_power", state="5", attributes={"device_class": "power"})
 
@@ -351,7 +351,7 @@ async def test_device_catalog_primary_available_aggregates_multiple_primary_enti
     monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
     coordinator = BridgeCoordinator(hass, entry)
     coordinator._mqtt_client = AsyncFakeMQTTClient()
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
     # First-iterated primary entity is unavailable, second is on — first() would misreport offline.
     hass.states.set("light.ceiling_a", state="unavailable")
     hass.states.set("light.ceiling_b", state="on")
@@ -381,7 +381,7 @@ async def test_device_catalog_keeps_ha_device_domain_entities(monkeypatch) -> No
     monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
     coordinator = BridgeCoordinator(hass, entry)
     coordinator._mqtt_client = AsyncFakeMQTTClient()
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
     hass.states.set("light.kitchen", state="on")
     hass.states.set("sensor.kitchen_power", state="5", attributes={"device_class": "power"})
     hass.states.set("sensor.router_uptime", state="123", attributes={"device_class": "duration"})
@@ -415,7 +415,7 @@ async def test_device_catalog_excludes_model_marked_entities(monkeypatch) -> Non
     monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
     coordinator = BridgeCoordinator(hass, entry)
     coordinator._mqtt_client = AsyncFakeMQTTClient()
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
     hass.states.set("light.kitchen", state="on", attributes={"friendly_name": "Kitchen"})
     hass.states.set(
         "sensor.aqara_model", state="on", attributes={"friendly_name": "Aqara T1*"}
@@ -442,7 +442,7 @@ async def test_device_catalog_command_publishes_catalog_snapshot(coordinator, mo
     monkeypatch.setattr(er, "async_get", lambda _hass: entity_registry)
     monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
     coordinator._mqtt_client = AsyncFakeMQTTClient()
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
     coordinator._command_prefix = coordinator._topics.command_sub[:-2]
     coordinator.hass.states.set("switch.freezer_indicator", state="on")
 
@@ -454,7 +454,7 @@ async def test_device_catalog_command_publishes_catalog_snapshot(coordinator, mo
 
     catalog_messages = [
         item for item in coordinator._mqtt_client.published
-        if item["topic"] == "savant/v2/bridge/ha-demo/catalog"
+        if item["topic"] == "seenzus/v2/bridge/ha-demo/catalog"
     ]
     assert len(catalog_messages) == 1
     payload = json.loads(catalog_messages[0]["payload"])
@@ -465,11 +465,11 @@ async def test_device_catalog_command_publishes_catalog_snapshot(coordinator, mo
 @pytest.mark.asyncio
 async def test_prepare_for_reload_clears_old_retained_presence_when_bridge_changes(coordinator) -> None:
     coordinator._mqtt_client = AsyncFakeMQTTClient()
-    coordinator._topics = build_topics("savant/v2", "ha-old")
+    coordinator._topics = build_topics("seenzus/v2", "ha-old")
     coordinator._entry.options = {"bridge_id": "ha-new"}
 
     await coordinator.async_prepare_for_reload()
 
-    assert coordinator._mqtt_client.published[0]["topic"] == "savant/v2/bridge/ha-old/presence"
+    assert coordinator._mqtt_client.published[0]["topic"] == "seenzus/v2/bridge/ha-old/presence"
     assert coordinator._mqtt_client.published[0]["payload"] == ""
     assert coordinator._mqtt_client.published[0]["retain"] is True
