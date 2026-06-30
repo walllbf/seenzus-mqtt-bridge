@@ -191,9 +191,9 @@ async def test_quick_pair_callback_view_routes_options_flow(monkeypatch) -> None
 async def test_seamless_authorize_consumes_stored_callback_payload(monkeypatch) -> None:
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
-    flow._quick_pair_api_base = "https://api.savant.xxx/api"
+    flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
-    flow._quick_pair_page_url = "https://app.savant.xxx/web-pairing/wps_1"
+    flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
     flow._quick_pair_callback_state = "pairing-state"
     flow._quick_pair_callback_state_token = "jwt-state"
     flow.hass.data.setdefault("seenzus_bridge", {})["quick_pair_callback_payloads"] = {
@@ -220,7 +220,7 @@ async def test_seamless_authorize_consumes_stored_callback_payload(monkeypatch) 
                     "port": 1883,
                     "username": "user-1",
                     "password": "pass-1",
-                    "topicRoot": "savant/v2",
+                    "topicRoot": "seenzus/v2",
                     "bridgeId": "ha-web-bridge",
                 },
             }
@@ -309,7 +309,7 @@ async def test_seamless_step_starts_external_quick_pair(monkeypatch) -> None:
             {
                 "ok": True,
                 "session_id": "wps_1",
-                "pairing_page_url": "https://app.savant.xxx/web-pairing/wps_1",
+                "pairing_page_url": "https://app.seenzus.xxx/web-pairing/wps_1",
             }
         )
 
@@ -333,7 +333,7 @@ async def test_seamless_step_starts_external_quick_pair(monkeypatch) -> None:
 
     assert result["type"] == "external"
     assert result["step_id"] == "seamless_authorize"
-    assert result["url"] == "https://app.savant.xxx/web-pairing/wps_1"
+    assert result["url"] == "https://app.seenzus.xxx/web-pairing/wps_1"
     assert create_calls[0]["api_base"] == DEFAULT_PAIRING_API_BASE
     assert create_calls[0]["redirect_uri"] == f"http://homeassistant.local:8123{QUICK_PAIR_CALLBACK_PATH}"
     assert create_calls[0]["state"] == "jwt-state"
@@ -343,9 +343,9 @@ async def test_seamless_step_starts_external_quick_pair(monkeypatch) -> None:
 async def test_seamless_authorize_exchanges_callback_code(monkeypatch) -> None:
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
-    flow._quick_pair_api_base = "https://api.savant.xxx/api"
+    flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
-    flow._quick_pair_page_url = "https://app.savant.xxx/web-pairing/wps_1"
+    flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
     flow._quick_pair_callback_state = "pairing-state"
     flow._quick_pair_callback_state_token = "jwt-state"
     flow.async_external_step_done = lambda *, next_step_id: {
@@ -369,7 +369,7 @@ async def test_seamless_authorize_exchanges_callback_code(monkeypatch) -> None:
                     "port": 1883,
                     "username": "user-1",
                     "password": "pass-1",
-                    "topicRoot": "savant/v2",
+                    "topicRoot": "seenzus/v2",
                     "bridgeId": "ha-web-bridge",
                 },
             }
@@ -392,7 +392,7 @@ async def test_seamless_authorize_exchanges_callback_code(monkeypatch) -> None:
 async def test_seamless_authorize_rejects_mismatched_state(monkeypatch) -> None:
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
-    flow._quick_pair_page_url = "https://app.savant.xxx/web-pairing/wps_1"
+    flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
     flow._quick_pair_callback_state = "expected-state"
     flow.async_external_step_done = lambda *, next_step_id: {
         "type": "external_done",
@@ -414,9 +414,9 @@ async def test_seamless_authorize_rejects_mismatched_state(monkeypatch) -> None:
 async def test_seamless_authorize_does_not_raise_when_exchange_fails(monkeypatch) -> None:
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
-    flow._quick_pair_api_base = "https://api.savant.xxx/api"
+    flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
-    flow._quick_pair_page_url = "https://app.savant.xxx/web-pairing/wps_1"
+    flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
     flow._quick_pair_callback_state = "pairing-state"
     flow._quick_pair_callback_state_token = "jwt-state"
     flow.async_external_step_done = lambda *, next_step_id: {
@@ -449,9 +449,9 @@ async def test_seamless_finish_creates_entry_with_bootstrapped_mqtt(monkeypatch)
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
     flow.hass.config = FakeConfig({"version": "2026.3.0"})
-    flow._quick_pair_api_base = "https://api.savant.xxx/api"
+    flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
-    flow._quick_pair_page_url = "https://app.savant.xxx/web-pairing/wps_1"
+    flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
     flow._quick_pair_exchange_result = _result_obj(
         {
             "ok": True,
@@ -467,7 +467,7 @@ async def test_seamless_finish_creates_entry_with_bootstrapped_mqtt(monkeypatch)
                 "port": 1883,
                 "username": "user-1",
                 "password": "pass-1",
-                "topicRoot": "savant/v2",
+                "topicRoot": "seenzus/v2",
                 "bridgeId": "ha-web-bridge",
             },
         }
@@ -495,9 +495,9 @@ async def test_seamless_finish_creates_entry_with_web_pairing_mqtt(monkeypatch) 
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
     flow.hass.config = FakeConfig({"version": "2026.3.0"})
-    flow._quick_pair_api_base = "https://api.savant.xxx/api"
+    flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
-    flow._quick_pair_page_url = "https://app.savant.xxx/web-pairing/wps_1"
+    flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
     flow._quick_pair_exchange_result = _result_obj(
         {
             "ok": True,
@@ -510,7 +510,7 @@ async def test_seamless_finish_creates_entry_with_web_pairing_mqtt(monkeypatch) 
                 "port": 1883,
                 "username": "user-1",
                 "password": "pass-1",
-                "topicRoot": "savant/v2",
+                "topicRoot": "seenzus/v2",
                 "bridgeId": "ha-web-bridge",
             },
         }
@@ -526,9 +526,9 @@ async def test_seamless_finish_creates_entry_with_web_pairing_mqtt(monkeypatch) 
     assert result["type"] == "create_entry"
     assert result["data"][CONF_PAIRING_MODE] == "seamless"
     assert result["data"][CONF_CONFIG_SOURCE] == "web_pair"
-    assert result["data"][CONF_PAIRING_API_BASE] == "https://api.savant.xxx/api"
+    assert result["data"][CONF_PAIRING_API_BASE] == "https://api.seenzus.xxx/api"
     assert result["data"]["mqtt_host"] == "broker.example.com"
-    assert result["data"][CONF_TOPIC_ROOT] == "savant/v2"
+    assert result["data"][CONF_TOPIC_ROOT] == "seenzus/v2"
     assert result["data"][CONF_BRIDGE_ID] == "ha-web-bridge"
 
 
@@ -603,7 +603,7 @@ async def test_options_seamless_step_uses_options_flow_manager(monkeypatch) -> N
             {
                 "ok": True,
                 "session_id": "wps_1",
-                "pairing_page_url": "https://app.savant.xxx/web-pairing/wps_1",
+                "pairing_page_url": "https://app.seenzus.xxx/web-pairing/wps_1",
             }
         )
 
@@ -624,7 +624,7 @@ async def test_options_seamless_step_uses_options_flow_manager(monkeypatch) -> N
     assert create_calls[0]["state"] == "jwt-state"
     assert result["type"] == "external"
     assert result["step_id"] == "seamless_authorize"
-    assert result["url"] == "https://app.savant.xxx/web-pairing/wps_1"
+    assert result["url"] == "https://app.seenzus.xxx/web-pairing/wps_1"
 
 
 @pytest.mark.asyncio
@@ -659,9 +659,9 @@ async def test_options_seamless_finish_creates_entry_with_empty_title() -> None:
     config_entry = FakeConfigEntry(data={"mqtt_host": "old-broker"})
     flow = SavanAIBridgeOptionsFlow(config_entry)
     flow.hass = FakeHass()
-    flow._quick_pair_api_base = "https://api.savant.xxx/api"
+    flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
-    flow._quick_pair_page_url = "https://app.savant.xxx/web-pairing/wps_1"
+    flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
     flow._quick_pair_exchange_result = _result_obj(
         {
             "ok": True,
@@ -674,7 +674,7 @@ async def test_options_seamless_finish_creates_entry_with_empty_title() -> None:
                 "port": 1883,
                 "username": "user-1",
                 "password": "pass-1",
-                "topicRoot": "savant/v2",
+                "topicRoot": "seenzus/v2",
                 "bridgeId": "ha-web-bridge",
             },
         }
@@ -697,9 +697,9 @@ async def test_options_seamless_finish_creates_entry_with_empty_title() -> None:
 async def test_seamless_finish_error_reshows_seamless_form_without_placeholder_support() -> None:
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
-    flow._quick_pair_api_base = "https://api.savant.xxx/api"
+    flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
-    flow._quick_pair_page_url = "https://app.savant.xxx/web-pairing/wps_1"
+    flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
     flow._quick_pair_finish_error = "quick_pair_callback_timeout"
     flow._quick_pair_diagnostic = {"http_status": "500", "message": "boom"}
     # Deliberately NO description_placeholders parameter: pins the TypeError
@@ -718,7 +718,7 @@ async def test_seamless_finish_error_reshows_seamless_form_without_placeholder_s
     assert result["errors"] == {"base": "quick_pair_callback_timeout"}
     assert (
         _schema_field_default(result["data_schema"], CONF_PAIRING_API_BASE)
-        == "https://api.savant.xxx/api"
+        == "https://api.seenzus.xxx/api"
     )
 
 
@@ -726,9 +726,9 @@ async def test_seamless_finish_error_reshows_seamless_form_without_placeholder_s
 async def test_seamless_finish_polls_legacy_status_until_bound(monkeypatch) -> None:
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
-    flow._quick_pair_api_base = "https://api.savant.xxx/api"
+    flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
-    flow._quick_pair_page_url = "https://app.savant.xxx/web-pairing/wps_1"
+    flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
     status_calls: list[dict] = []
     sleeps: list[float] = []
 
@@ -749,7 +749,7 @@ async def test_seamless_finish_polls_legacy_status_until_bound(monkeypatch) -> N
                     "port": 1883,
                     "username": "user-1",
                     "password": "pass-1",
-                    "topicRoot": "savant/v2",
+                    "topicRoot": "seenzus/v2",
                     "bridgeId": "ha-web-bridge",
                 },
             }
@@ -773,7 +773,7 @@ async def test_seamless_finish_polls_legacy_status_until_bound(monkeypatch) -> N
 
     assert len(status_calls) <= 3
     assert [call["session_id"] for call in status_calls] == ["wps_1", "wps_1"]
-    assert all(call["api_base"] == "https://api.savant.xxx/api" for call in status_calls)
+    assert all(call["api_base"] == "https://api.seenzus.xxx/api" for call in status_calls)
     assert sleeps == [1]
     assert result["type"] == "create_entry"
     assert result["title"] == PLUGIN_NAME
@@ -786,9 +786,9 @@ async def test_seamless_finish_polls_legacy_status_until_bound(monkeypatch) -> N
 async def test_seamless_finish_reshows_form_when_session_never_bound(monkeypatch) -> None:
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
-    flow._quick_pair_api_base = "https://api.savant.xxx/api"
+    flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
-    flow._quick_pair_page_url = "https://app.savant.xxx/web-pairing/wps_1"
+    flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
     status_calls: list[dict] = []
     sleeps: list[float] = []
 
@@ -820,7 +820,7 @@ async def test_seamless_finish_reshows_form_when_session_never_bound(monkeypatch
     assert result["errors"] == {"base": "quick_pair_bootstrap_failed"}
     assert (
         _schema_field_default(result["data_schema"], CONF_PAIRING_API_BASE)
-        == "https://api.savant.xxx/api"
+        == "https://api.seenzus.xxx/api"
     )
 
 
@@ -999,7 +999,7 @@ async def test_seamless_captures_app_return_url_from_session(monkeypatch) -> Non
             {
                 "ok": True,
                 "session_id": "wps_1",
-                "pairing_page_url": "https://app.savant.xxx/web-pairing/wps_1",
+                "pairing_page_url": "https://app.seenzus.xxx/web-pairing/wps_1",
                 "app_return_url": "seenzus://pairing/done",
             }
         )
@@ -1023,9 +1023,9 @@ async def test_seamless_captures_app_return_url_from_session(monkeypatch) -> Non
 async def test_seamless_finish_shows_return_step_then_creates_entry() -> None:
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
-    flow._quick_pair_api_base = "https://api.savant.xxx/api"
+    flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
-    flow._quick_pair_page_url = "https://app.savant.xxx/web-pairing/wps_1"
+    flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
     flow._quick_pair_exchange_result = _result_obj(
         {
             "ok": True,
@@ -1038,7 +1038,7 @@ async def test_seamless_finish_shows_return_step_then_creates_entry() -> None:
                 "port": 1883,
                 "username": "user-1",
                 "password": "pass-1",
-                "topicRoot": "savant/v2",
+                "topicRoot": "seenzus/v2",
                 "bridgeId": "ha-web-bridge",
             },
         }

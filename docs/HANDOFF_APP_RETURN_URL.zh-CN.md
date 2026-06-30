@@ -68,7 +68,7 @@
   "configSource": "web_pair",
   "confirmedAt": "2026-04-20T12:01:22Z",
   "appReturnUrl": "seenzus://integrations?sessionId=wps_abc123&bridgeId=ha-web-bridge",
-  "mqtt": { "host": "...", "port": 1883, "username": "...", "password": "...", "topicRoot": "savant/v2", "bridgeId": "ha-web-bridge" }
+  "mqtt": { "host": "...", "port": 1883, "username": "...", "password": "...", "topicRoot": "seenzus/v2", "bridgeId": "ha-web-bridge" }
 }
 ```
 

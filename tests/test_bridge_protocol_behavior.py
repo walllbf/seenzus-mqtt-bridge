@@ -12,11 +12,11 @@ from seenzus_bridge.entity_filters import (
 
 def _topics(bridge_id: str) -> BridgeTopics:
     return BridgeTopics(
-        command_sub=f"savant/v2/bridge/{bridge_id}/command/+",
-        result_prefix=f"savant/v2/bridge/{bridge_id}/result",
-        state_prefix=f"savant/v2/bridge/{bridge_id}/state",
-        catalog_topic=f"savant/v2/bridge/{bridge_id}/catalog",
-        presence_topic=f"savant/v2/bridge/{bridge_id}/presence",
+        command_sub=f"seenzus/v2/bridge/{bridge_id}/command/+",
+        result_prefix=f"seenzus/v2/bridge/{bridge_id}/result",
+        state_prefix=f"seenzus/v2/bridge/{bridge_id}/state",
+        catalog_topic=f"seenzus/v2/bridge/{bridge_id}/catalog",
+        presence_topic=f"seenzus/v2/bridge/{bridge_id}/presence",
         bridge_id=bridge_id,
     )
 
@@ -26,7 +26,7 @@ def test_clears_previous_retained_topics_when_bridge_identity_changes() -> None:
     current = _topics("ha-new")
 
     assert retained_topics_to_clear_on_reload(previous, current) == [
-        "savant/v2/bridge/ha-old/presence"
+        "seenzus/v2/bridge/ha-old/presence"
     ]
 
 

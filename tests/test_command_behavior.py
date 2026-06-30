@@ -12,11 +12,11 @@ from tests.helpers import AsyncFakeMQTTClient, FakeConfigEntry, FakeEntityRegist
 @pytest.fixture
 def command_coordinator(monkeypatch):
     hass = FakeHass()
-    entry = FakeConfigEntry(data={"mqtt_host": "broker.example.com", "topic_root": "savant/v2"})
+    entry = FakeConfigEntry(data={"mqtt_host": "broker.example.com", "topic_root": "seenzus/v2"})
     registry = FakeEntityRegistry()
     monkeypatch.setattr(er, "async_get", lambda _hass: registry)
     coordinator = BridgeCoordinator(hass, entry)
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
     return coordinator
 
 
@@ -34,7 +34,7 @@ async def test_handle_v2_command_invalid_json_returns_400_result(command_coordin
     await command_coordinator._handle_v2_command("msg-1", "{broken", client)
 
     payload = json.loads(client.published[0]["payload"])
-    assert client.published[0]["topic"] == "savant/v2/bridge/ha-demo/result/msg-1"
+    assert client.published[0]["topic"] == "seenzus/v2/bridge/ha-demo/result/msg-1"
     assert payload["success"] is False
     assert payload["status"] == 400
     assert payload["error"] == "invalid_json"
@@ -54,8 +54,8 @@ async def test_handle_v2_command_publishes_result_and_followup_state(command_coo
 
     await command_coordinator._handle_v2_command("msg-2", raw, client)
 
-    assert client.published[0]["topic"] == "savant/v2/bridge/ha-demo/result/msg-2"
-    assert client.published[1]["topic"] == "savant/v2/bridge/ha-demo/state/light.demo"
+    assert client.published[0]["topic"] == "seenzus/v2/bridge/ha-demo/result/msg-2"
+    assert client.published[1]["topic"] == "seenzus/v2/bridge/ha-demo/state/light.demo"
     state_payload = json.loads(client.published[1]["payload"])
     assert state_payload["correlationMsgId"] == "msg-2"
     assert state_payload["entityId"] == "light.demo"
@@ -77,7 +77,7 @@ async def test_msgid_precedence_payload_msgid_wins_over_correlation_and_topic(co
     await command_coordinator._handle_v2_command("topic-id", raw, client)
 
     # Result topic uses the EFFECTIVE msgId (invariant 4), not the topic segment.
-    assert client.published[0]["topic"] == "savant/v2/bridge/ha-demo/result/payload-id"
+    assert client.published[0]["topic"] == "seenzus/v2/bridge/ha-demo/result/payload-id"
     assert json.loads(client.published[0]["payload"])["msgId"] == "payload-id"
     state_payload = json.loads(client.published[1]["payload"])
     assert state_payload["correlationMsgId"] == "payload-id"
@@ -97,7 +97,7 @@ async def test_msgid_precedence_correlation_id_wins_over_topic_segment(command_c
 
     await command_coordinator._handle_v2_command("topic-id", raw, client)
 
-    assert client.published[0]["topic"] == "savant/v2/bridge/ha-demo/result/corr-id"
+    assert client.published[0]["topic"] == "seenzus/v2/bridge/ha-demo/result/corr-id"
     assert json.loads(client.published[0]["payload"])["msgId"] == "corr-id"
 
 
@@ -109,7 +109,7 @@ async def test_msgid_falls_back_to_topic_segment_when_payload_has_no_ids(command
 
     await command_coordinator._handle_v2_command("topic-id", raw, client)
 
-    assert client.published[0]["topic"] == "savant/v2/bridge/ha-demo/result/topic-id"
+    assert client.published[0]["topic"] == "seenzus/v2/bridge/ha-demo/result/topic-id"
     assert json.loads(client.published[0]["payload"])["msgId"] == "topic-id"
 
 
