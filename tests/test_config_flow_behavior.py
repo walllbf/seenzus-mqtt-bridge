@@ -959,6 +959,14 @@ def test_record_quick_pair_diagnostic_creates_persistent_notification(monkeypatc
         ('https://example.com/x"y', None),
         ("https://example.com/x<y>", None),
         ("https://example.com/x`y", None),
+        # backslash: urlparse keeps it in the host, browsers fold it to '/' →
+        # host-spoofing differential, so it must be rejected
+        ("https://\\evil.example/x", None),
+        ("https://app.seenzus.ai\\@evil.example/x", None),
+        # allow-list: only http(s) / seenzus survive even with a //host authority
+        ("intent://scan/#Intent;scheme=foo;end", None),
+        ("ftp://host/x", None),
+        ("ssh://host/x", None),
         # non-printable-ASCII: zero-width, BOM, control byte, non-ASCII homograph
         ("https://app.seenzus.ai​/x", None),
         ("https://app.seenzus.ai﻿/x", None),
