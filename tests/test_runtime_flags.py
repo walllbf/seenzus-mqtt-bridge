@@ -17,7 +17,7 @@ def runtime_coordinator(monkeypatch):
     entry = FakeConfigEntry(
         data={
             "mqtt_host": "broker.example.com",
-            "topic_root": "savant/v2",
+            "topic_root": "seenzus/v2",
             "enable_state_events": True,
         }
     )
@@ -46,7 +46,7 @@ async def test_async_start_skips_state_listener_when_disabled(monkeypatch) -> No
     entry = FakeConfigEntry(
         data={
             "mqtt_host": "broker.example.com",
-            "topic_root": "savant/v2",
+            "topic_root": "seenzus/v2",
             "enable_state_events": False,
         }
     )
@@ -69,7 +69,7 @@ async def test_on_state_changed_ignores_events_when_state_push_disabled(monkeypa
     monkeypatch.setattr(er, "async_get", lambda _hass: FakeEntityRegistry())
     coordinator = BridgeCoordinator(hass, entry)
     coordinator._mqtt_client = AsyncFakeMQTTClient()
-    coordinator._topics = build_topics("savant/v2", "ha-demo")
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
 
     coordinator._on_state_changed(make_state_changed_event("light.demo"))
 
@@ -79,7 +79,7 @@ async def test_on_state_changed_ignores_events_when_state_push_disabled(monkeypa
 @pytest.mark.asyncio
 async def test_publish_presence_includes_expected_payload(runtime_coordinator) -> None:
     runtime_coordinator._mqtt_client = AsyncFakeMQTTClient()
-    runtime_coordinator._topics = build_topics("savant/v2", "ha-demo")
+    runtime_coordinator._topics = build_topics("seenzus/v2", "ha-demo")
 
     await runtime_coordinator._publish_presence("online")
 
@@ -100,11 +100,11 @@ async def test_presence_heartbeat_publishes_every_default_interval(monkeypatch, 
             raise asyncio.CancelledError
 
     runtime_coordinator._mqtt_client = AsyncFakeMQTTClient()
-    runtime_coordinator._topics = build_topics("savant/v2", "ha-demo")
+    runtime_coordinator._topics = build_topics("seenzus/v2", "ha-demo")
     monkeypatch.setattr(seenzus_bridge.asyncio, "sleep", fake_sleep)
 
     with pytest.raises(asyncio.CancelledError):
         await runtime_coordinator._presence_heartbeat()
 
     assert sleeps == [30, 30]
-    assert runtime_coordinator._mqtt_client.published[0]["topic"] == "savant/v2/bridge/ha-demo/presence"
+    assert runtime_coordinator._mqtt_client.published[0]["topic"] == "seenzus/v2/bridge/ha-demo/presence"
