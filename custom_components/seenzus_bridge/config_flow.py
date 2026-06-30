@@ -77,6 +77,7 @@ from .quick_pair import (  # noqa: F401
     QUICK_PAIR_CALLBACK_PATH,
     SavanAIQuickPairCallbackView,
     _build_quick_pair_callback_context,
+    _clear_quick_pair_notifications,
     _format_quick_pair_diagnostic,
     _notify_app_return,
     _pop_quick_pair_callback_payload,
@@ -455,6 +456,10 @@ class _QuickPairFlowMixin:
                 description="app_return",
                 description_placeholders={"app_return_url": self._quick_pair_app_return_url},
             )
+        # No return link this time (manual / no-URL re-pair). Still a success, so
+        # clear any stale return-link or failure notification from a prior attempt
+        # — a leftover link would send the user back with an expired session.
+        _clear_quick_pair_notifications(self.hass)
         return self.async_create_entry(title=self._entry_title, data=data)
 
     async def async_step_seamless(self, user_input: dict | None = None):
@@ -605,6 +610,9 @@ class _QuickPairFlowMixin:
             data[CONF_CONFIG_SOURCE] = CONFIG_SOURCE_MANUAL
             errors = _validate(data)
             if not errors:
+                # Manual (re)config carries no return link; clear any stale
+                # return-link / failure notification from an earlier quick pair.
+                _clear_quick_pair_notifications(self.hass)
                 return self.async_create_entry(title=self._entry_title, data=data)
 
         return self.async_show_form(
