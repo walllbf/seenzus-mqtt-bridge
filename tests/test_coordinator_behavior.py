@@ -4,6 +4,8 @@ import json
 
 import pytest
 
+from homeassistant.const import EntityCategory
+
 from seenzus_bridge import BridgeCoordinator
 from seenzus_bridge.bridge_protocol import build_topics
 from seenzus_bridge import dr
@@ -279,6 +281,80 @@ async def test_publish_device_catalog_groups_entities_under_devices(monkeypatch)
     assert device["availableEntityCount"] == 2
     assert device["online"] is True
     assert device["primaryAvailable"] is True
+
+
+@pytest.mark.asyncio
+async def test_device_catalog_reports_entity_category_config(monkeypatch) -> None:
+    hass = FakeHass()
+    entry = FakeConfigEntry(data={"mqtt_host": "broker.example.com"})
+    entity_registry = FakeEntityRegistry()
+    device_registry = FakeDeviceRegistry()
+    entity_registry.add(
+        "switch.living_room_jog_mode",
+        name="点动模式默认状态",
+        entity_category=EntityCategory.CONFIG,
+    )
+    monkeypatch.setattr(er, "async_get", lambda _hass: entity_registry)
+    monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
+    coordinator = BridgeCoordinator(hass, entry)
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    hass.states.set("switch.living_room_jog_mode", state="off")
+
+    await coordinator._publish_device_catalog(coordinator._mqtt_client, source="test")
+
+    payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
+    entity = payload["devices"][0]["entities"][0]
+    assert entity["entityCategory"] == "config"
+
+
+@pytest.mark.asyncio
+async def test_device_catalog_reports_entity_category_diagnostic(monkeypatch) -> None:
+    hass = FakeHass()
+    entry = FakeConfigEntry(data={"mqtt_host": "broker.example.com"})
+    entity_registry = FakeEntityRegistry()
+    device_registry = FakeDeviceRegistry()
+    entity_registry.add(
+        "switch.living_room_indicator",
+        name="指示灯状态",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    )
+    monkeypatch.setattr(er, "async_get", lambda _hass: entity_registry)
+    monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
+    coordinator = BridgeCoordinator(hass, entry)
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    hass.states.set("switch.living_room_indicator", state="on")
+
+    await coordinator._publish_device_catalog(coordinator._mqtt_client, source="test")
+
+    payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
+    entity = payload["devices"][0]["entities"][0]
+    assert entity["entityCategory"] == "diagnostic"
+
+
+@pytest.mark.asyncio
+async def test_device_catalog_omits_entity_category_for_primary_controls(monkeypatch) -> None:
+    hass = FakeHass()
+    entry = FakeConfigEntry(data={"mqtt_host": "broker.example.com"})
+    entity_registry = FakeEntityRegistry()
+    device_registry = FakeDeviceRegistry()
+    # entity_category=None(真控制),且另一实体根本不在 registry(async_get -> None)。
+    entity_registry.add("switch.living_room_key", name="按键 按键")
+    monkeypatch.setattr(er, "async_get", lambda _hass: entity_registry)
+    monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
+    coordinator = BridgeCoordinator(hass, entry)
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    hass.states.set("switch.living_room_key", state="on")
+    hass.states.set("light.unregistered", state="on", attributes={"friendly_name": "未注册灯"})
+
+    await coordinator._publish_device_catalog(coordinator._mqtt_client, source="test")
+
+    payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
+    entities = [ent for dev in payload["devices"] for ent in dev["entities"]]
+    assert entities  # sanity: something was reported
+    assert all("entityCategory" not in ent for ent in entities)
 
 
 @pytest.mark.asyncio
