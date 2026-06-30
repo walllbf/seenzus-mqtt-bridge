@@ -204,12 +204,17 @@ seenzus/v2/bridge/ha-demo/state/light.living_room
 
 ### 4.6 source 语义
 
-当前实现里主要有两种：
+当前实现取值：
 
 - `command`: 由 MQTT `command` 触发的状态回显
 - `ha_state_changed`: HA 内部真实状态变化产生的主动推送
 - `startup_snapshot`: MQTT 连接成功后启动快照
 - `full_snapshot`: `GET /api/states` 命令触发的全量状态快照
+
+**为开放枚举**，消费方应只识别已知值、对未知值惰性处理，后续新增取值不应破坏现有消费方。语义锚：
+
+- 派生「掉线/恢复」事件**只认 `source=ha_state_changed`**（真实状态变化）；`command` / `full_snapshot` / `startup_snapshot` 只校准基线、不记事件——快照/命令回发里的 `unavailable` 是「当前就这样」，不是「刚发生」
+- 同一次状态变化可能由 `command`（命令回发）与 `ha_state_changed`（HA 事件）**各发一条**，按 `(entityId, 内容)` 去重时注意二者 source 不同
 
 ### 4.7 后端要求
 
@@ -249,7 +254,8 @@ seenzus/v2/bridge/ha-demo/catalog
 
 ### 5.4 触发时机
 
-- MQTT 连接成功后发布一次 `startup_snapshot`
+- MQTT **首次**连接成功后发布一次 `startup_snapshot`
+- MQTT **断线重连**（非首次连接）后重发一次 `reconnect`
 - 收到 `GET /api/seenzus/device-catalog` 或 `GET /api/seenzus/devices` command 后发布一次 `command`
 
 ### 5.5 Payload
@@ -295,7 +301,7 @@ seenzus/v2/bridge/ha-demo/catalog
 
 - `eventId`: 本次 catalog 快照事件唯一 ID
 - `bridgeId`: 当前桥实例 ID
-- `source`: `startup_snapshot` 或 `command`
+- `source`: 本次 catalog 的来源，取值 `startup_snapshot`（首次连接全量）/ `reconnect`（断线重连重发）/ `command`（收到查询命令回发）。**为开放枚举**：消费方应只识别已知值、对未知值按惰性/基线处理（catalog 无论何种 source 都按整包重新校准设备基线，不据 source 派生事件），后续新增取值不应破坏现有消费方
 - `ts`: 快照生成时间
 - `devices`: 设备列表
 - `deviceCount`: 设备数量
