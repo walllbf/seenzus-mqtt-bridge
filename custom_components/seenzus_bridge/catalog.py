@@ -89,6 +89,12 @@ def build_catalog_entity(state: Any, entity_entry: Any, device_entry: Any) -> di
     }.items():
         if attr_name in attributes:
             entity[output_name] = attributes[attr_name]
+    # entity_category 是 entity registry 字段(EntityCategory StrEnum / None),不在
+    # state.attributes,故从 registry entry 取。后端据它把 config/diagnostic 实体踢出
+    # 控制面。沿用上面白名单的「有才发」风格:None(普通控制实体 / 不在 registry)省略键。
+    entity_category = getattr(entity_entry, "entity_category", None)
+    if entity_category is not None:
+        entity["entityCategory"] = getattr(entity_category, "value", entity_category)
     return entity
 
 

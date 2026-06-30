@@ -134,6 +134,7 @@ class FakeEntityRegistry:
         area_id: str | None = None,
         name: str | None = None,
         original_name: str | None = None,
+        entity_category=None,
     ) -> None:
         self.entities._entries.append(
             SimpleNamespace(
@@ -143,6 +144,7 @@ class FakeEntityRegistry:
                 area_id=area_id,
                 name=name,
                 original_name=original_name,
+                entity_category=entity_category,
             )
         )
 
