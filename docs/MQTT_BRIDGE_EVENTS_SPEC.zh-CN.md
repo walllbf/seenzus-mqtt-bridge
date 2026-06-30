@@ -311,6 +311,20 @@ seenzus/v2/bridge/ha-demo/catalog
 - `primaryDomain`: 根据实体 domain 优先级推断的主 domain
 - `primaryAvailable`: 主域(`primaryDomain`)**任一**实体可用即为 true,反映设备核心功能是否在线;无主域实体时为 `null`。需要更贴近用户体感的在线判断时,优先用此字段而非 `online`
 
+`devices[].entities[]` 内每个实体对象字段：
+
+- `entityId`: HA 实体 id(如 `light.kitchen`)
+- `name`: 实体显示名(registry name / original_name / friendly_name / entityId 回退)
+- `domain`: 实体 domain(如 `light`/`switch`/`climate`)
+- `state`: 当前状态值
+- `available`: 状态不为 `unavailable`/`unknown` 即为 true
+- `deviceId`: 所属 HA device id;无则为 `null`
+- `areaId`: 可选,实体或设备的区域 id
+- `deviceClass`: 可选,HA `device_class`(来自 state.attributes,有才发)
+- `unit`: 可选,HA `unit_of_measurement`(来自 state.attributes,有才发)
+- `icon`: 可选,HA `icon`(来自 state.attributes,有才发)
+- `entityCategory`: 可选,HA entity registry 的 `entity_category`,取值 `"config"` / `"diagnostic"`;普通控制实体(`entity_category=None` 或不在 registry)**省略此键**。后端据它把配置/诊断实体踢出控制面
+
 ### 5.7 过滤规则
 
 - 插件会过滤自身诊断实体，避免桥内部状态进入设备目录
