@@ -1,4 +1,4 @@
-"""Seenzus Bridge MQTT coordinator: connection lifecycle, command dispatch, state mirror, presence.
+"""seenzus Bridge MQTT coordinator: connection lifecycle, command dispatch, state mirror, presence.
 
 Owns the long-lived MQTT loop (connect, subscribe, retry with backoff),
 dispatches v2 commands to the HA HTTP-equivalent dispatcher, mirrors HA state
@@ -290,7 +290,7 @@ class BridgeCoordinator:
         self._skip_offline_presence = False
         self.status = "stopped"
         self.mqtt_connected = False
-        _LOGGER.info("Seenzus Bridge stopped")
+        _LOGGER.info("seenzus Bridge stopped")
         self._fire()
 
     async def async_prepare_for_reload(self) -> None:

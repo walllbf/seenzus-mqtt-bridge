@@ -25,7 +25,7 @@ from homeassistant.helpers.config_entry_oauth2_flow import (
 )
 from homeassistant.helpers.network import get_url
 
-from .const import DOMAIN
+from .const import DOMAIN, PRODUCT_NAME
 
 QUICK_PAIR_CALLBACK_PATH = "/api/seenzus_bridge/quick_pair/callback"
 QUICK_PAIR_CALLBACK_VIEW_REGISTERED = "quick_pair_callback_view_registered"
@@ -216,7 +216,7 @@ def _record_quick_pair_diagnostic(hass: HomeAssistant, reason: str, diagnostic: 
         persistent_notification.async_create(
             hass,
             f"快速配对失败：{reason}\n\n{formatted}",
-            title="Seenzus Bridge 快速配对诊断",
+            title="seenzus Bridge 快速配对诊断",
             notification_id=_NOTIFY_DIAGNOSTIC_ID,
         )
     except Exception:  # noqa: BLE001
@@ -224,7 +224,7 @@ def _record_quick_pair_diagnostic(hass: HomeAssistant, reason: str, diagnostic: 
 
 
 def _notify_app_return(hass: HomeAssistant, app_return_url: str) -> None:
-    """Surface the backend's 'return to Seenzus app' link as a persistent notification.
+    """Surface the backend's 'return to seenzus app' link as a persistent notification.
 
     The create-entry success page already carries this link on the first-time
     config flow, but that page is transient (one dialog) and the options /
@@ -243,8 +243,8 @@ def _notify_app_return(hass: HomeAssistant, app_return_url: str) -> None:
         persistent_notification.async_dismiss(hass, _NOTIFY_DIAGNOSTIC_ID)
         persistent_notification.async_create(
             hass,
-            f"Seenzus MQTT Bridge 已成功绑定。\n\n👉 [返回 Seenzus 应用]({app_return_url})",
-            title="Seenzus Bridge 配对完成",
+            f"{PRODUCT_NAME} 已成功绑定。\n\n## 👉 [返回 seenzus 应用]({app_return_url})",
+            title="seenzus Bridge 配对完成",
             notification_id=_NOTIFY_APP_RETURN_ID,
         )
     except Exception:  # noqa: BLE001

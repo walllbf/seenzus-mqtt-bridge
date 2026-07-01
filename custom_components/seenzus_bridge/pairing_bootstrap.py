@@ -272,9 +272,16 @@ async def create_web_pairing_session(
     ha_version: str,
     redirect_uri: str | None = None,
     state: str | None = None,
+    ha_instance_id: str | None = None,
     timeout_seconds: int = 10,
 ) -> PairingSessionCreateResult:
-    """Create a web-based pairing session and return the page URL."""
+    """Create a web-based pairing session and return the page URL.
+
+    ``ha_instance_id`` is HA's stable per-install UUID. The backend uses it to
+    recognise a re-pair of the same HA install and reuse/supersede the existing
+    bridge instead of spawning a duplicate (see docs/HANDOFF_REPAIR_DEDUP). It is
+    optional: omitted when unresolvable, and older backends simply ignore it.
+    """
 
     base = api_base.strip().rstrip("/")
     url = f"{base}/integrations/ha/web-pairing/session"
@@ -286,6 +293,8 @@ async def create_web_pairing_session(
         "redirectUri": redirect_uri,
         "state": state,
     }
+    if ha_instance_id:
+        body["haInstanceId"] = ha_instance_id
 
     outcome = await _call_pairing_api(
         "POST",

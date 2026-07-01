@@ -1,6 +1,6 @@
-﻿# Seenzus MQTT Bridge (HAOS Plugin)
+﻿# seenzus MQTT Bridge (HAOS Plugin)
 
-Seenzus MQTT Bridge 运行在 Home Assistant 本地，通过公网 MQTT 实现云端与局域网 HA 的双向联通，无需内网穿透。
+seenzus MQTT Bridge 运行在 Home Assistant 本地，通过公网 MQTT 实现云端与局域网 HA 的双向联通，无需内网穿透。
 
 主要特性：
 
@@ -26,7 +26,7 @@ Client/Cloud
 MQTT Broker
          │
          ▼
-Seenzus MQTT Bridge (HAOS)
+seenzus MQTT Bridge (HAOS)
   ├─ 执行 HA 内部 API（无需 HA Token）
   ├─ 回发 result
   └─ 推送 state/presence
@@ -40,7 +40,7 @@ Seenzus MQTT Bridge (HAOS)
 
 1. HA -> HACS -> Integrations
 2. 添加自定义仓库（类型 Integration）
-3. 安装 `Seenzus MQTT Bridge`
+3. 安装 `seenzus MQTT Bridge`
 4. 重启 Home Assistant
 
 ### 手动安装
@@ -57,13 +57,13 @@ config/custom_components/seenzus_bridge/
 
 ## 配置项
 
-在 HA -> 设置 -> 设备与服务 -> 添加集成 -> `Seenzus MQTT Bridge`。
+在 HA -> 设置 -> 设备与服务 -> 添加集成 -> `seenzus MQTT Bridge`。
 
 当前配置页行为：
 
 - 第一步先选择 `快速配对（推荐）` 或 `手动配置（高级）`
 - 第二步进入对应模式的专属表单
-- 快速配对页只保留 `Seenzus API 地址`，随后跳转外部 Seenzus 页面完成授权
+- 快速配对页只保留 `seenzus API 地址`，随后跳转外部 seenzus 页面完成授权
 - 外部授权成功后，浏览器会直接回跳到 HA 本地 callback，由插件自动兑换 MQTT 桥接配置并创建 entry
 - 手动配置页仍保留 MQTT 连接参数、手动配对参数和高级参数
 - 保存后会自动重载集成，配置立即生效，无需手动重启 HA
@@ -71,14 +71,14 @@ config/custom_components/seenzus_bridge/
 | 配置项 | 说明 | 默认值 |
 |---|---|---|
 | 配对模式 | `seamless` / `manual` | `seamless` |
-| Seenzus API 地址（快速配对） | 创建外部配对会话并自动回写桥接配置 | 空 |
+| seenzus API 地址（快速配对） | 创建外部配对会话并自动回写桥接配置 | 空 |
 | MQTT Broker 地址 | 手动配置时填写的公网 MQTT 地址 | - |
 | MQTT 端口 | Broker 端口 | `1883` |
 | MQTT 用户名/密码 | Broker 认证 | 空 |
 | V2 Topic 根路径 | v2 协议根路径 | `seenzus/v2` |
 | Bridge ID | 留空自动生成稳定 ID | 自动 |
 | 启用实体状态事件推送 | 推送 `state` 通道 | `true` |
-| Seenzus API 地址 | 手动 MQTT 桥接配置时不使用 | 空 |
+| seenzus API 地址 | 手动 MQTT 桥接配置时不使用 | 空 |
 
 
 
@@ -220,11 +220,11 @@ Payload:
 配置页执行链路：
 
 ```text
-输入 Seenzus API 地址
+输入 seenzus API 地址
   -> 创建带 redirect_uri/state 的 web pairing session
-  -> 跳转外部 Seenzus 页面
+  -> 跳转外部 seenzus 页面
   -> 用户完成授权
-  -> Seenzus 后端 302 回跳到 HA callback
+  -> seenzus 后端 302 回跳到 HA callback
   -> 插件完成 state 校验与 code exchange
   -> 自动拿到 mqtt.host / mqtt.port / mqtt.username / mqtt.password / topicRoot / bridgeId
   -> 创建 entry
@@ -274,7 +274,7 @@ entry 已包含 web_pair 写入的 mqtt + bridge 绑定上下文
 
 ## 监控与排障
 
-插件会创建传感器：`Seenzus MQTT Bridge 状态`，包含：
+插件会创建传感器：`seenzus MQTT Bridge 状态`，包含：
 
 - `request_count`, `result_count`, `state_push_count`, `error_count`
 - `topic_root`, `bridge_id`
@@ -287,7 +287,7 @@ entry 已包含 web_pair 写入的 mqtt + bridge 绑定上下文
 配对接口调用可观察性：
 
 - 快速配对会记录创建 web session、外部授权完成、MQTT 配置落地、bridge 启动等步骤日志
-- 也可以直接在 `Seenzus MQTT Bridge 配对状态` 实体属性里查看 `pairing_last_step` 和 `pairing_last_api_base`
+- 也可以直接在 `seenzus MQTT Bridge 配对状态` 实体属性里查看 `pairing_last_step` 和 `pairing_last_api_base`
 
 关于 `presence`：
 
@@ -372,15 +372,24 @@ docs/quick-pair-flow.zh-CN.md
 
 ## 版本变更记录
 
+### v0.1.9 (2026-07-01)
+
+- 品牌显示名统一小写为 `seenzus MQTT Bridge`（`MQTT` 保持大写；集成名、传感器、通知、配置页文案全覆盖）
+- 桥名附带 HA 家名（`seenzus MQTT Bridge · 我的家`）以在 seenzus App 桥列表区分多个家；家名做净化（去控制字符、截断超长）
+- 配对会话新增 `haInstanceId`（HA 稳定实例 UUID），供后端识别同一 HA 重配、避免重复僵尸桥（前向兼容，见 `docs/HANDOFF_REPAIR_DEDUP.zh-CN.md`）
+- 返回链接（成功页 + 持久化通知）改为 H2 大字并增加间距，更醒目
+- 更新集成图标 / logo（本地 `brand/`，走 HA 2026.3 本地品牌图机制）
+- 品牌名收敛为单一常量 `const.PRODUCT_NAME`
+
 ### v0.1.6 (2026-06-25)
 
-- 更新集成图标为正式 Seenzus 图标（v0.1.5 打包的是占位图；升级到本版后 HA 集成界面将显示新图标）
+- 更新集成图标为正式 seenzus 图标（v0.1.5 打包的是占位图；升级到本版后 HA 集成界面将显示新图标）
 - 仓库更名为 `seenzus-mqtt-bridge`，更新 `documentation` / `issue_tracker` 链接
 - 文档统一归入 `docs/`，新增图文安装指南 `docs/haos-seenzus-mqtt-bridge-guide.zh-CN.md`
 
 ### v0.1.5 (2026-06-25)
 
-- 统一显示品牌为 **Seenzus**（原 SeenzusAI）：集成显示名改为 `Seenzus MQTT Bridge`
+- 统一显示品牌为 **seenzus**（原 seenzusAI）：集成显示名改为 `seenzus MQTT Bridge`
 - 诊断实体 entity_id 前缀随之变为 `seenzus_mqtt_bridge_`；`entity_filters` 同步更新并保留旧前缀（`seenzusai_mqtt_bridge_` / `savanai_bridge_`）兼容旧安装
 
 ### v0.1.4 (2026-06-24)
@@ -388,7 +397,7 @@ docs/quick-pair-flow.zh-CN.md
 - 命令执行层引入默认安全策略：模板渲染、危险服务调用、完整 `GET /api/config` 默认关闭，可在「手动配置 → 高级参数」逐项放开
 - `GET /api/config` 默认裁剪家庭经纬度与实例 URL 等敏感字段
 - 快速配对默认地址切换到生产环境 `https://seenzus.ai/api/seenzus`
-- 统一品牌为 Seenzus，修复诊断实体过滤前缀（`seenzusai_mqtt_bridge_`，兼容旧前缀）
+- 统一品牌为 seenzus，修复诊断实体过滤前缀（`seenzusai_mqtt_bridge_`，兼容旧前缀）
 - 默认 Topic 根路径统一为 `seenzus/v2`
 - 新增 README「安全部署」章节
 
