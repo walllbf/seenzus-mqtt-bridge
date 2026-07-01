@@ -145,6 +145,6 @@ async def dispatch(
 
     return DispatchResult(
         status=404,
-        data={"message": f"Endpoint not supported by Seenzus Bridge: {method} {path}"},
+        data={"message": f"Endpoint not supported by seenzus Bridge: {method} {path}"},
         touched_entities=[],
     )

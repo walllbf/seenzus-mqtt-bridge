@@ -19,6 +19,7 @@ from seenzus_bridge.config_flow import (
     SavanAIQuickPairCallbackView,
     SavanAIBridgeConfigFlow,
     SavanAIBridgeOptionsFlow,
+    _backend_bridge_name,
     _build_quick_pair_callback_context,
     _flatten_form_input,
     _mode_schema,
@@ -928,7 +929,7 @@ def test_record_quick_pair_diagnostic_creates_persistent_notification(monkeypatc
         {
             "hass": hass,
             "message": "快速配对失败：quick_pair_session_failed\n\nhttp_status=500 | message=boom",
-            "title": "Seenzus Bridge 快速配对诊断",
+            "title": "seenzus Bridge 快速配对诊断",
             "notification_id": "seenzus_bridge_quick_pair_diagnostic",
         }
     ]
@@ -962,13 +963,40 @@ def test_notify_app_return_creates_notification_and_clears_diagnostic(monkeypatc
     assert created == [
         {
             "hass": hass,
-            "message": "Seenzus MQTT Bridge 已成功绑定。\n\n👉 [返回 Seenzus 应用](seenzus://pairing/done?session=wps_1)",
-            "title": "Seenzus Bridge 配对完成",
+            "message": "seenzus MQTT Bridge 已成功绑定。\n\n## 👉 [返回 seenzus 应用](seenzus://pairing/done?session=wps_1)",
+            "title": "seenzus Bridge 配对完成",
             "notification_id": "seenzus_bridge_app_return",
         }
     ]
     # Success supersedes a prior failure: the diagnostic notification is cleared.
     assert dismissed == ["seenzus_bridge_quick_pair_diagnostic"]
+
+
+def test_backend_bridge_name_appends_home_name() -> None:
+    hass = SimpleNamespace(config=SimpleNamespace(location_name="我的家"))
+    assert _backend_bridge_name(hass) == f"{PLUGIN_NAME} · 我的家"
+
+
+def test_backend_bridge_name_falls_back_when_no_home_name() -> None:
+    # Empty / whitespace / missing home name -> bare plugin name, never a dangling " · ".
+    assert _backend_bridge_name(SimpleNamespace(config=SimpleNamespace(location_name=""))) == PLUGIN_NAME
+    assert _backend_bridge_name(SimpleNamespace(config=SimpleNamespace(location_name="   "))) == PLUGIN_NAME
+    assert _backend_bridge_name(SimpleNamespace(config=SimpleNamespace())) == PLUGIN_NAME
+    # A home name identical to the plugin name adds no distinguishing value.
+    assert _backend_bridge_name(SimpleNamespace(config=SimpleNamespace(location_name=PLUGIN_NAME))) == PLUGIN_NAME
+
+
+def test_backend_bridge_name_sanitizes_home_name() -> None:
+    # Control chars / newlines are stripped so the bridgeName stays a single line.
+    hass = SimpleNamespace(config=SimpleNamespace(location_name="我的\n家\t里"))
+    assert _backend_bridge_name(hass) == f"{PLUGIN_NAME} · 我的家里"
+    # Printable non-ASCII (Chinese / emoji) is preserved.
+    hass = SimpleNamespace(config=SimpleNamespace(location_name="客厅🏠"))
+    assert _backend_bridge_name(hass) == f"{PLUGIN_NAME} · 客厅🏠"
+    # An oversized home name is truncated to keep the POST field bounded.
+    hass = SimpleNamespace(config=SimpleNamespace(location_name="家" * 100))
+    result = _backend_bridge_name(hass)
+    assert result == f"{PLUGIN_NAME} · {'家' * 64}"
 
 
 def test_clear_quick_pair_notifications_dismisses_both(monkeypatch) -> None:
@@ -1145,7 +1173,7 @@ async def test_seamless_finish_creates_entry_with_return_link(monkeypatch) -> No
     # options / re-pair path (no create_entry success page) still surfaces it.
     assert notified == [
         {
-            "message": "Seenzus MQTT Bridge 已成功绑定。\n\n👉 [返回 Seenzus 应用](seenzus://pairing/done?session=wps_1)",
+            "message": "seenzus MQTT Bridge 已成功绑定。\n\n## 👉 [返回 seenzus 应用](seenzus://pairing/done?session=wps_1)",
             "notification_id": "seenzus_bridge_app_return",
         }
     ]

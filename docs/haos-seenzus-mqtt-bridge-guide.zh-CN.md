@@ -1,8 +1,8 @@
-# 在 Home Assistant 中安装 Seenzus MQTT Bridge — 图文指南
+# 在 Home Assistant 中安装 seenzus MQTT Bridge — 图文指南
 
-本指南说明如何在 Home Assistant（HAOS / Supervised / Container）中安装并配置 **Seenzus MQTT Bridge** 集成。以 **HACS 安装 + 快速配对** 为主线，全程无需手动改文件。
+本指南说明如何在 Home Assistant（HAOS / Supervised / Container）中安装并配置 **seenzus MQTT Bridge** 集成。以 **HACS 安装 + 快速配对** 为主线，全程无需手动改文件。
 
-> 适用版本：Home Assistant **2026.3+**。集成 domain 为 `seenzus_bridge`，显示名为 `Seenzus MQTT Bridge`。
+> 适用版本：Home Assistant **2026.3+**。集成 domain 为 `seenzus_bridge`，显示名为 `seenzus MQTT Bridge`。
 
 ---
 
@@ -11,7 +11,7 @@
 - Home Assistant **2026.3 或更高版本**
 - 已安装 **HACS**
 - 一个可用的 **公网 MQTT Broker**
-  - 快速配对：由 Seenzus 后端自动下发，无需自备
+  - 快速配对：由 seenzus 后端自动下发，无需自备
   - 手动配置：需自备（推荐 EMQX Cloud / HiveMQ）
 
 ---
@@ -26,14 +26,14 @@
    ```
 
    类别（Category）选 **Integration** → 点击 **Add**
-3. 在 HACS 中搜索 **Seenzus MQTT Bridge** → 进入 → **Download（下载）**
+3. 在 HACS 中搜索 **seenzus MQTT Bridge** → 进入 → **Download（下载）**
 4. **重启 Home Assistant**
 
 ![HACS 添加自定义仓库](images/04-hacs-custom-repo.png)
 
-![在 HACS 中找到 Seenzus MQTT Bridge](images/04b-hacs-download.png)
+![在 HACS 中找到 seenzus MQTT Bridge](images/04b-hacs-download.png)
 
-![下载 Seenzus MQTT Bridge](images/04b-hacs-download2.png)
+![下载 seenzus MQTT Bridge](images/04b-hacs-download2.png)
 
 ### 备选：手动安装
 
@@ -79,9 +79,9 @@ custom_components/
 
 ![HAOS 集成列表](images/03-haos-integrations.png)
 
-点击右下角 **添加集成**，搜索 **Seenzus MQTT Bridge**：
+点击右下角 **添加集成**，搜索 **seenzus MQTT Bridge**：
 
-![搜索 Seenzus MQTT Bridge](images/05-search-seenzus.png)
+![搜索 seenzus MQTT Bridge](images/05-search-seenzus.png)
 
 ---
 
@@ -89,7 +89,7 @@ custom_components/
 
 选择集成后，第一步会让你选择配对模式：
 
-- **快速配对（推荐）** — 对应 `seamless`，通过 Seenzus 外部授权自动完成 MQTT 配置
+- **快速配对（推荐）** — 对应 `seamless`，通过 seenzus 外部授权自动完成 MQTT 配置
 - **手动配置（高级）** — 对应 `manual`，自行填写 MQTT 桥接参数
 
 ![选择配对模式](images/07-select-mode.png)
@@ -98,9 +98,9 @@ custom_components/
 
 ## 四、快速配对（推荐）
 
-### 1. 填写 Seenzus API 地址
+### 1. 填写 seenzus API 地址
 
-快速配对页只需确认 **Seenzus API 地址**，默认即为生产地址：
+快速配对页只需确认 **seenzus API 地址**，默认即为生产地址：
 
 ```text
 https://seenzus.ai/api/seenzus
@@ -108,19 +108,19 @@ https://seenzus.ai/api/seenzus
 
 > 仅当 HAOS 无法访问默认域名（如纯内网联调）时，才改为当前网络可访问的地址。
 
-![填写 Seenzus API 地址](images/08-api-base.png)
+![填写 seenzus API 地址](images/08-api-base.png)
 
 ### 2. 外部授权
 
-提交后浏览器会跳转到 Seenzus 配对页：
+提交后浏览器会跳转到 seenzus 配对页：
 
 ```text
-https://seenzus.ai/ha-pairing?session_id=...&redirect_uri=...&bridge_name=Seenzus+MQTT+Bridge
+https://seenzus.ai/ha-pairing?session_id=...&redirect_uri=...&bridge_name=seenzus+MQTT+Bridge
 ```
 
-在该页 **登录你的 Seenzus 账号**，确认页面显示的桥接名为 `Seenzus MQTT Bridge`，点击 **快速配对 / 确认绑定**：
+在该页 **登录你的 seenzus 账号**，确认页面显示的桥接名为 `seenzus MQTT Bridge`，点击 **快速配对 / 确认绑定**：
 
-![Seenzus 配对授权页](images/06-pairing-authorize.png)
+![seenzus 配对授权页](images/06-pairing-authorize.png)
 
 > ⏱️ 配对会话有有效期（约数分钟），请在过期前完成授权；超时后重新发起即可。
 
@@ -169,11 +169,11 @@ https://seenzus.ai/ha-pairing?session_id=...&redirect_uri=...&bridge_name=Seenzu
 
 ## 六、验证安装成功
 
-在 **设置 → 设备与服务 → 集成** 中应出现 **Seenzus MQTT Bridge**，并创建以下传感器：
+在 **设置 → 设备与服务 → 集成** 中应出现 **seenzus MQTT Bridge**，并创建以下传感器：
 
-- `Seenzus MQTT Bridge 状态` —— 应显示 **运行中**
+- `seenzus MQTT Bridge 状态` —— 应显示 **运行中**
 - 请求次数 / 结果回包次数 / 状态推送次数 / 错误次数
-- `Seenzus MQTT Bridge 配对状态`
+- `seenzus MQTT Bridge 配对状态`
 
 在状态传感器的属性里可看到：`bridge_id`、`mqtt_connected=true`、`pairing_status=bound`（快速配对）。
 
@@ -195,11 +195,11 @@ https://seenzus.ai/ha-pairing?session_id=...&redirect_uri=...&bridge_name=Seenzu
 
 ## 八、常见问题
 
-**搜不到 Seenzus MQTT Bridge？**
+**搜不到 seenzus MQTT Bridge？**
 确认 HACS 已添加自定义仓库并下载，且**已重启 HA**；手动安装则确认目录为 `/config/custom_components/seenzus_bridge/`。
 
 **快速配对创建会话失败？**
-确认 `Seenzus API 地址` 可从 HAOS 访问（DNS / 网络）。
+确认 `seenzus API 地址` 可从 HAOS 访问（DNS / 网络）。
 
 **外部授权成功但 HA 没完成配置？**
 确认 HA 的访问地址能被浏览器回跳到，即 `/api/seenzus_bridge/quick_pair/callback` 可达。

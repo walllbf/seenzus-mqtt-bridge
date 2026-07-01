@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "配置 Seenzus MQTT Bridge",
+        "title": "配置 seenzus MQTT Bridge",
         "description": "先选择配对模式，再进入对应的配置表单。",
         "data": {
           "pairing_mode": "配对模式"
@@ -11,9 +11,9 @@
       },
       "seamless": {
         "title": "快速配对",
-        "description": "集成会连接 Seenzus API 创建网页配对会话并跳转到外部 Seenzus 页面完成授权。若 HAOS 无法解析默认域名，请改填当前网络可访问的 Seenzus API 地址。",
+        "description": "集成会连接 seenzus API 创建网页配对会话并跳转到外部 seenzus 页面完成授权。若 HAOS 无法解析默认域名，请改填当前网络可访问的 seenzus API 地址。",
         "data": {
-          "pairing_api_base": "Seenzus API 地址"
+          "pairing_api_base": "seenzus API 地址"
         },
         "sections": {}
       },
@@ -48,12 +48,12 @@
       }
     },
     "create_entry": {
-      "app_return": "Seenzus MQTT Bridge 已成功绑定，集成已添加完成。\n\n👉 [返回 Seenzus 应用]({app_return_url})"
+      "app_return": "seenzus MQTT Bridge 已成功绑定，集成已添加完成。\n\n## 👉 [返回 seenzus 应用]({app_return_url})\n\n&nbsp;"
     },
     "error": {
       "host_required": "MQTT Broker 地址不能为空",
-      "invalid_pairing_api_base": "Seenzus API 地址无效",
-      "quick_pair_session_failed": "创建快速配对会话失败，请检查 Seenzus API 地址、DNS 和服务状态",
+      "invalid_pairing_api_base": "seenzus API 地址无效",
+      "quick_pair_session_failed": "创建快速配对会话失败，请检查 seenzus API 地址、DNS 和服务状态",
       "quick_pair_bootstrap_failed": "读取网页配对最终状态失败，请确认页面侧已经完成绑定",
       "quick_pair_mqtt_missing": "后端未返回 MQTT 桥接配置，无法完成快速配对",
       "quick_pair_callback_unavailable": "无法生成 Home Assistant 回跳地址，请检查当前访问地址或实例 URL 配置",
@@ -64,14 +64,14 @@
       "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
     },
     "abort": {
-      "already_configured": "Seenzus MQTT Bridge 已经配置过了，只允许添加一个实例",
+      "already_configured": "seenzus MQTT Bridge 已经配置过了，只允许添加一个实例",
       "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "修改 Seenzus MQTT Bridge 配置",
+        "title": "修改 seenzus MQTT Bridge 配置",
         "description": "先选择配对模式，再进入对应的配置表单。保存后自动重载集成立即生效。",
         "data": {
           "pairing_mode": "配对模式"
@@ -80,9 +80,9 @@
       },
       "seamless": {
         "title": "快速配对",
-        "description": "重新发起外部 Seenzus 快速配对。保存后会使用 Seenzus API 创建网页配对会话，授权成功后浏览器会直接回跳到 Home Assistant 并自动刷新 MQTT 桥接配置。",
+        "description": "重新发起外部 seenzus 快速配对。保存后会使用 seenzus API 创建网页配对会话，授权成功后浏览器会直接回跳到 Home Assistant 并自动刷新 MQTT 桥接配置。",
         "data": {
-          "pairing_api_base": "Seenzus API 地址"
+          "pairing_api_base": "seenzus API 地址"
         },
         "sections": {}
       },
@@ -117,12 +117,12 @@
       }
     },
     "create_entry": {
-      "app_return": "Seenzus MQTT Bridge 已成功绑定，集成已添加完成。\n\n👉 [返回 Seenzus 应用]({app_return_url})"
+      "app_return": "seenzus MQTT Bridge 已成功绑定，集成已添加完成。\n\n## 👉 [返回 seenzus 应用]({app_return_url})\n\n&nbsp;"
     },
     "error": {
       "host_required": "MQTT Broker 地址不能为空",
-      "invalid_pairing_api_base": "Seenzus API 地址无效",
-      "quick_pair_session_failed": "创建快速配对会话失败，请检查 Seenzus API 地址、DNS 和服务状态",
+      "invalid_pairing_api_base": "seenzus API 地址无效",
+      "quick_pair_session_failed": "创建快速配对会话失败，请检查 seenzus API 地址、DNS 和服务状态",
       "quick_pair_bootstrap_failed": "读取网页配对最终状态失败，请确认页面侧已经完成绑定",
       "quick_pair_mqtt_missing": "后端未返回 MQTT 桥接配置，无法完成快速配对",
       "quick_pair_callback_unavailable": "无法生成 Home Assistant 回跳地址，请检查当前访问地址或实例 URL 配置",
