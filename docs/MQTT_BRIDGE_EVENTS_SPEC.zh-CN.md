@@ -1,6 +1,6 @@
 # MQTT 桥接事件对接文档
 
-本文档面向后端、前端和联调同学，说明当前 `seenzusaimqttbridge` 插件在 MQTT 桥接层使用的事件：
+本文档面向后端、前端和联调同学，说明当前 `seenzus_bridge` 插件在 MQTT 桥接层使用的事件：
 
 - `command`
 - `result`
@@ -385,7 +385,7 @@ seenzus/v2/bridge/ha-demo/presence
   "requestCount": 12,
   "errorCount": 1,
   "lastError": null,
-  "version": "3.0.8"
+  "version": "0.1.9"
 }
 ```
 
