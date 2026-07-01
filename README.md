@@ -341,7 +341,7 @@ python -m venv .venv-test
 运行测试：
 
 ```text
-.\.venv-test\Scripts\python -m pytest tests test_bridge_retained_topics.py test_entity_filters.py -q
+.\.venv-test\Scripts\python -m pytest tests -q
 ```
 
 测试覆盖对照表见：
@@ -350,22 +350,16 @@ python -m venv .venv-test
 docs/test-coverage-matrix.md
 ```
 
-无感配对设计文档见：
-
-```text
-docs/seamless-pairing-design.zh-CN.md
-```
-
-无感配对插件实施任务清单见：
-
-```text
-docs/seamless-pairing-implementation-plan.zh-CN.md
-```
-
-无感配对后端接口协议建议见：
+快速配对完整流程（含后端契约）见：
 
 ```text
 docs/quick-pair-flow.zh-CN.md
+```
+
+MQTT 事件契约见：
+
+```text
+docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 ```
 
 ---
