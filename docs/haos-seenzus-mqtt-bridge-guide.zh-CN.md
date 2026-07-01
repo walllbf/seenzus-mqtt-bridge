@@ -212,4 +212,4 @@ https://seenzus.ai/ha-pairing?session_id=...&redirect_uri=...&bridge_name=seenzu
 ## 附：技术参考
 
 - MQTT Topic 规范、状态回显语义：见仓库 `README.md`
-- 快速配对设计与后端契约：见 `docs/seamless-pairing-design.zh-CN.md`、`docs/quick-pair-flow.zh-CN.md`
+- 快速配对完整流程与后端契约：见 `docs/quick-pair-flow.zh-CN.md`

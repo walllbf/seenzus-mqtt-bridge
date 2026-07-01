@@ -1,18 +1,13 @@
-# SavanAI Bridge 快速配对流程
+# seenzus MQTT Bridge 快速配对流程
 
-本文档描述 Home Assistant 插件快速配对的完整链路，覆盖插件配置流、Seenzus 前端授权页、后端配对 API、OAuth callback、MQTT 配置落地，以及设备目录刷新。
+本文档描述 Home Assistant 插件快速配对的完整链路，覆盖插件配置流、seenzus 前端授权页、后端配对 API、OAuth callback、MQTT 配置落地，以及设备目录刷新。
 
 相关代码位置：
 
-- HA 插件配置流：`seenzusaimqttbridge/config_flow.py`
-- HA 插件 HTTP 客户端：`seenzusaimqttbridge/pairing_bootstrap.py`
-- HA 插件 MQTT 运行时：`seenzusaimqttbridge/__init__.py`
-- 前端授权页：`seenzusaifrontend/client/src/pages/ha-pairing.tsx`
-- 前端配对 URL 工具：`seenzusaifrontend/client/src/lib/ha-pairing.ts`
-- 后端配对接口：`neuron.seenzusai.api/src/Seenzus.Api/Integrations/HaBridgeEndpoints.cs`
-- 后端配对服务：`neuron.seenzusai.api/src/Seenzus.Api/Integrations/Application/HaBridgePairingApplicationService.cs`
-- 后端 MQTT 消费：`neuron.seenzusai.api/src/Seenzus.Api/Integrations/Infrastructure/HaBridgeMqttConsumerHostedService.cs`
-- 后端 MQTT 分发：`neuron.seenzusai.api/src/Seenzus.Api/Integrations/Infrastructure/HaBridgeMqttMessageDispatcher.cs`
+- HA 插件配置流：`custom_components/seenzus_bridge/config_flow.py`
+- HA 插件快速配对 HTTP 管道：`custom_components/seenzus_bridge/quick_pair.py`、`custom_components/seenzus_bridge/pairing_bootstrap.py`
+- HA 插件 MQTT 运行时：`custom_components/seenzus_bridge/coordinator.py`、`custom_components/seenzus_bridge/__init__.py`
+- 前端授权页与后端配对 API 位于其它仓库；后端配对逻辑现为 TypeScript 实现（后端 `server` 仓库，如 `http/pairingRoutes.ts`、`http/pairingSessions.ts`）。早期 C# 后端已迁移，旧文档若提到 C# 路径仅作历史参考。
 
 ---
 
@@ -21,8 +16,8 @@
 ```mermaid
 sequenceDiagram
     participant HA as HomeAssistant插件
-    participant API as Seenzus后端
-    participant Web as Seenzus前端授权页
+    participant API as seenzus后端
+    participant Web as seenzus前端授权页
     participant Browser as 用户浏览器
     participant MQTT as MQTTBroker
 
@@ -49,7 +44,7 @@ sequenceDiagram
 
 入口在 `SavanAIBridgeConfigFlow.async_step_seamless()`。
 
-用户在 HA 添加集成时选择“快速配对”，插件要求用户填写 `Seenzus API 地址`，例如：
+用户在 HA 添加集成时选择“快速配对”，插件要求用户填写 `seenzus API 地址`，例如：
 
 ```text
 https://test.neuroncloud.ai/gatewayka/seenzus
@@ -78,8 +73,8 @@ Content-Type: application/json
 
 ```json
 {
-  "bridgeName": "SavanAI Bridge",
-  "bridgeVersion": "3.0.8",
+  "bridgeName": "seenzus MQTT Bridge",
+  "bridgeVersion": "0.1.9",
   "platform": "homeassistant",
   "haVersion": "2026.x.x",
   "redirectUri": "http://<ha-host>:8123/auth/external/callback",
@@ -124,7 +119,7 @@ self.async_external_step(
 )
 ```
 
-HA 前端会打开 Seenzus 配对授权页。
+HA 前端会打开 seenzus 配对授权页。
 
 ---
 
@@ -167,7 +162,7 @@ POST /integrations/ha/web-pairing/session
 
 ---
 
-## 4. Seenzus 前端授权页
+## 4. seenzus 前端授权页
 
 页面入口：
 
@@ -185,7 +180,7 @@ seenzusaifrontend/client/src/pages/ha-pairing.tsx
 
 1. 调用 `parsePairingContext(new URLSearchParams(window.location.search))`
 2. 校验必须存在 `session_id`、`api_base`、`redirect_uri`、`state`
-3. 调用 `useCurrentUserQuery()` 读取当前 Seenzus 登录用户
+3. 调用 `useCurrentUserQuery()` 读取当前 seenzus 登录用户
 4. 如果未登录，跳转到：
 
 ```text
@@ -252,10 +247,10 @@ GET /integrations/ha/web-pairing/session/{sessionId}/authorize
 
 处理逻辑：
 
-1. 从当前请求 cookie 解析 Seenzus session
+1. 从当前请求 cookie 解析 seenzus session
 2. 如果未登录：
    - 读取匿名 pairing session
-   - 重定向到 Seenzus 登录页
+   - 重定向到 seenzus 登录页
    - 登录页 `returnUrl` 指向原 `/auth/pairing?...`
 3. 如果已登录：
    - 调用 `HaBridgePairingApplicationService.AuthorizeWebPairingAsync(user.Id, sessionId)`
@@ -443,7 +438,7 @@ _build_quick_pair_entry_data()
 随后 HA 创建配置项：
 
 ```python
-self.async_create_entry(title="SavanAI Bridge", data=data)
+self.async_create_entry(title="seenzus MQTT Bridge", data=data)
 ```
 
 插件运行时 `BridgeCoordinator._mqtt_loop()` 读取配置项：
@@ -466,7 +461,7 @@ aiomqtt.Client(
     port=port,
     username=username,
     password=password,
-    identifier=f"savanai-bridge-{entry_id[:8]}",
+    identifier=f"seenzus-bridge-{entry_id[:8]}",
 )
 ```
 
