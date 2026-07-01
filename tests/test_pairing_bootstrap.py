@@ -220,6 +220,7 @@ async def test_create_web_pairing_session_posts_expected_payload(monkeypatch) ->
         ha_version="2026.3.0",
         redirect_uri="http://homeassistant.local:8123/auth/external/callback",
         state="jwt-state",
+        ha_instance_id="ha-install-uuid-1",
     )
 
     assert result.ok is True
@@ -231,6 +232,27 @@ async def test_create_web_pairing_session_posts_expected_payload(monkeypatch) ->
     assert fake_session.calls[0]["url"] == "https://app.seenzus.xxx/api/integrations/ha/web-pairing/session"
     assert fake_session.calls[0]["json"]["redirectUri"] == "http://homeassistant.local:8123/auth/external/callback"
     assert fake_session.calls[0]["json"]["state"] == "jwt-state"
+    # HA install id rides along for backend re-pair dedup.
+    assert fake_session.calls[0]["json"]["haInstanceId"] == "ha-install-uuid-1"
+
+
+@pytest.mark.asyncio
+async def test_create_web_pairing_session_omits_ha_instance_id_when_absent(monkeypatch) -> None:
+    fake_session = _FakeClientSession()
+    monkeypatch.setattr(
+        "seenzus_bridge.pairing_bootstrap.aiohttp.ClientSession",
+        lambda *args, **kwargs: fake_session,
+    )
+
+    await create_web_pairing_session(
+        api_base="https://app.seenzus.xxx/api",
+        bridge_name="SavanAI Bridge",
+        bridge_version="3.0.7",
+        ha_version="2026.3.0",
+    )
+
+    # Optional field: omitted entirely (not sent as null) when unresolved.
+    assert "haInstanceId" not in fake_session.calls[0]["json"]
 
 
 @pytest.mark.asyncio

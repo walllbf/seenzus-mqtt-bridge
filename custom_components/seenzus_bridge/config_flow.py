@@ -1,4 +1,4 @@
-"""Config Flow - Seenzus Bridge UI 配置."""
+"""Config Flow - seenzus Bridge UI 配置."""
 from __future__ import annotations
 
 import asyncio
@@ -55,6 +55,7 @@ from .const import (
     DOMAIN,
     PAIRING_MODE_MANUAL,
     PAIRING_MODE_SEAMLESS,
+    PRODUCT_NAME,
     normalize_pairing_mode,
 )
 from .pairing_bootstrap import (
@@ -86,9 +87,50 @@ from .quick_pair import (  # noqa: F401
 
 
 CONF_MQTT_SETTINGS = "mqtt_settings"
-PLUGIN_NAME = "Seenzus MQTT Bridge"
+# Backwards-compatible alias kept for the test suite / re-export; the single
+# source of truth is const.PRODUCT_NAME.
+PLUGIN_NAME = PRODUCT_NAME
 section = getattr(data_entry_flow_module, "section", lambda schema, _config: schema)
 _LOGGER = logging.getLogger(__name__)
+
+
+def _backend_bridge_name(hass) -> str:
+    """Bridge name POSTed to the backend, suffixed with the HA home name.
+
+    The integration is single-instance per HA, so every install would otherwise
+    register the same ``PLUGIN_NAME`` and be indistinguishable in the seenzus app
+    when one account has several homes paired. Appending ``location_name`` (the
+    home name the user set in HA) gives each bridge a human-meaningful label.
+    Falls back to the bare plugin name when no home name is set or it would just
+    duplicate the plugin name. The HA config-entry title stays ``PLUGIN_NAME``.
+    """
+    home = str(getattr(hass.config, "location_name", "") or "").strip()
+    # Sanitize the user-controlled home name before it rides on the bridgeName POST
+    # field: drop non-printable/control chars (newlines/tabs would break the single-
+    # line label) and cap length, so an oversized or malformed home name can't turn a
+    # pairing that used to succeed into a backend rejection. Printable Unicode
+    # (Chinese, emoji) is kept — only control/format chars are stripped.
+    home = "".join(ch for ch in home if ch.isprintable())[:64].strip()
+    if not home or home == PLUGIN_NAME:
+        return PLUGIN_NAME
+    return f"{PLUGIN_NAME} · {home}"
+
+
+async def _resolve_ha_instance_id(hass) -> str | None:
+    """HA's stable per-install UUID, POSTed to the backend for re-pair dedup.
+
+    The backend keys a re-pair of the same install by this id so it reuses /
+    supersedes the existing bridge instead of spawning a duplicate (see
+    docs/HANDOFF_REPAIR_DEDUP.zh-CN.md). Best-effort: the helper is imported
+    lazily and every failure degrades to ``None`` — the field is optional, so a
+    restricted / test hass or an old core just omits it and pairing still works.
+    """
+    try:
+        from homeassistant.helpers import instance_id
+
+        return await instance_id.async_get(hass)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _flatten_form_input(data: dict | None) -> dict:
@@ -482,11 +524,12 @@ class _QuickPairFlowMixin:
                     api_base = _resolve_pairing_api_base(data)
                     result = await create_web_pairing_session(
                         api_base=api_base,
-                        bridge_name=PLUGIN_NAME,
+                        bridge_name=_backend_bridge_name(self.hass),
                         bridge_version=BRIDGE_VERSION,
                         ha_version=str(config_data.get("version", "")),
                         redirect_uri=redirect_uri,
                         state=callback_state_token,
+                        ha_instance_id=await _resolve_ha_instance_id(self.hass),
                     )
                     if not result.ok or not result.pairing_page_url or not result.session_id:
                         errors["base"] = "quick_pair_session_failed"
