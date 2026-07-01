@@ -1,7 +1,12 @@
 """常量定义 - 不引入任何第三方依赖，供 config_flow 安全导入."""
 
 DOMAIN = "seenzus_bridge"
-BRIDGE_VERSION = "0.1.8"
+BRIDGE_VERSION = "0.1.9"
+
+# 产品显示名（Python 侧唯一来源：config_flow / sensor / quick_pair 都引用这里）。
+# 注意：manifest.json、strings.json、translations 因 HA 翻译机制无法引用 Python
+# 常量，仍是字面量，改名时需一并手动同步这几处 JSON。
+PRODUCT_NAME = "seenzus MQTT Bridge"
 
 # 用户可配置项
 CONF_MQTT_HOST      = "mqtt_host"
