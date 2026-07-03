@@ -59,6 +59,14 @@ VALID_MQTT_SCHEMES = {MQTT_SCHEME_TCP, MQTT_SCHEME_TCP_TLS, MQTT_SCHEME_WS, MQTT
 DEFAULT_MQTT_PORT      = 1883
 DEFAULT_MQTT_SCHEME = MQTT_SCHEME_TCP
 DEFAULT_MQTT_WS_PATH = "/mqtt"
+# 各 scheme 的惯例默认端口。后端契约总是显式下发 port，这里仅作缺省兜底：
+# wss/mqtts 响应缺 port 时若一律回退 1883，会拿 TLS 去连明文 TCP 端口。
+DEFAULT_PORT_BY_MQTT_SCHEME = {
+    MQTT_SCHEME_TCP: DEFAULT_MQTT_PORT,
+    MQTT_SCHEME_TCP_TLS: 8883,
+    MQTT_SCHEME_WS: 80,
+    MQTT_SCHEME_WSS: 443,
+}
 DEFAULT_TOPIC_ROOT = "seenzus/v2"
 DEFAULT_ENABLE_STATE_EVENTS = True
 # Security defaults: deny/redact. The MQTT command channel has no app-layer
