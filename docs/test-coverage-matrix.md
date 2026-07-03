@@ -1,10 +1,10 @@
-# seenzus MQTT Bridge 测试覆盖对照表
+﻿# seenzus MQTT Bridge 测试覆盖对照表
 
 > 现状对照（v0.1.9）。所有测试位于 `tests/` 目录，共 16 个文件。
 > 运行：`python -m pytest tests -q`（或先建隔离环境，见 `README.md` 的「测试与验证」）。
 > 本表由 `tests/` 实际收集重建；新增/重命名测试后请同步更新，或直接以 `pytest --collect-only` 为准。
 
-## `tests/test_config_flow_behavior.py` — 配置流 / 快速配对 UI（46）
+## `tests/test_config_flow_behavior.py` — 配置流 / 快速配对 UI（49）
 
 | 测试 | 验证行为 |
 |---|---|
@@ -51,6 +51,9 @@
 | `test_backend_bridge_name_sanitizes_home_name` | 家名去控制字符 + 截断超长，保留中文/emoji |
 | `test_clear_quick_pair_notifications_dismisses_both` | 无链接成功时清两条通知 |
 | `test_sanitize_app_return_url` | 返回链接 URL 净化（scheme/host/危险字符） |
+| `test_build_quick_pair_entry_data_stores_wss_scheme_and_path` | 兑换响应的 scheme/path 落 entry（归一小写/补斜杠） |
+| `test_build_quick_pair_entry_data_bare_tcp_response_stores_no_transport_keys` | 裸 TCP 响应不落传输键（entry 与旧版一致） |
+| `test_build_quick_pair_entry_data_ignores_unknown_scheme_and_stray_path` | 未知 scheme 不落盘；非 ws/wss 丢弃杂散 path |
 | `test_read_app_return_url_accepts_key_aliases` | 兼容 appReturnUrl/appReturnUri/returnUrl/returnUri |
 | `test_seamless_captures_app_return_url_from_session` | 从 session 捕获返回链接 |
 | `test_seamless_finish_creates_entry_with_return_link` | 成功页附返回链接 + 通知 |
@@ -80,7 +83,7 @@
 | `test_try_pairing_marks_bound_for_web_pair_source` | web_pair 源标记为 bound |
 | `test_try_pairing_waits_when_seamless_config_is_not_web_pair` | 非 web_pair 的 seamless 配置时等待 |
 
-## `tests/test_coordinator_behavior.py` — 协调器 / 状态 / 设备目录（20）
+## `tests/test_coordinator_behavior.py` — 协调器 / 状态 / 设备目录（24）
 
 | 测试 | 验证行为 |
 |---|---|
@@ -104,6 +107,10 @@
 | `test_device_catalog_excludes_model_marked_entities` | 排除型号标注实体 |
 | `test_device_catalog_command_publishes_catalog_snapshot` | catalog 命令发布快照 |
 | `test_prepare_for_reload_clears_old_retained_presence_when_bridge_changes` | 桥标识变更时清旧 retained presence |
+| `test_transport_kwargs_empty_for_bare_tcp_and_unknown_scheme` | 无 scheme/显式 mqtt/未知值均返回空连接参数 |
+| `test_transport_kwargs_wss_sets_websockets_transport_path_and_tls` | wss → websockets transport + 路径 + TLS 上下文 |
+| `test_transport_kwargs_ws_defaults_path_and_skips_tls` | ws 缺 path 时默认 /mqtt 且不加 TLS |
+| `test_transport_kwargs_mqtts_sets_tls_only` | mqtts 仅加 TLS，不走 websockets |
 
 ## `tests/test_dispatch_behavior.py` — HA 内部 API 分发 / 安全策略（10）
 
@@ -133,12 +140,13 @@
 | `test_publish_result_failure_counts_error_once_and_does_not_raise` | result 发布失败只记一次错误、不抛 |
 | `test_last_req_is_timezone_aware_after_command` | 命令后 last_req 带时区 |
 
-## `tests/test_mqtt_loop_behavior.py` — MQTT 连接生命周期（5）
+## `tests/test_mqtt_loop_behavior.py` — MQTT 连接生命周期（6）
 
 | 测试 | 验证行为 |
 |---|---|
 | `test_loop_missing_host_marks_error_and_waits_for_external_auth` | 缺 host 时置错误并等外部授权 |
-| `test_loop_happy_connect_subscribes_then_presence_snapshot_catalog` | 连上后订阅 → presence → 快照 → catalog |
+| `test_loop_happy_connect_subscribes_then_presence_snapshot_catalog` | 连上后订阅 → presence → 快照 → catalog（裸 TCP 无传输参数） |
+| `test_loop_wss_entry_connects_with_websockets_transport` | wss entry 以 websockets transport + TLS 连接 |
 | `test_loop_publishes_startup_snapshot_once_across_reconnect_cycles` | 重连周期内启动快照只发一次 |
 | `test_loop_defers_startup_snapshot_until_ha_started` | 启动快照等 HA started 后再发 |
 | `test_loop_routes_command_message_to_published_result` | 命令消息路由到 result |
