@@ -4,7 +4,7 @@
 > 运行：`python -m pytest tests -q`（或先建隔离环境，见 `README.md` 的「测试与验证」）。
 > 本表由 `tests/` 实际收集重建；新增/重命名测试后请同步更新，或直接以 `pytest --collect-only` 为准。
 
-## `tests/test_config_flow_behavior.py` — 配置流 / 快速配对 UI（46）
+## `tests/test_config_flow_behavior.py` — 配置流 / 快速配对 UI（47）
 
 | 测试 | 验证行为 |
 |---|---|
@@ -46,6 +46,7 @@
 | `test_app_return_view_rejects_disallowed_scheme` | 中转 view 拒绝白名单外 scheme 且不消费通知 |
 | `test_app_return_view_dismisses_notification_and_redirects_http` | 中转 view 关通知后 302 跳 http(s) 目标 |
 | `test_app_return_view_dismisses_notification_and_renders_deep_link_page` | 中转 view 关通知后渲染深链 HTML 跳转页 |
+| `test_app_return_view_escapes_script_breakout_in_deep_link_page` | 深链跳转页转义 `<` 阻断 `</script>` 逃逸 |
 | `test_backend_bridge_name_appends_home_name` | 桥名附加 HA 家名 |
 | `test_backend_bridge_name_falls_back_when_no_home_name` | 无家名/等于裸名时回退裸名 |
 | `test_backend_bridge_name_sanitizes_home_name` | 家名去控制字符 + 截断超长，保留中文/emoji |

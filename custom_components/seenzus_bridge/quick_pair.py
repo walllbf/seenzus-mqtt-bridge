@@ -164,6 +164,11 @@ class SeenzusAppReturnView(http.HomeAssistantView):
 
         if scheme in ("http", "https"):
             return web.Response(status=302, headers={"Location": target})
+        # json.dumps 不转义 "<"，字面 "</script>" 会终结脚本块（脚本元素内容按
+        # 原文解析，HTML 实体无效）——补转义成 <，JS 字符串语义不变。
+        # 正常签发路径的 URL 已被 _sanitize_app_return_url 拒绝过 "<"，这里是
+        # 对「任何持共享签名密钥的组件签出的 token」的纵深防御。
+        js_target = json.dumps(target).replace("<", "\\u003c")
         return web.Response(
             content_type="text/html",
             text=(
@@ -171,36 +176,40 @@ class SeenzusAppReturnView(http.HomeAssistantView):
                 "<title>返回 seenzus 应用</title></head><body>"
                 "<p>正在打开 seenzus 应用…</p>"
                 f'<p><a href="{_html_escape(target, quote=True)}">如未自动跳转，请点击这里</a></p>'
-                f"<script>window.location.href = {json.dumps(target)};</script>"
+                f"<script>window.location.href = {js_target};</script>"
                 "</body></html>"
             ),
         )
 
 
-def _ensure_quick_pair_callback_view(hass: HomeAssistant) -> None:
+def _ensure_view_registered(hass: HomeAssistant, *, flag: str, view_factory) -> None:
+    """Register a plugin HTTP view once per hass, guarded by a domain-data flag."""
     domain_data = hass.data.setdefault(DOMAIN, {})
-    if domain_data.get(QUICK_PAIR_CALLBACK_VIEW_REGISTERED):
+    if domain_data.get(flag):
         return
 
     hass_http = getattr(hass, "http", None)
     if hass_http is None:
         raise RuntimeError("home_assistant_http_not_available")
 
-    hass_http.register_view(SeenzusQuickPairCallbackView())
-    domain_data[QUICK_PAIR_CALLBACK_VIEW_REGISTERED] = True
+    hass_http.register_view(view_factory())
+    domain_data[flag] = True
+
+
+def _ensure_quick_pair_callback_view(hass: HomeAssistant) -> None:
+    _ensure_view_registered(
+        hass,
+        flag=QUICK_PAIR_CALLBACK_VIEW_REGISTERED,
+        view_factory=SeenzusQuickPairCallbackView,
+    )
 
 
 def _ensure_quick_pair_app_return_view(hass: HomeAssistant) -> None:
-    domain_data = hass.data.setdefault(DOMAIN, {})
-    if domain_data.get(QUICK_PAIR_APP_RETURN_VIEW_REGISTERED):
-        return
-
-    hass_http = getattr(hass, "http", None)
-    if hass_http is None:
-        raise RuntimeError("home_assistant_http_not_available")
-
-    hass_http.register_view(SeenzusAppReturnView())
-    domain_data[QUICK_PAIR_APP_RETURN_VIEW_REGISTERED] = True
+    _ensure_view_registered(
+        hass,
+        flag=QUICK_PAIR_APP_RETURN_VIEW_REGISTERED,
+        view_factory=SeenzusAppReturnView,
+    )
 
 
 def _build_app_return_transit_url(hass: HomeAssistant, app_return_url: str) -> str | None:
@@ -334,7 +343,8 @@ def _notify_app_return(hass: HomeAssistant, app_return_url: str) -> None:
     diagnostic helper for FakeHass / restricted environments; we log at debug so a
     real production failure is still traceable instead of fully silent.
     """
-    link_url = _build_app_return_transit_url(hass, app_return_url) or app_return_url
+    transit_url = _build_app_return_transit_url(hass, app_return_url)
+    link_url = transit_url or app_return_url
     # 必须用带 target 的内联 HTML 锚点，不能用 markdown [x](url) 语法：前端对
     # 「同源 + 无 target」的 <a> 会拦截成 SPA pushState 路由（frontend
     # is-navigation-click.ts），请求根本不会发到中转 view——表现为点击后通知
@@ -342,11 +352,17 @@ def _notify_app_return(hass: HomeAssistant, app_return_url: str) -> None:
     # 浏览器导航；HA 的 markdown 渲染（xss 库白名单 a[target|href|title]）
     # 会保留 target 属性。
     link_html = f'<a href="{_html_escape(link_url, quote=True)}" target="_blank">返回 seenzus 应用</a>'
+    message = f"{PRODUCT_NAME} 已成功绑定。\n\n## 👉 {link_html}"
+    if transit_url is None:
+        # 回退直链时，seenzus:// 这类自定义 scheme 的 href 会被前端 markdown
+        # 的 xss 过滤器清空（js-xss 默认 safeAttrValue 只放行 http(s)/mailto
+        # 等标准 scheme）成死链接——补一行可复制的明文地址兜底。
+        message += f"\n\n若链接无法点击，请手动打开：`{app_return_url}`"
     try:
         persistent_notification.async_dismiss(hass, _NOTIFY_DIAGNOSTIC_ID)
         persistent_notification.async_create(
             hass,
-            f"{PRODUCT_NAME} 已成功绑定。\n\n## 👉 {link_html}",
+            message,
             title="seenzus Bridge 配对完成",
             notification_id=_NOTIFY_APP_RETURN_ID,
         )
