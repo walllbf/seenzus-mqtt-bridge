@@ -144,6 +144,8 @@ async def test_loop_happy_connect_subscribes_then_presence_snapshot_catalog(monk
         assert client.connect_kwargs["hostname"] == "broker.example.com"
         assert client.connect_kwargs["port"] == 1883
         assert client.connect_kwargs["identifier"] == "seenzus-bridge-01kpcrmg"
+        # 裸 TCP entry（无 scheme）绝不附加 wss 支持引入的传输参数（issue #14）。
+        assert not {"transport", "websocket_path", "tls_context"} & set(client.connect_kwargs)
         assert client.subscriptions == [{"topic": COMMAND_SUB, "qos": 1}]
 
         presence = client.published[0]
@@ -166,6 +168,47 @@ async def test_loop_happy_connect_subscribes_then_presence_snapshot_catalog(monk
         assert json.loads(catalogs[0]["payload"])["source"] == "startup_snapshot"
 
         assert coordinator.status == "active"
+        assert coordinator.mqtt_connected is True
+    finally:
+        await _shutdown_loop(coordinator, task)
+
+
+@pytest.mark.asyncio
+async def test_loop_wss_entry_connects_with_websockets_transport(monkeypatch) -> None:
+    # wss entry（issue #14）：连接层给 aiomqtt.Client 附加 websockets transport、
+    # 握手路径与 TLS 上下文；裸 TCP entry 不带这三个键（见 happy 测试的
+    # connect_kwargs 与 test_coordinator_behavior 的 _transport_connect_kwargs 组）。
+    import ssl
+
+    coordinator, fake = _make_coordinator(
+        monkeypatch,
+        data={
+            **HAPPY_ENTRY_DATA,
+            "mqtt_host": "edge.seenzus.ai",
+            "mqtt_port": 443,
+            "mqtt_scheme": "wss",
+            "mqtt_ws_path": "/mqtt",
+        },
+        cycles=[{"end": "block"}],
+    )
+    _sleeps, real_sleep = _install_recording_sleep(monkeypatch)
+    coordinator._on_ha_started(None)
+
+    task = asyncio.get_running_loop().create_task(coordinator._mqtt_loop())
+    try:
+        for _ in range(5):
+            await real_sleep(0)
+
+        client = fake.clients[0]
+        assert client.connect_kwargs["hostname"] == "edge.seenzus.ai"
+        assert client.connect_kwargs["port"] == 443
+        assert client.connect_kwargs["transport"] == "websockets"
+        assert client.connect_kwargs["websocket_path"] == "/mqtt"
+        assert isinstance(client.connect_kwargs["tls_context"], ssl.SSLContext)
+        # presence 上报生效传输方式，供后端/运维确认桥已切到 wss。
+        presence_payload = json.loads(client.published[0]["payload"])
+        assert presence_payload["transport"] == "wss"
+        assert presence_payload["wsPath"] == "/mqtt"
         assert coordinator.mqtt_connected is True
     finally:
         await _shutdown_loop(coordinator, task)

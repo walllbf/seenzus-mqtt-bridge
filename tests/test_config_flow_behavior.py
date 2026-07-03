@@ -21,6 +21,7 @@ from seenzus_bridge.config_flow import (
     SavanAIBridgeOptionsFlow,
     _backend_bridge_name,
     _build_quick_pair_callback_context,
+    _build_quick_pair_entry_data,
     _flatten_form_input,
     _mode_schema,
     _sanitize_app_return_url,
@@ -31,6 +32,8 @@ from seenzus_bridge.pairing_bootstrap import _read_app_return_url
 from seenzus_bridge.const import (
     CONF_BRIDGE_ID,
     CONF_CONFIG_SOURCE,
+    CONF_MQTT_SCHEME,
+    CONF_MQTT_WS_PATH,
     DEFAULT_PAIRING_API_BASE,
     CONF_PAIRING_API_BASE,
     CONF_PAIRING_MODE,
@@ -935,6 +938,11 @@ def test_record_quick_pair_diagnostic_creates_persistent_notification(monkeypatc
             "notification_id": "seenzus_bridge_quick_pair_diagnostic",
         }
     ]
+    # 同一份诊断落进 hass.data，配对状态传感器作为持久 UI 面读取。
+    assert (
+        hass.data["seenzus_bridge"]["quick_pair_last_diagnostic"]
+        == "quick_pair_session_failed | http_status=500 | message=boom"
+    )
 
 
 def test_notify_app_return_creates_notification_and_clears_diagnostic(monkeypatch) -> None:
@@ -964,8 +972,12 @@ def test_notify_app_return_creates_notification_and_clears_diagnostic(monkeypatc
         lambda _hass, _payload: "app-return-token",
     )
 
+    # 预置一条上次失败的诊断：配对成功后必须被清除（传感器不再显示陈旧失败）。
+    hass.data.setdefault("seenzus_bridge", {})["quick_pair_last_diagnostic"] = "stale | x=y"
+
     _notify_app_return(hass, "seenzus://pairing/done?session=wps_1")
 
+    assert "quick_pair_last_diagnostic" not in hass.data["seenzus_bridge"]
     # The link routes through the transit endpoint (click dismisses the
     # notification server-side), not the raw app URL — and it must be an inline
     # HTML anchor WITH target: a same-origin targetless <a> gets intercepted by
@@ -1158,9 +1170,13 @@ def test_clear_quick_pair_notifications_dismisses_both(monkeypatch) -> None:
         ),
     )
 
+    hass.data.setdefault("seenzus_bridge", {})["quick_pair_last_diagnostic"] = "stale | x=y"
+
     _clear_quick_pair_notifications(hass)
 
     assert dismissed == ["seenzus_bridge_app_return", "seenzus_bridge_quick_pair_diagnostic"]
+    # 无链接成功路径同样清除传感器上的陈旧失败诊断。
+    assert "quick_pair_last_diagnostic" not in hass.data["seenzus_bridge"]
 
 
 @pytest.mark.parametrize(
@@ -1210,6 +1226,102 @@ def test_clear_quick_pair_notifications_dismisses_both(monkeypatch) -> None:
 )
 def test_sanitize_app_return_url(value, expected) -> None:
     assert _sanitize_app_return_url(value) == expected
+
+
+def _pairing_result_with_mqtt(mqtt: dict):
+    return _result_obj(
+        {
+            "session_id": "wps_1",
+            "confirmed_at": "2026-07-03T00:00:00Z",
+            "config_source": "web_pair",
+            "mqtt": {
+                "host": "edge.seenzus.ai",
+                "port": 443,
+                "username": "bridge-user",
+                "password": "bridge-pass",
+                **mqtt,
+            },
+        }
+    )
+
+
+def test_build_quick_pair_entry_data_stores_wss_scheme_and_path() -> None:
+    data = _build_quick_pair_entry_data(
+        api_base="https://api.seenzus.xxx/api",
+        status_result=_pairing_result_with_mqtt({"scheme": "wss", "path": "/mqtt"}),
+    )
+    assert data[CONF_MQTT_SCHEME] == "wss"
+    assert data[CONF_MQTT_WS_PATH] == "/mqtt"
+
+    # scheme 大写归一为小写；path 缺前导斜杠时补上。
+    data = _build_quick_pair_entry_data(
+        api_base="https://api.seenzus.xxx/api",
+        status_result=_pairing_result_with_mqtt({"scheme": "WSS", "path": "mqtt"}),
+    )
+    assert data[CONF_MQTT_SCHEME] == "wss"
+    assert data[CONF_MQTT_WS_PATH] == "/mqtt"
+
+
+def test_build_quick_pair_entry_data_bare_tcp_response_stores_default_transport_keys() -> None:
+    # 裸 TCP 下发（无 scheme/path 或显式 "mqtt"）也显式落盘 "mqtt"/""：options
+    # 流重配对走 {**entry.data, **entry.options} 合并，省略键会让旧 entry.data
+    # 里残留的 wss scheme/path 穿透合并、把新的裸 TCP broker 拨成 websockets+TLS。
+    for mqtt in ({}, {"scheme": "mqtt"}):
+        data = _build_quick_pair_entry_data(
+            api_base="https://api.seenzus.xxx/api",
+            status_result=_pairing_result_with_mqtt(mqtt),
+        )
+        assert data[CONF_MQTT_SCHEME] == "mqtt"
+        assert data[CONF_MQTT_WS_PATH] == ""
+
+
+def test_build_quick_pair_entry_data_normalizes_unknown_scheme_null_and_stray_path() -> None:
+    # 未知 scheme 回退为显式 "mqtt"（连接层走裸 TCP）；非 ws/wss 的杂散 path 丢弃。
+    data = _build_quick_pair_entry_data(
+        api_base="https://api.seenzus.xxx/api",
+        status_result=_pairing_result_with_mqtt({"scheme": "quic", "path": "/mqtt"}),
+    )
+    assert data[CONF_MQTT_SCHEME] == "mqtt"
+    assert data[CONF_MQTT_WS_PATH] == ""
+
+    data = _build_quick_pair_entry_data(
+        api_base="https://api.seenzus.xxx/api",
+        status_result=_pairing_result_with_mqtt({"scheme": "mqtts", "path": "/mqtt"}),
+    )
+    assert data[CONF_MQTT_SCHEME] == "mqtts"
+    assert data[CONF_MQTT_WS_PATH] == ""
+
+    # 显式 JSON null 不得字符串化成 "None"/"none"（str(None) 陷阱）。
+    data = _build_quick_pair_entry_data(
+        api_base="https://api.seenzus.xxx/api",
+        status_result=_pairing_result_with_mqtt({"scheme": None, "path": None}),
+    )
+    assert data[CONF_MQTT_SCHEME] == "mqtt"
+    assert data[CONF_MQTT_WS_PATH] == ""
+
+    data = _build_quick_pair_entry_data(
+        api_base="https://api.seenzus.xxx/api",
+        status_result=_pairing_result_with_mqtt({"scheme": "wss", "path": None}),
+    )
+    assert data[CONF_MQTT_SCHEME] == "wss"
+    assert data[CONF_MQTT_WS_PATH] == ""
+
+
+def test_build_quick_pair_entry_data_defaults_port_by_scheme() -> None:
+    # 响应缺 port 时按 scheme 取惯例端口，而不是一律 1883（wss 回退 1883 会拿
+    # TLS websocket 去连明文 TCP 端口）；显式 port 始终优先。
+    cases = [({}, 1883), ({"scheme": "mqtts"}, 8883), ({"scheme": "ws"}, 80), ({"scheme": "wss"}, 443)]
+    for mqtt, expected_port in cases:
+        result = _pairing_result_with_mqtt(mqtt)
+        result.mqtt.pop("port")
+        data = _build_quick_pair_entry_data(api_base="https://api.seenzus.xxx/api", status_result=result)
+        assert data["mqtt_port"] == expected_port, mqtt
+
+    data = _build_quick_pair_entry_data(
+        api_base="https://api.seenzus.xxx/api",
+        status_result=_pairing_result_with_mqtt({"scheme": "wss", "port": 8443}),
+    )
+    assert data["mqtt_port"] == 8443
 
 
 def test_read_app_return_url_accepts_key_aliases() -> None:
