@@ -73,6 +73,7 @@ from .pairing_models import (
 # either by the mixin's call sites or by tests' monkeypatch
 # (seenzusaimqttbridge.config_flow.* 仍可拦截)。实现在 quick_pair.py。
 from .quick_pair import (  # noqa: F401
+    APP_RETURN_URL_ALLOW_SCHEMES,
     FLOW_MANAGER_CONFIG,
     FLOW_MANAGER_OPTIONS,
     QUICK_PAIR_CALLBACK_PATH,
@@ -327,7 +328,8 @@ def _diagnostic_from_result(
 # allow-list (not a deny-list) keeps a javascript:/data:/intent: payload from
 # being one tap from execution: only the forms the backend contract actually
 # sends — an http(s) universal link or the seenzus:// app deep link — survive.
-_APP_RETURN_URL_ALLOW_SCHEMES = {"http", "https", "seenzus"}
+# 定义在 quick_pair（中转 view 跳转前也要校验），这里保留旧名作本模块内引用。
+_APP_RETURN_URL_ALLOW_SCHEMES = APP_RETURN_URL_ALLOW_SCHEMES
 
 
 def _sanitize_app_return_url(value: object) -> str | None:
