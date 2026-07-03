@@ -102,6 +102,9 @@ async def test_presence_includes_mqtt_and_pairing_diagnostics() -> None:
     assert payload["mqttConnected"] is True
     assert payload["pairingStatus"] == "bridge_ready"
     assert payload["configSource"] == "web_pair"
+    # 生效传输方式随 presence 上报（issue #14）；裸 TCP 不带 wsPath。
+    assert payload["transport"] == "mqtt"
+    assert "wsPath" not in payload
     assert payload["sourceId"] == "ha-bridge-ha-demo"
     assert payload["sourceType"] == "haos_bridge"
     assert payload["sourceName"] == "HA Bridge"
@@ -549,3 +552,53 @@ async def test_prepare_for_reload_clears_old_retained_presence_when_bridge_chang
     assert coordinator._mqtt_client.published[0]["topic"] == "seenzus/v2/bridge/ha-old/presence"
     assert coordinator._mqtt_client.published[0]["payload"] == ""
     assert coordinator._mqtt_client.published[0]["retain"] is True
+
+
+# ── MQTT 传输 scheme → aiomqtt 连接参数（issue #14 wss 支持） ──
+
+
+def test_transport_kwargs_empty_for_bare_tcp_and_unknown_scheme() -> None:
+    from seenzus_bridge.coordinator import _transport_connect_kwargs
+
+    # 旧 entry（无 scheme 键）与显式 "mqtt" 都必须返回空 kwargs——连接调用
+    # 与 wss 支持落地前完全一致，绝不炸旧桥。
+    assert _transport_connect_kwargs({}) == {}
+    assert _transport_connect_kwargs({"mqtt_scheme": "mqtt"}) == {}
+    # 未知 scheme 一律按裸 TCP 回退，不往 aiomqtt 传坏参数。
+    assert _transport_connect_kwargs({"mqtt_scheme": "quic"}) == {}
+
+
+def test_transport_kwargs_wss_sets_websockets_transport_path_and_tls() -> None:
+    import ssl
+
+    from seenzus_bridge.coordinator import _transport_connect_kwargs
+
+    kwargs = _transport_connect_kwargs({"mqtt_scheme": "wss", "mqtt_ws_path": "/mqtt"})
+    assert kwargs["transport"] == "websockets"
+    assert kwargs["websocket_path"] == "/mqtt"
+    assert isinstance(kwargs["tls_context"], ssl.SSLContext)
+    # scheme 大小写不敏感（后端下发按契约是小写，防御性归一）。
+    assert _transport_connect_kwargs({"mqtt_scheme": "WSS"})["transport"] == "websockets"
+
+
+def test_transport_kwargs_ws_defaults_path_and_skips_tls() -> None:
+    from seenzus_bridge.coordinator import _transport_connect_kwargs
+
+    kwargs = _transport_connect_kwargs({"mqtt_scheme": "ws"})
+    assert kwargs["transport"] == "websockets"
+    assert kwargs["websocket_path"] == "/mqtt"
+    assert "tls_context" not in kwargs
+
+
+def test_transport_kwargs_mqtts_sets_tls_only() -> None:
+    import ssl
+
+    from seenzus_bridge.coordinator import _transport_connect_kwargs
+
+    kwargs = _transport_connect_kwargs({"mqtt_scheme": "mqtts"})
+    assert isinstance(kwargs["tls_context"], ssl.SSLContext)
+    assert "transport" not in kwargs
+    assert "websocket_path" not in kwargs
+    # TLS 上下文模块级缓存：抖动重连时不得每个周期重建（回退路径会在事件
+    # 循环里同步重载系统 CA 库）。
+    assert _transport_connect_kwargs({"mqtt_scheme": "wss"})["tls_context"] is kwargs["tls_context"]
