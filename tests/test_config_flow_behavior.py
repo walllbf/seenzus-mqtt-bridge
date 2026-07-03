@@ -1007,9 +1007,12 @@ def test_notify_app_return_falls_back_to_raw_url_without_http(monkeypatch) -> No
 
     _notify_app_return(hass, "seenzus://pairing/done?session=wps_1")
 
+    # 回退直链附带可复制的明文地址：自定义 scheme 的 href 会被前端 markdown
+    # 的 xss 过滤器清空，锚点可能是死链接。
     assert created == [
         "seenzus MQTT Bridge 已成功绑定。\n\n## 👉 "
         '<a href="seenzus://pairing/done?session=wps_1" target="_blank">返回 seenzus 应用</a>'
+        "\n\n若链接无法点击，请手动打开：`seenzus://pairing/done?session=wps_1`"
     ]
 
 
@@ -1093,6 +1096,31 @@ async def test_app_return_view_dismisses_notification_and_renders_deep_link_page
     assert 'href="seenzus://pairing/done?session=wps_1"' in response.text
     assert 'window.location.href = "seenzus://pairing/done?session=wps_1"' in response.text
     assert dismissed == ["seenzus_bridge_app_return"]
+
+
+@pytest.mark.asyncio
+async def test_app_return_view_escapes_script_breakout_in_deep_link_page(monkeypatch) -> None:
+    # json.dumps 不转义 "<"：字面 "</script>" 会终结脚本块。scheme 白名单挡不住
+    # 这种载荷（scheme 仍是 seenzus），页面必须自行把 "<" 转义为 <。
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair.persistent_notification",
+        SimpleNamespace(async_dismiss=lambda _hass, notification_id: None),
+    )
+    hostile = "seenzus://x</script><script>doEvil()</script>"
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair._decode_jwt",
+        lambda _hass, _token: {"app_return_url": hostile},
+    )
+
+    response = await SeenzusAppReturnView().get(
+        SimpleNamespace(app={"hass": FakeHass()}, query={"token": "signed"})
+    )
+
+    assert response.status == 200
+    # 脚本字符串里不得出现未转义的 "<"；href 属性由 html.escape 兜底。
+    assert "<script>doEvil()" not in response.text
+    assert '"seenzus://x\\u003c/script>\\u003cscript>doEvil()\\u003c/script>"' in response.text
+    assert 'href="seenzus://x&lt;/script&gt;&lt;script&gt;doEvil()&lt;/script&gt;"' in response.text
 
 
 def test_backend_bridge_name_appends_home_name() -> None:
