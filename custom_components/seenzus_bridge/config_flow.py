@@ -53,6 +53,7 @@ from .const import (
     DEFAULT_MQTT_SCHEME,
     DEFAULT_PAIRING_API_BASE,
     DEFAULT_MQTT_PORT,
+    DEFAULT_PORT_BY_MQTT_SCHEME,
     MQTT_SCHEME_WS,
     MQTT_SCHEME_WSS,
     VALID_MQTT_SCHEMES,
@@ -283,6 +284,23 @@ def _build_quick_pair_entry_data(
     if not host:
         raise ValueError("quick_pair_mqtt_missing")
 
+    # 传输 scheme（issue #14）：web-pair 兑换响应下发。`or ""` 归一显式 JSON
+    # null（str(None) 会变 "None"）；未知值按裸 TCP 回退并告警，避免坏值直接
+    # 炸掉连接层。
+    scheme = str(mqtt.get("scheme") or "").strip().lower()
+    if scheme and scheme not in VALID_MQTT_SCHEMES:
+        _LOGGER.warning(
+            "Quick pair returned unknown mqtt scheme %r; falling back to bare TCP",
+            scheme,
+        )
+        scheme = ""
+    scheme = scheme or DEFAULT_MQTT_SCHEME
+    ws_path = ""
+    if scheme in (MQTT_SCHEME_WS, MQTT_SCHEME_WSS):
+        raw_ws_path = str(mqtt.get("path") or "").strip()
+        if raw_ws_path:
+            ws_path = raw_ws_path if raw_ws_path.startswith("/") else f"/{raw_ws_path}"
+
     data = {
         CONF_PAIRING_MODE: PAIRING_MODE_SEAMLESS,
         CONF_CONFIG_SOURCE: str(getattr(status_result, "config_source", "") or CONFIG_SOURCE_WEB_PAIR),
@@ -290,27 +308,19 @@ def _build_quick_pair_entry_data(
         CONF_PAIRING_SESSION_ID: status_result.session_id or "",
         CONF_PAIRING_BOUND_AT: status_result.confirmed_at or "",
         CONF_MQTT_HOST: host,
-        CONF_MQTT_PORT: int(mqtt.get("port") or DEFAULT_MQTT_PORT),
+        # 端口缺省按 scheme 取惯例值（wss 443 / ws 80 / mqtts 8883 / mqtt 1883）：
+        # wss 响应缺 port 时若一律回退 1883，会拿 TLS websocket 去连明文 TCP 端口。
+        CONF_MQTT_PORT: int(mqtt.get("port") or DEFAULT_PORT_BY_MQTT_SCHEME[scheme]),
         CONF_MQTT_USERNAME: str(mqtt.get("username", "")).strip(),
         CONF_MQTT_PASSWORD: str(mqtt.get("password", "")).strip(),
+        # scheme/ws_path 总是显式落盘（裸 TCP 即 "mqtt"/""）：options 流重配对走
+        # {**entry.data, **entry.options} 合并，若裸 TCP 结果省略这两个键，旧
+        # entry.data 里残留的 wss/path 会穿透合并继续生效，把新的裸 TCP broker
+        # 拨成 websockets+TLS。旧 entry（升级前创建）无键 → coordinator 按缺省
+        # 走裸 TCP 现状路径。
+        CONF_MQTT_SCHEME: scheme,
+        CONF_MQTT_WS_PATH: ws_path,
     }
-    # 传输 scheme（issue #14）：只在后端下发了非默认的合法值时才落 entry——
-    # 裸 TCP 响应（scheme 缺失或 "mqtt"）生成的 entry 与 wss 支持落地前逐字节
-    # 一致，旧 entry 也天然无此键，coordinator 侧统一按缺省走裸 TCP 现状路径。
-    # 未知 scheme 不落盘（按裸 TCP 回退并告警），避免坏值直接炸掉连接层。
-    scheme = str(mqtt.get("scheme", "")).strip().lower()
-    if scheme and scheme != DEFAULT_MQTT_SCHEME:
-        if scheme in VALID_MQTT_SCHEMES:
-            data[CONF_MQTT_SCHEME] = scheme
-        else:
-            _LOGGER.warning(
-                "Quick pair returned unknown mqtt scheme %r; falling back to bare TCP",
-                scheme,
-            )
-    if data.get(CONF_MQTT_SCHEME) in (MQTT_SCHEME_WS, MQTT_SCHEME_WSS):
-        ws_path = str(mqtt.get("path", "")).strip()
-        if ws_path:
-            data[CONF_MQTT_WS_PATH] = ws_path if ws_path.startswith("/") else f"/{ws_path}"
     topic_root = str(mqtt.get("topicRoot", "")).strip()
     if topic_root:
         data[CONF_TOPIC_ROOT] = topic_root
@@ -676,6 +686,11 @@ class _QuickPairFlowMixin:
             data = _flatten_form_input(user_input)
             data[CONF_PAIRING_MODE] = PAIRING_MODE_MANUAL
             data[CONF_CONFIG_SOURCE] = CONFIG_SOURCE_MANUAL
+            # 手动配置只支持裸 TCP（issue #14 明确不做 ws 的手动 UI）。显式落盘
+            # 以覆盖 options 合并里可能残留的旧 wss scheme/path（见
+            # _build_quick_pair_entry_data 的同款注释）。
+            data[CONF_MQTT_SCHEME] = DEFAULT_MQTT_SCHEME
+            data[CONF_MQTT_WS_PATH] = ""
             errors = _validate(data)
             if not errors:
                 # Manual (re)config carries no return link; clear any stale

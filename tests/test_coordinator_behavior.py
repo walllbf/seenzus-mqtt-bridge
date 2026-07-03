@@ -596,3 +596,6 @@ def test_transport_kwargs_mqtts_sets_tls_only() -> None:
     assert isinstance(kwargs["tls_context"], ssl.SSLContext)
     assert "transport" not in kwargs
     assert "websocket_path" not in kwargs
+    # TLS 上下文模块级缓存：抖动重连时不得每个周期重建（回退路径会在事件
+    # 循环里同步重载系统 CA 库）。
+    assert _transport_connect_kwargs({"mqtt_scheme": "wss"})["tls_context"] is kwargs["tls_context"]

@@ -1,10 +1,10 @@
-﻿# seenzus MQTT Bridge 测试覆盖对照表
+# seenzus MQTT Bridge 测试覆盖对照表
 
 > 现状对照（v0.1.9）。所有测试位于 `tests/` 目录，共 16 个文件。
 > 运行：`python -m pytest tests -q`（或先建隔离环境，见 `README.md` 的「测试与验证」）。
 > 本表由 `tests/` 实际收集重建；新增/重命名测试后请同步更新，或直接以 `pytest --collect-only` 为准。
 
-## `tests/test_config_flow_behavior.py` — 配置流 / 快速配对 UI（50）
+## `tests/test_config_flow_behavior.py` — 配置流 / 快速配对 UI（51）
 
 | 测试 | 验证行为 |
 |---|---|
@@ -53,8 +53,9 @@
 | `test_clear_quick_pair_notifications_dismisses_both` | 无链接成功时清两条通知 |
 | `test_sanitize_app_return_url` | 返回链接 URL 净化（scheme/host/危险字符） |
 | `test_build_quick_pair_entry_data_stores_wss_scheme_and_path` | 兑换响应的 scheme/path 落 entry（归一小写/补斜杠） |
-| `test_build_quick_pair_entry_data_bare_tcp_response_stores_no_transport_keys` | 裸 TCP 响应不落传输键（entry 与旧版一致） |
-| `test_build_quick_pair_entry_data_ignores_unknown_scheme_and_stray_path` | 未知 scheme 不落盘；非 ws/wss 丢弃杂散 path |
+| `test_build_quick_pair_entry_data_bare_tcp_response_stores_default_transport_keys` | 裸 TCP 也显式落 "mqtt"/""（覆盖 options 合并残留的旧 wss 键） |
+| `test_build_quick_pair_entry_data_normalizes_unknown_scheme_null_and_stray_path` | 未知 scheme/显式 null 归一为 "mqtt"；非 ws/wss 丢弃杂散 path |
+| `test_build_quick_pair_entry_data_defaults_port_by_scheme` | 缺 port 时按 scheme 取惯例端口（wss 443/mqtts 8883），显式 port 优先 |
 | `test_read_app_return_url_accepts_key_aliases` | 兼容 appReturnUrl/appReturnUri/returnUrl/returnUri |
 | `test_seamless_captures_app_return_url_from_session` | 从 session 捕获返回链接 |
 | `test_seamless_finish_creates_entry_with_return_link` | 成功页附返回链接 + 通知 |

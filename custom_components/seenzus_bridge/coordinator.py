@@ -82,22 +82,30 @@ _LOGGER = logging.getLogger(__name__)
 PRESENCE_HEARTBEAT_INTERVAL_SECONDS = 30
 
 
+_TLS_CONTEXT_CACHE = None
+
+
 def _client_tls_context():
-    """Client-side TLS context for wss / mqtts connections.
+    """Client-side TLS context for wss / mqtts connections (module-level cached).
 
     优先用 HA 进程内缓存的默认客户端上下文（首次构建会同步加载系统证书库，
-    HA 在启动期已做过，这里拿到的是缓存单例，不阻塞事件循环）；受限 / 测试
-    环境缺 util.ssl 时回退标准库默认上下文。证书走系统信任库（CF / 正规 CA），
-    不做 pinning——issue #14 明确不做。
+    HA 在启动期已做过）；受限 / 测试环境缺 util.ssl 时回退标准库默认上下文。
+    模块级缓存：mqtt loop 每个重连周期都会取上下文，回退路径的
+    ssl.create_default_context() 会在事件循环里同步重载整个系统 CA 库，
+    抖动重连时不能每次重建。证书走系统信任库（CF / 正规 CA），不做
+    pinning——issue #14 明确不做。
     """
-    try:
-        from homeassistant.util.ssl import client_context
+    global _TLS_CONTEXT_CACHE
+    if _TLS_CONTEXT_CACHE is None:
+        try:
+            from homeassistant.util.ssl import client_context
 
-        return client_context()
-    except Exception:  # noqa: BLE001
-        import ssl
+            _TLS_CONTEXT_CACHE = client_context()
+        except Exception:  # noqa: BLE001
+            import ssl
 
-        return ssl.create_default_context()
+            _TLS_CONTEXT_CACHE = ssl.create_default_context()
+    return _TLS_CONTEXT_CACHE
 
 
 def _transport_connect_kwargs(conf: dict) -> dict[str, Any]:

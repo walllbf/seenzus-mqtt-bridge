@@ -1249,33 +1249,66 @@ def test_build_quick_pair_entry_data_stores_wss_scheme_and_path() -> None:
     assert data[CONF_MQTT_WS_PATH] == "/mqtt"
 
 
-def test_build_quick_pair_entry_data_bare_tcp_response_stores_no_transport_keys() -> None:
-    # 裸 TCP 下发（无 scheme/path 或显式 "mqtt"）生成的 entry 不带传输键，
-    # 与 wss 支持落地前逐字节一致——旧桥回归零风险。
+def test_build_quick_pair_entry_data_bare_tcp_response_stores_default_transport_keys() -> None:
+    # 裸 TCP 下发（无 scheme/path 或显式 "mqtt"）也显式落盘 "mqtt"/""：options
+    # 流重配对走 {**entry.data, **entry.options} 合并，省略键会让旧 entry.data
+    # 里残留的 wss scheme/path 穿透合并、把新的裸 TCP broker 拨成 websockets+TLS。
     for mqtt in ({}, {"scheme": "mqtt"}):
         data = _build_quick_pair_entry_data(
             api_base="https://api.seenzus.xxx/api",
             status_result=_pairing_result_with_mqtt(mqtt),
         )
-        assert CONF_MQTT_SCHEME not in data
-        assert CONF_MQTT_WS_PATH not in data
+        assert data[CONF_MQTT_SCHEME] == "mqtt"
+        assert data[CONF_MQTT_WS_PATH] == ""
 
 
-def test_build_quick_pair_entry_data_ignores_unknown_scheme_and_stray_path() -> None:
-    # 未知 scheme 不落盘（连接层按裸 TCP 回退）；非 ws/wss 的杂散 path 同样丢弃。
+def test_build_quick_pair_entry_data_normalizes_unknown_scheme_null_and_stray_path() -> None:
+    # 未知 scheme 回退为显式 "mqtt"（连接层走裸 TCP）；非 ws/wss 的杂散 path 丢弃。
     data = _build_quick_pair_entry_data(
         api_base="https://api.seenzus.xxx/api",
         status_result=_pairing_result_with_mqtt({"scheme": "quic", "path": "/mqtt"}),
     )
-    assert CONF_MQTT_SCHEME not in data
-    assert CONF_MQTT_WS_PATH not in data
+    assert data[CONF_MQTT_SCHEME] == "mqtt"
+    assert data[CONF_MQTT_WS_PATH] == ""
 
     data = _build_quick_pair_entry_data(
         api_base="https://api.seenzus.xxx/api",
         status_result=_pairing_result_with_mqtt({"scheme": "mqtts", "path": "/mqtt"}),
     )
     assert data[CONF_MQTT_SCHEME] == "mqtts"
-    assert CONF_MQTT_WS_PATH not in data
+    assert data[CONF_MQTT_WS_PATH] == ""
+
+    # 显式 JSON null 不得字符串化成 "None"/"none"（str(None) 陷阱）。
+    data = _build_quick_pair_entry_data(
+        api_base="https://api.seenzus.xxx/api",
+        status_result=_pairing_result_with_mqtt({"scheme": None, "path": None}),
+    )
+    assert data[CONF_MQTT_SCHEME] == "mqtt"
+    assert data[CONF_MQTT_WS_PATH] == ""
+
+    data = _build_quick_pair_entry_data(
+        api_base="https://api.seenzus.xxx/api",
+        status_result=_pairing_result_with_mqtt({"scheme": "wss", "path": None}),
+    )
+    assert data[CONF_MQTT_SCHEME] == "wss"
+    assert data[CONF_MQTT_WS_PATH] == ""
+
+
+def test_build_quick_pair_entry_data_defaults_port_by_scheme() -> None:
+    # 响应缺 port 时按 scheme 取惯例端口，而不是一律 1883（wss 回退 1883 会拿
+    # TLS websocket 去连明文 TCP 端口）；显式 port 始终优先。
+    cases = [({}, 1883), ({"scheme": "mqtts"}, 8883), ({"scheme": "ws"}, 80), ({"scheme": "wss"}, 443)]
+    for mqtt, expected_port in cases:
+        result = _pairing_result_with_mqtt(mqtt)
+        result.mqtt.pop("port")
+        data = _build_quick_pair_entry_data(api_base="https://api.seenzus.xxx/api", status_result=result)
+        assert data["mqtt_port"] == expected_port, mqtt
+
+    data = _build_quick_pair_entry_data(
+        api_base="https://api.seenzus.xxx/api",
+        status_result=_pairing_result_with_mqtt({"scheme": "wss", "port": 8443}),
+    )
+    assert data["mqtt_port"] == 8443
 
 
 def test_read_app_return_url_accepts_key_aliases() -> None:
