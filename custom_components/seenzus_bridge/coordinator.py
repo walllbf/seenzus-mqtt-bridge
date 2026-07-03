@@ -41,7 +41,9 @@ from .const import (
     CONF_MQTT_HOST,
     CONF_MQTT_PASSWORD,
     CONF_MQTT_PORT,
+    CONF_MQTT_SCHEME,
     CONF_MQTT_USERNAME,
+    CONF_MQTT_WS_PATH,
     CONF_PAIRING_API_BASE,
     CONF_PAIRING_BOUND_AT,
     CONF_PAIRING_MODE,
@@ -55,7 +57,13 @@ from .const import (
     DEFAULT_ENABLE_TEMPLATE_API,
     DEFAULT_EXPOSE_FULL_CONFIG,
     DEFAULT_MQTT_PORT,
+    DEFAULT_MQTT_SCHEME,
+    DEFAULT_MQTT_WS_PATH,
     DEFAULT_TOPIC_ROOT,
+    MQTT_SCHEME_TCP_TLS,
+    MQTT_SCHEME_WS,
+    MQTT_SCHEME_WSS,
+    VALID_MQTT_SCHEMES,
     PAIRING_MODE_MANUAL,
     PAIRING_MODE_SEAMLESS,
     PAIRING_STATUS_BOUND,
@@ -73,6 +81,66 @@ from .ha_dispatcher import DispatchPolicy, dispatch
 _LOGGER = logging.getLogger(__name__)
 
 PRESENCE_HEARTBEAT_INTERVAL_SECONDS = 30
+
+
+_TLS_CONTEXT_CACHE = None
+
+
+def _client_tls_context():
+    """Client-side TLS context for wss / mqtts connections (module-level cached).
+
+    优先用 HA 进程内缓存的默认客户端上下文（首次构建会同步加载系统证书库，
+    HA 在启动期已做过）；受限 / 测试环境缺 util.ssl 时回退标准库默认上下文。
+    模块级缓存：mqtt loop 每个重连周期都会取上下文，回退路径的
+    ssl.create_default_context() 会在事件循环里同步重载整个系统 CA 库，
+    抖动重连时不能每次重建。证书走系统信任库（CF / 正规 CA），不做
+    pinning——issue #14 明确不做。
+    """
+    global _TLS_CONTEXT_CACHE
+    if _TLS_CONTEXT_CACHE is None:
+        try:
+            from homeassistant.util.ssl import client_context
+
+            _TLS_CONTEXT_CACHE = client_context()
+        except Exception:  # noqa: BLE001
+            import ssl
+
+            _TLS_CONTEXT_CACHE = ssl.create_default_context()
+    return _TLS_CONTEXT_CACHE
+
+
+def _effective_transport(conf: dict) -> tuple[str, str | None]:
+    """归一后的生效传输方式 ``(scheme, ws_path)``；非 ws/wss 时 ws_path 为 None。
+
+    scheme 缺失 / 空 / 未知值一律归一为裸 TCP "mqtt"。连接层
+    （_transport_connect_kwargs）与诊断展示（presence / 状态传感器）共用这
+    一份解析，保证「桥实际怎么连」和「界面显示怎么连」永远同源。
+    """
+    scheme = str(conf.get(CONF_MQTT_SCHEME, "") or "").strip().lower()
+    if scheme not in VALID_MQTT_SCHEMES:
+        scheme = DEFAULT_MQTT_SCHEME
+    if scheme in (MQTT_SCHEME_WS, MQTT_SCHEME_WSS):
+        ws_path = str(conf.get(CONF_MQTT_WS_PATH, "") or "").strip() or DEFAULT_MQTT_WS_PATH
+        return scheme, ws_path
+    return scheme, None
+
+
+def _transport_connect_kwargs(conf: dict) -> dict[str, Any]:
+    """Extra aiomqtt.Client kwargs derived from the entry's transport scheme.
+
+    裸 TCP（scheme 缺失 / "mqtt" / 任何未知值）返回空 dict——连接调用与
+    wss 支持落地前完全一致，绝不影响旧 entry。ws/wss 走 paho 原生
+    websockets transport（aiomqtt 的 ``websocket_path`` 即 paho
+    ``ws_set_options`` 的握手路径）；wss/mqtts 附加 TLS 上下文。
+    """
+    scheme, ws_path = _effective_transport(conf)
+    kwargs: dict[str, Any] = {}
+    if ws_path is not None:
+        kwargs["transport"] = "websockets"
+        kwargs["websocket_path"] = ws_path
+    if scheme in (MQTT_SCHEME_WSS, MQTT_SCHEME_TCP_TLS):
+        kwargs["tls_context"] = _client_tls_context()
+    return kwargs
 
 
 class BridgeCoordinator:
@@ -141,6 +209,14 @@ class BridgeCoordinator:
 
     def _resolve_pairing_mode(self) -> str:
         return normalize_pairing_mode(self._conf().get(CONF_PAIRING_MODE, ""))
+
+    def resolve_transport(self) -> tuple[str, str | None]:
+        """当前配置的生效 MQTT 传输 ``(scheme, ws_path)``，与连接层同源。
+
+        供诊断展示（presence / 状态传感器）使用，真机上一眼可确认桥走的是
+        wss 还是裸 TCP（issue #14 联调排查）。
+        """
+        return _effective_transport(self._conf())
 
     def _resolve_config_source(self) -> str:
         conf = self._conf()
@@ -373,12 +449,15 @@ class BridgeCoordinator:
                 self.pairing_status = PAIRING_STATUS_BRIDGE_STARTING
                 self._fire()
 
+        # keepalive 保持 aiomqtt 默认 60s，别调大：Cloudflare 对空闲 ~100s 的
+        # WebSocket 会掐连接，60s 心跳正好压在窗口内（issue #14）。
         async with aiomqtt.Client(
             hostname=host,
             port=port,
             username=username,
             password=password,
             identifier=client_id,
+            **_transport_connect_kwargs(conf),
         ) as client:
             self._mqtt_client = client
 
@@ -728,9 +807,13 @@ class BridgeCoordinator:
         if self._mqtt_client is None or self._topics is None:
             return
         self._sync_source_metadata()
+        transport_scheme, transport_ws_path = self.resolve_transport()
         payload = {
             "bridgeId": self._topics.bridge_id,
             "status": status,
+            # 生效传输方式（issue #14 联调排查）：后端/运维凭 presence 即可确认
+            # 桥走的是 wss 还是裸 TCP；wsPath 仅 ws/wss 时出现，与兑换响应对齐。
+            "transport": transport_scheme,
             "mqttConnected": self.mqtt_connected,
             "pairingStatus": self.pairing_status,
             "configSource": self.config_source,
@@ -745,6 +828,8 @@ class BridgeCoordinator:
             "lastError": self.last_error,
             "version": BRIDGE_VERSION,
         }
+        if transport_ws_path is not None:
+            payload["wsPath"] = transport_ws_path
         try:
             await self._mqtt_client.publish(
                 self._topics.presence_topic,
