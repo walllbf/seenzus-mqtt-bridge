@@ -13,6 +13,10 @@ CONF_MQTT_HOST      = "mqtt_host"
 CONF_MQTT_PORT      = "mqtt_port"
 CONF_MQTT_USERNAME  = "mqtt_username"
 CONF_MQTT_PASSWORD  = "mqtt_password"
+# 传输方式（issue #14）：web-pair 兑换响应下发，manual 流程不暴露 UI。
+# 旧 entry 无此键 → 按 DEFAULT_MQTT_SCHEME 走裸 TCP 现状路径。
+CONF_MQTT_SCHEME = "mqtt_scheme"
+CONF_MQTT_WS_PATH = "mqtt_ws_path"
 CONF_TOPIC_ROOT = "topic_root"
 CONF_BRIDGE_ID = "bridge_id"
 CONF_SOURCE_ID = "source_id"
@@ -43,8 +47,18 @@ PAIRING_STATUS_BRIDGE_STARTING = "bridge_starting"
 PAIRING_STATUS_BRIDGE_READY = "bridge_ready"
 PAIRING_STATUS_MQTT_AUTH_FAILED = "mqtt_auth_failed"
 
+# MQTT 传输 scheme（与后端 exchange 响应的 mqtt.scheme 语义一致）：
+# mqtt=裸 TCP，mqtts=TCP+TLS，ws=WebSocket，wss=WebSocket+TLS。
+MQTT_SCHEME_TCP = "mqtt"
+MQTT_SCHEME_TCP_TLS = "mqtts"
+MQTT_SCHEME_WS = "ws"
+MQTT_SCHEME_WSS = "wss"
+VALID_MQTT_SCHEMES = {MQTT_SCHEME_TCP, MQTT_SCHEME_TCP_TLS, MQTT_SCHEME_WS, MQTT_SCHEME_WSS}
+
 # 默认值
 DEFAULT_MQTT_PORT      = 1883
+DEFAULT_MQTT_SCHEME = MQTT_SCHEME_TCP
+DEFAULT_MQTT_WS_PATH = "/mqtt"
 DEFAULT_TOPIC_ROOT = "seenzus/v2"
 DEFAULT_ENABLE_STATE_EVENTS = True
 # Security defaults: deny/redact. The MQTT command channel has no app-layer

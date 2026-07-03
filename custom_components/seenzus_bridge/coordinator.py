@@ -41,7 +41,9 @@ from .const import (
     CONF_MQTT_HOST,
     CONF_MQTT_PASSWORD,
     CONF_MQTT_PORT,
+    CONF_MQTT_SCHEME,
     CONF_MQTT_USERNAME,
+    CONF_MQTT_WS_PATH,
     CONF_PAIRING_API_BASE,
     CONF_PAIRING_BOUND_AT,
     CONF_PAIRING_MODE,
@@ -55,7 +57,12 @@ from .const import (
     DEFAULT_ENABLE_TEMPLATE_API,
     DEFAULT_EXPOSE_FULL_CONFIG,
     DEFAULT_MQTT_PORT,
+    DEFAULT_MQTT_SCHEME,
+    DEFAULT_MQTT_WS_PATH,
     DEFAULT_TOPIC_ROOT,
+    MQTT_SCHEME_TCP_TLS,
+    MQTT_SCHEME_WS,
+    MQTT_SCHEME_WSS,
     PAIRING_MODE_MANUAL,
     PAIRING_MODE_SEAMLESS,
     PAIRING_STATUS_BOUND,
@@ -73,6 +80,44 @@ from .ha_dispatcher import DispatchPolicy, dispatch
 _LOGGER = logging.getLogger(__name__)
 
 PRESENCE_HEARTBEAT_INTERVAL_SECONDS = 30
+
+
+def _client_tls_context():
+    """Client-side TLS context for wss / mqtts connections.
+
+    优先用 HA 进程内缓存的默认客户端上下文（首次构建会同步加载系统证书库，
+    HA 在启动期已做过，这里拿到的是缓存单例，不阻塞事件循环）；受限 / 测试
+    环境缺 util.ssl 时回退标准库默认上下文。证书走系统信任库（CF / 正规 CA），
+    不做 pinning——issue #14 明确不做。
+    """
+    try:
+        from homeassistant.util.ssl import client_context
+
+        return client_context()
+    except Exception:  # noqa: BLE001
+        import ssl
+
+        return ssl.create_default_context()
+
+
+def _transport_connect_kwargs(conf: dict) -> dict[str, Any]:
+    """Extra aiomqtt.Client kwargs derived from the entry's transport scheme.
+
+    裸 TCP（scheme 缺失 / "mqtt" / 任何未知值）返回空 dict——连接调用与
+    wss 支持落地前完全一致，绝不影响旧 entry。ws/wss 走 paho 原生
+    websockets transport（aiomqtt 的 ``websocket_path`` 即 paho
+    ``ws_set_options`` 的握手路径）；wss/mqtts 附加 TLS 上下文。
+    """
+    scheme = str(conf.get(CONF_MQTT_SCHEME, "") or "").strip().lower() or DEFAULT_MQTT_SCHEME
+    kwargs: dict[str, Any] = {}
+    if scheme in (MQTT_SCHEME_WS, MQTT_SCHEME_WSS):
+        kwargs["transport"] = "websockets"
+        kwargs["websocket_path"] = (
+            str(conf.get(CONF_MQTT_WS_PATH, "") or "").strip() or DEFAULT_MQTT_WS_PATH
+        )
+    if scheme in (MQTT_SCHEME_WSS, MQTT_SCHEME_TCP_TLS):
+        kwargs["tls_context"] = _client_tls_context()
+    return kwargs
 
 
 class BridgeCoordinator:
@@ -373,12 +418,15 @@ class BridgeCoordinator:
                 self.pairing_status = PAIRING_STATUS_BRIDGE_STARTING
                 self._fire()
 
+        # keepalive 保持 aiomqtt 默认 60s，别调大：Cloudflare 对空闲 ~100s 的
+        # WebSocket 会掐连接，60s 心跳正好压在窗口内（issue #14）。
         async with aiomqtt.Client(
             hostname=host,
             port=port,
             username=username,
             password=password,
             identifier=client_id,
+            **_transport_connect_kwargs(conf),
         ) as client:
             self._mqtt_client = client
 

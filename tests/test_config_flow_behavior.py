@@ -21,6 +21,7 @@ from seenzus_bridge.config_flow import (
     SavanAIBridgeOptionsFlow,
     _backend_bridge_name,
     _build_quick_pair_callback_context,
+    _build_quick_pair_entry_data,
     _flatten_form_input,
     _mode_schema,
     _sanitize_app_return_url,
@@ -31,6 +32,8 @@ from seenzus_bridge.pairing_bootstrap import _read_app_return_url
 from seenzus_bridge.const import (
     CONF_BRIDGE_ID,
     CONF_CONFIG_SOURCE,
+    CONF_MQTT_SCHEME,
+    CONF_MQTT_WS_PATH,
     DEFAULT_PAIRING_API_BASE,
     CONF_PAIRING_API_BASE,
     CONF_PAIRING_MODE,
@@ -1182,6 +1185,69 @@ def test_clear_quick_pair_notifications_dismisses_both(monkeypatch) -> None:
 )
 def test_sanitize_app_return_url(value, expected) -> None:
     assert _sanitize_app_return_url(value) == expected
+
+
+def _pairing_result_with_mqtt(mqtt: dict):
+    return _result_obj(
+        {
+            "session_id": "wps_1",
+            "confirmed_at": "2026-07-03T00:00:00Z",
+            "config_source": "web_pair",
+            "mqtt": {
+                "host": "edge.seenzus.ai",
+                "port": 443,
+                "username": "bridge-user",
+                "password": "bridge-pass",
+                **mqtt,
+            },
+        }
+    )
+
+
+def test_build_quick_pair_entry_data_stores_wss_scheme_and_path() -> None:
+    data = _build_quick_pair_entry_data(
+        api_base="https://api.seenzus.xxx/api",
+        status_result=_pairing_result_with_mqtt({"scheme": "wss", "path": "/mqtt"}),
+    )
+    assert data[CONF_MQTT_SCHEME] == "wss"
+    assert data[CONF_MQTT_WS_PATH] == "/mqtt"
+
+    # scheme 大写归一为小写；path 缺前导斜杠时补上。
+    data = _build_quick_pair_entry_data(
+        api_base="https://api.seenzus.xxx/api",
+        status_result=_pairing_result_with_mqtt({"scheme": "WSS", "path": "mqtt"}),
+    )
+    assert data[CONF_MQTT_SCHEME] == "wss"
+    assert data[CONF_MQTT_WS_PATH] == "/mqtt"
+
+
+def test_build_quick_pair_entry_data_bare_tcp_response_stores_no_transport_keys() -> None:
+    # 裸 TCP 下发（无 scheme/path 或显式 "mqtt"）生成的 entry 不带传输键，
+    # 与 wss 支持落地前逐字节一致——旧桥回归零风险。
+    for mqtt in ({}, {"scheme": "mqtt"}):
+        data = _build_quick_pair_entry_data(
+            api_base="https://api.seenzus.xxx/api",
+            status_result=_pairing_result_with_mqtt(mqtt),
+        )
+        assert CONF_MQTT_SCHEME not in data
+        assert CONF_MQTT_WS_PATH not in data
+
+
+def test_build_quick_pair_entry_data_ignores_unknown_scheme_and_stray_path() -> None:
+    # 未知 scheme 不落盘（连接层按裸 TCP 回退）；非 ws/wss 的杂散 path 同样丢弃。
+    data = _build_quick_pair_entry_data(
+        api_base="https://api.seenzus.xxx/api",
+        status_result=_pairing_result_with_mqtt({"scheme": "quic", "path": "/mqtt"}),
+    )
+    assert CONF_MQTT_SCHEME not in data
+    assert CONF_MQTT_WS_PATH not in data
+
+    data = _build_quick_pair_entry_data(
+        api_base="https://api.seenzus.xxx/api",
+        status_result=_pairing_result_with_mqtt({"scheme": "mqtts", "path": "/mqtt"}),
+    )
+    assert data[CONF_MQTT_SCHEME] == "mqtts"
+    assert CONF_MQTT_WS_PATH not in data
 
 
 def test_read_app_return_url_accepts_key_aliases() -> None:

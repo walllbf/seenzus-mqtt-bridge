@@ -35,7 +35,9 @@ from .const import (
     CONF_MQTT_HOST,
     CONF_MQTT_PASSWORD,
     CONF_MQTT_PORT,
+    CONF_MQTT_SCHEME,
     CONF_MQTT_USERNAME,
+    CONF_MQTT_WS_PATH,
     CONF_PAIRING_API_BASE,
     CONF_PAIRING_BOUND_AT,
     CONF_PAIRING_MODE,
@@ -48,8 +50,12 @@ from .const import (
     DEFAULT_ENABLE_STATE_EVENTS,
     DEFAULT_ENABLE_TEMPLATE_API,
     DEFAULT_EXPOSE_FULL_CONFIG,
+    DEFAULT_MQTT_SCHEME,
     DEFAULT_PAIRING_API_BASE,
     DEFAULT_MQTT_PORT,
+    MQTT_SCHEME_WS,
+    MQTT_SCHEME_WSS,
+    VALID_MQTT_SCHEMES,
     DEFAULT_PAIRING_MODE,
     DEFAULT_TOPIC_ROOT,
     DOMAIN,
@@ -288,6 +294,23 @@ def _build_quick_pair_entry_data(
         CONF_MQTT_USERNAME: str(mqtt.get("username", "")).strip(),
         CONF_MQTT_PASSWORD: str(mqtt.get("password", "")).strip(),
     }
+    # 传输 scheme（issue #14）：只在后端下发了非默认的合法值时才落 entry——
+    # 裸 TCP 响应（scheme 缺失或 "mqtt"）生成的 entry 与 wss 支持落地前逐字节
+    # 一致，旧 entry 也天然无此键，coordinator 侧统一按缺省走裸 TCP 现状路径。
+    # 未知 scheme 不落盘（按裸 TCP 回退并告警），避免坏值直接炸掉连接层。
+    scheme = str(mqtt.get("scheme", "")).strip().lower()
+    if scheme and scheme != DEFAULT_MQTT_SCHEME:
+        if scheme in VALID_MQTT_SCHEMES:
+            data[CONF_MQTT_SCHEME] = scheme
+        else:
+            _LOGGER.warning(
+                "Quick pair returned unknown mqtt scheme %r; falling back to bare TCP",
+                scheme,
+            )
+    if data.get(CONF_MQTT_SCHEME) in (MQTT_SCHEME_WS, MQTT_SCHEME_WSS):
+        ws_path = str(mqtt.get("path", "")).strip()
+        if ws_path:
+            data[CONF_MQTT_WS_PATH] = ws_path if ws_path.startswith("/") else f"/{ws_path}"
     topic_root = str(mqtt.get("topicRoot", "")).strip()
     if topic_root:
         data[CONF_TOPIC_ROOT] = topic_root
