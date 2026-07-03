@@ -28,7 +28,7 @@ from homeassistant.helpers.config_entry_oauth2_flow import (
 )
 from homeassistant.helpers.network import get_url
 
-from .const import DOMAIN, PRODUCT_NAME
+from .const import DOMAIN, PRODUCT_NAME, QUICK_PAIR_LAST_DIAGNOSTIC
 
 QUICK_PAIR_CALLBACK_PATH = "/api/seenzus_bridge/quick_pair/callback"
 QUICK_PAIR_CALLBACK_VIEW_REGISTERED = "quick_pair_callback_view_registered"
@@ -307,6 +307,13 @@ def _record_quick_pair_diagnostic(hass: HomeAssistant, reason: str, diagnostic: 
         return
     formatted = _format_quick_pair_diagnostic(diagnostic)
     _LOGGER.warning("Quick pair failed: reason=%s %s", reason, formatted)
+    # 同一份诊断落进 hass.data，配对状态传感器的 pairing_last_diagnostic 属性
+    # 读取——日志会滚走、通知会被忽略，传感器是唯一持久的 UI 面。成功路径
+    # （_notify_app_return / _clear_quick_pair_notifications）负责清除。
+    try:
+        hass.data.setdefault(DOMAIN, {})[QUICK_PAIR_LAST_DIAGNOSTIC] = f"{reason} | {formatted}"
+    except Exception:  # noqa: BLE001
+        pass
     # 直接调 persistent_notification 组件 API（已废弃的
     # hass.components.persistent_notification getattr 阶梯在现代 HA 上静默
     # no-op）；FakeHass / 受限环境缺少完整 hass 表面时由 try/except 保持
@@ -359,6 +366,8 @@ def _notify_app_return(hass: HomeAssistant, app_return_url: str) -> None:
         # 等标准 scheme）成死链接——补一行可复制的明文地址兜底。
         message += f"\n\n若链接无法点击，请手动打开：`{app_return_url}`"
     try:
+        # 配对成功即过期：清掉传感器上挂着的上一次失败诊断。
+        hass.data.setdefault(DOMAIN, {}).pop(QUICK_PAIR_LAST_DIAGNOSTIC, None)
         persistent_notification.async_dismiss(hass, _NOTIFY_DIAGNOSTIC_ID)
         persistent_notification.async_create(
             hass,
@@ -379,6 +388,7 @@ def _clear_quick_pair_notifications(hass: HomeAssistant) -> None:
     diagnostic. Same defensive try/except + debug log as ``_notify_app_return``.
     """
     try:
+        hass.data.setdefault(DOMAIN, {}).pop(QUICK_PAIR_LAST_DIAGNOSTIC, None)
         persistent_notification.async_dismiss(hass, _NOTIFY_APP_RETURN_ID)
         persistent_notification.async_dismiss(hass, _NOTIFY_DIAGNOSTIC_ID)
     except Exception:  # noqa: BLE001

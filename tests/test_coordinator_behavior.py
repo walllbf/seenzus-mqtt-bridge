@@ -102,6 +102,9 @@ async def test_presence_includes_mqtt_and_pairing_diagnostics() -> None:
     assert payload["mqttConnected"] is True
     assert payload["pairingStatus"] == "bridge_ready"
     assert payload["configSource"] == "web_pair"
+    # 生效传输方式随 presence 上报（issue #14）；裸 TCP 不带 wsPath。
+    assert payload["transport"] == "mqtt"
+    assert "wsPath" not in payload
     assert payload["sourceId"] == "ha-bridge-ha-demo"
     assert payload["sourceType"] == "haos_bridge"
     assert payload["sourceName"] == "HA Bridge"

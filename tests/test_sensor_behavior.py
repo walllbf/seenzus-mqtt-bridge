@@ -84,6 +84,8 @@ def test_status_sensor_pins_identity_attributes_and_device_info() -> None:
         "raw_status": "active",
         "last_request": None,
         "last_error": None,
+        "mqtt_transport": "mqtt",
+        "mqtt_ws_path": None,
         "topic_root": "seenzus/v2",
         "bridge_id": "ha-web-bridge",
         "source_id": "ha-bridge-ha-web-bridge",
@@ -124,6 +126,39 @@ def test_metric_sensor_maps_key_to_coordinator_counter(key, name, icon, expected
     assert sensor._attr_icon == icon
     assert sensor._attr_entity_category is EntityCategory.DIAGNOSTIC
     assert sensor.native_value == expected
+
+
+def test_status_sensor_shows_wss_transport_from_entry() -> None:
+    # 传输方式与连接层同源（coordinator.resolve_transport）：wss entry 在状态
+    # 传感器上直接可见，真机联调一眼确认桥走的是 wss 还是裸 TCP（issue #14）。
+    entry = FakeConfigEntry(
+        data={"bridge_id": "ha-web-bridge", "mqtt_scheme": "wss", "mqtt_ws_path": "/mqtt"}
+    )
+    coordinator = BridgeCoordinator(FakeHass(), entry)
+
+    attrs = BridgeStatusSensor(coordinator, entry).extra_state_attributes
+
+    assert attrs["mqtt_transport"] == "wss"
+    assert attrs["mqtt_ws_path"] == "/mqtt"
+
+
+def test_pairing_sensor_reads_quick_pair_diagnostic_from_hass_data() -> None:
+    # 快速配对失败诊断由 quick_pair 写入 hass.data（原先只在日志 + 通知），
+    # 配对状态传感器作为持久 UI 面读出；hass.data 里的值优先于形状兼容的
+    # coordinator 属性。
+    entry = FakeConfigEntry(data={"bridge_id": "ha-web-bridge"})
+    hass = FakeHass()
+    hass.data["seenzus_bridge"] = {
+        "quick_pair_last_diagnostic": "quick_pair_session_failed | http_status=500 | message=boom"
+    }
+    coordinator = BridgeCoordinator(hass, entry)
+
+    attrs = BridgePairingStateSensor(coordinator, entry).extra_state_attributes
+
+    assert (
+        attrs["pairing_last_diagnostic"]
+        == "quick_pair_session_failed | http_status=500 | message=boom"
+    )
 
 
 def test_sensors_render_sanitized_bridge_id_matching_topics() -> None:

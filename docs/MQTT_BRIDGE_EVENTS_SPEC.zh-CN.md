@@ -373,6 +373,8 @@ seenzus/v2/bridge/ha-demo/presence
 {
   "bridgeId": "ha-demo",
   "status": "online",
+  "transport": "wss",
+  "wsPath": "/mqtt",
   "mqttConnected": true,
   "pairingStatus": "bridge_ready",
   "configSource": "web_pair",
@@ -393,6 +395,8 @@ seenzus/v2/bridge/ha-demo/presence
 
 - `bridgeId`: 当前桥实例 ID
 - `status`: `online` 或 `offline`
+- `transport`: 桥当前生效的 MQTT 传输方式（`mqtt`/`mqtts`/`ws`/`wss`，与兑换响应的 `scheme` 语义一致；旧版插件无此字段）
+- `wsPath`: WebSocket 握手路径，仅 `transport` 为 `ws`/`wss` 时出现
 - `mqttConnected`: 插件当前是否认为 MQTT 已连接
 - `pairingStatus`: 快速配对/桥接运行状态
 - `configSource`: 配置来源，如 `web_pair` 或手动配置

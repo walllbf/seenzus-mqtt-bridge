@@ -938,6 +938,11 @@ def test_record_quick_pair_diagnostic_creates_persistent_notification(monkeypatc
             "notification_id": "seenzus_bridge_quick_pair_diagnostic",
         }
     ]
+    # 同一份诊断落进 hass.data，配对状态传感器作为持久 UI 面读取。
+    assert (
+        hass.data["seenzus_bridge"]["quick_pair_last_diagnostic"]
+        == "quick_pair_session_failed | http_status=500 | message=boom"
+    )
 
 
 def test_notify_app_return_creates_notification_and_clears_diagnostic(monkeypatch) -> None:
@@ -967,8 +972,12 @@ def test_notify_app_return_creates_notification_and_clears_diagnostic(monkeypatc
         lambda _hass, _payload: "app-return-token",
     )
 
+    # 预置一条上次失败的诊断：配对成功后必须被清除（传感器不再显示陈旧失败）。
+    hass.data.setdefault("seenzus_bridge", {})["quick_pair_last_diagnostic"] = "stale | x=y"
+
     _notify_app_return(hass, "seenzus://pairing/done?session=wps_1")
 
+    assert "quick_pair_last_diagnostic" not in hass.data["seenzus_bridge"]
     # The link routes through the transit endpoint (click dismisses the
     # notification server-side), not the raw app URL — and it must be an inline
     # HTML anchor WITH target: a same-origin targetless <a> gets intercepted by
@@ -1161,9 +1170,13 @@ def test_clear_quick_pair_notifications_dismisses_both(monkeypatch) -> None:
         ),
     )
 
+    hass.data.setdefault("seenzus_bridge", {})["quick_pair_last_diagnostic"] = "stale | x=y"
+
     _clear_quick_pair_notifications(hass)
 
     assert dismissed == ["seenzus_bridge_app_return", "seenzus_bridge_quick_pair_diagnostic"]
+    # 无链接成功路径同样清除传感器上的陈旧失败诊断。
+    assert "quick_pair_last_diagnostic" not in hass.data["seenzus_bridge"]
 
 
 @pytest.mark.parametrize(
