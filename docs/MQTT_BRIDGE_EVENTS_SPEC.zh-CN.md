@@ -387,7 +387,7 @@ seenzus/v2/bridge/ha-demo/presence
   "requestCount": 12,
   "errorCount": 1,
   "lastError": null,
-  "version": "0.1.9"
+  "version": "0.2.0"
 }
 ```
 
