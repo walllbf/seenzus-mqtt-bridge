@@ -205,6 +205,10 @@ async def test_loop_wss_entry_connects_with_websockets_transport(monkeypatch) ->
         assert client.connect_kwargs["transport"] == "websockets"
         assert client.connect_kwargs["websocket_path"] == "/mqtt"
         assert isinstance(client.connect_kwargs["tls_context"], ssl.SSLContext)
+        # presence 上报生效传输方式，供后端/运维确认桥已切到 wss。
+        presence_payload = json.loads(client.published[0]["payload"])
+        assert presence_payload["transport"] == "wss"
+        assert presence_payload["wsPath"] == "/mqtt"
         assert coordinator.mqtt_connected is True
     finally:
         await _shutdown_loop(coordinator, task)

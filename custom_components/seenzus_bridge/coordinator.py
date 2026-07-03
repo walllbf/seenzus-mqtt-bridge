@@ -63,6 +63,7 @@ from .const import (
     MQTT_SCHEME_TCP_TLS,
     MQTT_SCHEME_WS,
     MQTT_SCHEME_WSS,
+    VALID_MQTT_SCHEMES,
     PAIRING_MODE_MANUAL,
     PAIRING_MODE_SEAMLESS,
     PAIRING_STATUS_BOUND,
@@ -108,6 +109,22 @@ def _client_tls_context():
     return _TLS_CONTEXT_CACHE
 
 
+def _effective_transport(conf: dict) -> tuple[str, str | None]:
+    """归一后的生效传输方式 ``(scheme, ws_path)``；非 ws/wss 时 ws_path 为 None。
+
+    scheme 缺失 / 空 / 未知值一律归一为裸 TCP "mqtt"。连接层
+    （_transport_connect_kwargs）与诊断展示（presence / 状态传感器）共用这
+    一份解析，保证「桥实际怎么连」和「界面显示怎么连」永远同源。
+    """
+    scheme = str(conf.get(CONF_MQTT_SCHEME, "") or "").strip().lower()
+    if scheme not in VALID_MQTT_SCHEMES:
+        scheme = DEFAULT_MQTT_SCHEME
+    if scheme in (MQTT_SCHEME_WS, MQTT_SCHEME_WSS):
+        ws_path = str(conf.get(CONF_MQTT_WS_PATH, "") or "").strip() or DEFAULT_MQTT_WS_PATH
+        return scheme, ws_path
+    return scheme, None
+
+
 def _transport_connect_kwargs(conf: dict) -> dict[str, Any]:
     """Extra aiomqtt.Client kwargs derived from the entry's transport scheme.
 
@@ -116,13 +133,11 @@ def _transport_connect_kwargs(conf: dict) -> dict[str, Any]:
     websockets transport（aiomqtt 的 ``websocket_path`` 即 paho
     ``ws_set_options`` 的握手路径）；wss/mqtts 附加 TLS 上下文。
     """
-    scheme = str(conf.get(CONF_MQTT_SCHEME, "") or "").strip().lower() or DEFAULT_MQTT_SCHEME
+    scheme, ws_path = _effective_transport(conf)
     kwargs: dict[str, Any] = {}
-    if scheme in (MQTT_SCHEME_WS, MQTT_SCHEME_WSS):
+    if ws_path is not None:
         kwargs["transport"] = "websockets"
-        kwargs["websocket_path"] = (
-            str(conf.get(CONF_MQTT_WS_PATH, "") or "").strip() or DEFAULT_MQTT_WS_PATH
-        )
+        kwargs["websocket_path"] = ws_path
     if scheme in (MQTT_SCHEME_WSS, MQTT_SCHEME_TCP_TLS):
         kwargs["tls_context"] = _client_tls_context()
     return kwargs
@@ -194,6 +209,14 @@ class BridgeCoordinator:
 
     def _resolve_pairing_mode(self) -> str:
         return normalize_pairing_mode(self._conf().get(CONF_PAIRING_MODE, ""))
+
+    def resolve_transport(self) -> tuple[str, str | None]:
+        """当前配置的生效 MQTT 传输 ``(scheme, ws_path)``，与连接层同源。
+
+        供诊断展示（presence / 状态传感器）使用，真机上一眼可确认桥走的是
+        wss 还是裸 TCP（issue #14 联调排查）。
+        """
+        return _effective_transport(self._conf())
 
     def _resolve_config_source(self) -> str:
         conf = self._conf()
@@ -784,9 +807,13 @@ class BridgeCoordinator:
         if self._mqtt_client is None or self._topics is None:
             return
         self._sync_source_metadata()
+        transport_scheme, transport_ws_path = self.resolve_transport()
         payload = {
             "bridgeId": self._topics.bridge_id,
             "status": status,
+            # 生效传输方式（issue #14 联调排查）：后端/运维凭 presence 即可确认
+            # 桥走的是 wss 还是裸 TCP；wsPath 仅 ws/wss 时出现，与兑换响应对齐。
+            "transport": transport_scheme,
             "mqttConnected": self.mqtt_connected,
             "pairingStatus": self.pairing_status,
             "configSource": self.config_source,
@@ -801,6 +828,8 @@ class BridgeCoordinator:
             "lastError": self.last_error,
             "version": BRIDGE_VERSION,
         }
+        if transport_ws_path is not None:
+            payload["wsPath"] = transport_ws_path
         try:
             await self._mqtt_client.publish(
                 self._topics.presence_topic,

@@ -33,6 +33,11 @@ CONF_PAIRING_BOUND_AT = "pairing_bound_at"
 CONF_ADVANCED_SETTINGS = "advanced_settings"
 CONF_CONFIG_SOURCE = "config_source"
 
+# hass.data[DOMAIN] 键：最近一次快速配对失败的诊断摘要。quick_pair 写入/清除，
+# 配对状态传感器读取——把原先只存在于「日志 + 通知」的诊断收敛到一个持久的
+# UI 面（传感器属性）。定义在 const（无依赖）供 quick_pair 与 sensor 共用。
+QUICK_PAIR_LAST_DIAGNOSTIC = "quick_pair_last_diagnostic"
+
 # 配对模式（coordinator/config_flow 共用的唯一一份取值，勿在调用点写字符串字面量）
 PAIRING_MODE_MANUAL = "manual"
 PAIRING_MODE_SEAMLESS = "seamless"

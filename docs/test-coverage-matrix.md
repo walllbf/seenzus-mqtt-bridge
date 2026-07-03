@@ -182,12 +182,14 @@
 | `test_build_bridge_id_sanitizes_custom_value` | 自定义 bridgeId 净化 |
 | `test_build_bridge_id_uses_entry_prefix_when_empty` | 留空时用 entry 前缀生成稳定 id |
 
-## `tests/test_sensor_behavior.py` — 传感器（4）
+## `tests/test_sensor_behavior.py` — 传感器（6）
 
 | 测试 | 验证行为 |
 |---|---|
 | `test_pairing_sensor_exposes_extended_pairing_attributes` | 配对状态传感器暴露扩展属性 |
 | `test_status_sensor_pins_identity_attributes_and_device_info` | 状态传感器固定身份属性 + device_info |
+| `test_status_sensor_shows_wss_transport_from_entry` | 状态传感器展示与连接层同源的传输方式 |
+| `test_pairing_sensor_reads_quick_pair_diagnostic_from_hass_data` | 配对传感器读 hass.data 里的快速配对诊断 |
 | `test_metric_sensor_maps_key_to_coordinator_counter` | 指标传感器映射到协调器计数 |
 | `test_sensors_render_sanitized_bridge_id_matching_topics` | 传感器展示的 bridgeId 与 topic 一致 |
 
