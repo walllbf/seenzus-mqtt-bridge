@@ -37,7 +37,9 @@ from seenzus_bridge.const import (
     CONF_TOPIC_ROOT,
 )
 from seenzus_bridge.quick_pair import (
+    QUICK_PAIR_APP_RETURN_PATH,
     QUICK_PAIR_CALLBACK_PAYLOAD_LIMIT,
+    SeenzusAppReturnView,
     _clear_quick_pair_notifications,
     _notify_app_return,
     _record_quick_pair_diagnostic,
@@ -957,19 +959,165 @@ def test_notify_app_return_creates_notification_and_clears_diagnostic(monkeypatc
             async_dismiss=lambda target_hass, notification_id: dismissed.append(notification_id),
         ),
     )
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair._encode_jwt",
+        lambda _hass, _payload: "app-return-token",
+    )
 
     _notify_app_return(hass, "seenzus://pairing/done?session=wps_1")
 
+    # The link routes through the transit endpoint (click dismisses the
+    # notification server-side), not the raw app URL — and it must be an inline
+    # HTML anchor WITH target: a same-origin targetless <a> gets intercepted by
+    # the frontend as an SPA pushState route and never reaches the transit view.
     assert created == [
         {
             "hass": hass,
-            "message": "seenzus MQTT Bridge 已成功绑定。\n\n## 👉 [返回 seenzus 应用](seenzus://pairing/done?session=wps_1)",
+            "message": (
+                "seenzus MQTT Bridge 已成功绑定。\n\n## 👉 "
+                f'<a href="{QUICK_PAIR_APP_RETURN_PATH}?token=app-return-token" '
+                'target="_blank">返回 seenzus 应用</a>'
+            ),
             "title": "seenzus Bridge 配对完成",
             "notification_id": "seenzus_bridge_app_return",
         }
     ]
     # Success supersedes a prior failure: the diagnostic notification is cleared.
     assert dismissed == ["seenzus_bridge_quick_pair_diagnostic"]
+    # Building the transit link registered the app-return view.
+    assert any(isinstance(view, SeenzusAppReturnView) for view in hass.http.registered_views)
+
+
+def test_notify_app_return_falls_back_to_raw_url_without_http(monkeypatch) -> None:
+    # No hass.http surface -> transit link can't be built -> the notification
+    # still goes out, linking the raw URL directly (no auto-dismiss).
+    hass = SimpleNamespace(data={})
+    created: list[str] = []
+
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair.persistent_notification",
+        SimpleNamespace(
+            async_create=lambda target_hass, message, *, title=None, notification_id=None: created.append(message),
+            async_dismiss=lambda target_hass, notification_id: None,
+        ),
+    )
+
+    _notify_app_return(hass, "seenzus://pairing/done?session=wps_1")
+
+    # 回退直链附带可复制的明文地址：自定义 scheme 的 href 会被前端 markdown
+    # 的 xss 过滤器清空，锚点可能是死链接。
+    assert created == [
+        "seenzus MQTT Bridge 已成功绑定。\n\n## 👉 "
+        '<a href="seenzus://pairing/done?session=wps_1" target="_blank">返回 seenzus 应用</a>'
+        "\n\n若链接无法点击，请手动打开：`seenzus://pairing/done?session=wps_1`"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_app_return_view_rejects_missing_or_invalid_token(monkeypatch) -> None:
+    view = SeenzusAppReturnView()
+
+    response = await view.get(SimpleNamespace(app={"hass": FakeHass()}, query={}))
+    assert response.status == 400
+    assert response.text == "Missing token parameter"
+
+    monkeypatch.setattr("seenzus_bridge.quick_pair._decode_jwt", lambda _hass, _token: None)
+    response = await view.get(SimpleNamespace(app={"hass": FakeHass()}, query={"token": "bogus"}))
+    assert response.status == 400
+    assert response.text == "Invalid token parameter"
+
+
+@pytest.mark.asyncio
+async def test_app_return_view_rejects_disallowed_scheme(monkeypatch) -> None:
+    dismissed: list[str] = []
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair.persistent_notification",
+        SimpleNamespace(async_dismiss=lambda _hass, notification_id: dismissed.append(notification_id)),
+    )
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair._decode_jwt",
+        lambda _hass, _token: {"app_return_url": "javascript:alertOne"},
+    )
+
+    response = await SeenzusAppReturnView().get(
+        SimpleNamespace(app={"hass": FakeHass()}, query={"token": "signed"})
+    )
+
+    assert response.status == 400
+    assert response.text == "Invalid return URL"
+    # A rejected target must not consume the notification.
+    assert dismissed == []
+
+
+@pytest.mark.asyncio
+async def test_app_return_view_dismisses_notification_and_redirects_http(monkeypatch) -> None:
+    dismissed: list[str] = []
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair.persistent_notification",
+        SimpleNamespace(async_dismiss=lambda _hass, notification_id: dismissed.append(notification_id)),
+    )
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair._decode_jwt",
+        lambda _hass, _token: {"app_return_url": "https://app.seenzus.ai/integrations/ha?bound=1"},
+    )
+
+    response = await SeenzusAppReturnView().get(
+        SimpleNamespace(app={"hass": FakeHass()}, query={"token": "signed"})
+    )
+
+    assert response.status == 302
+    assert response.headers["Location"] == "https://app.seenzus.ai/integrations/ha?bound=1"
+    assert dismissed == ["seenzus_bridge_app_return"]
+
+
+@pytest.mark.asyncio
+async def test_app_return_view_dismisses_notification_and_renders_deep_link_page(monkeypatch) -> None:
+    dismissed: list[str] = []
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair.persistent_notification",
+        SimpleNamespace(async_dismiss=lambda _hass, notification_id: dismissed.append(notification_id)),
+    )
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair._decode_jwt",
+        lambda _hass, _token: {"app_return_url": "seenzus://pairing/done?session=wps_1"},
+    )
+
+    response = await SeenzusAppReturnView().get(
+        SimpleNamespace(app={"hass": FakeHass()}, query={"token": "signed"})
+    )
+
+    # Custom scheme -> HTML redirect page (a 302 Location to seenzus:// is
+    # unreliable in some browsers/webviews), with a manual fallback link.
+    assert response.status == 200
+    assert response.content_type == "text/html"
+    assert 'href="seenzus://pairing/done?session=wps_1"' in response.text
+    assert 'window.location.href = "seenzus://pairing/done?session=wps_1"' in response.text
+    assert dismissed == ["seenzus_bridge_app_return"]
+
+
+@pytest.mark.asyncio
+async def test_app_return_view_escapes_script_breakout_in_deep_link_page(monkeypatch) -> None:
+    # json.dumps 不转义 "<"：字面 "</script>" 会终结脚本块。scheme 白名单挡不住
+    # 这种载荷（scheme 仍是 seenzus），页面必须自行把 "<" 转义为 <。
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair.persistent_notification",
+        SimpleNamespace(async_dismiss=lambda _hass, notification_id: None),
+    )
+    hostile = "seenzus://x</script><script>doEvil()</script>"
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair._decode_jwt",
+        lambda _hass, _token: {"app_return_url": hostile},
+    )
+
+    response = await SeenzusAppReturnView().get(
+        SimpleNamespace(app={"hass": FakeHass()}, query={"token": "signed"})
+    )
+
+    assert response.status == 200
+    # 脚本字符串里不得出现未转义的 "<"；href 属性由 html.escape 兜底。
+    assert "<script>doEvil()" not in response.text
+    assert '"seenzus://x\\u003c/script>\\u003cscript>doEvil()\\u003c/script>"' in response.text
+    assert 'href="seenzus://x&lt;/script&gt;&lt;script&gt;doEvil()&lt;/script&gt;"' in response.text
 
 
 def test_backend_bridge_name_appends_home_name() -> None:
@@ -1122,6 +1270,10 @@ async def test_seamless_finish_creates_entry_with_return_link(monkeypatch) -> No
             async_dismiss=lambda hass, notification_id: None,
         ),
     )
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair._encode_jwt",
+        lambda _hass, _payload: "app-return-token",
+    )
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
@@ -1166,14 +1318,22 @@ async def test_seamless_finish_creates_entry_with_return_link(monkeypatch) -> No
     assert created and created[0]["data"]["mqtt_host"] == "broker.example.com"
     assert created[0]["data"][CONF_BRIDGE_ID] == "ha-web-bridge"
     assert created[0]["description"] == "app_return"
+    # The success-page link stays the raw app URL (the dialog is HA-native and
+    # cannot be closed from a link click, so no transit indirection there).
     assert created[0]["description_placeholders"] == {
         "app_return_url": "seenzus://pairing/done?session=wps_1"
     }
     # The same link is also pushed as a durable persistent notification, so the
     # options / re-pair path (no create_entry success page) still surfaces it.
+    # There it routes through the transit endpoint: clicking dismisses the
+    # notification server-side before redirecting to the app.
     assert notified == [
         {
-            "message": "seenzus MQTT Bridge 已成功绑定。\n\n## 👉 [返回 seenzus 应用](seenzus://pairing/done?session=wps_1)",
+            "message": (
+                "seenzus MQTT Bridge 已成功绑定。\n\n## 👉 "
+                f'<a href="{QUICK_PAIR_APP_RETURN_PATH}?token=app-return-token" '
+                'target="_blank">返回 seenzus 应用</a>'
+            ),
             "notification_id": "seenzus_bridge_app_return",
         }
     ]

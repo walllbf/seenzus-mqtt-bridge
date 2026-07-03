@@ -6,9 +6,12 @@ config_flow 全局解析。
 """
 from __future__ import annotations
 
+from html import escape as _html_escape
+import json
 import logging
 import secrets
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
@@ -33,6 +36,12 @@ QUICK_PAIR_CALLBACK_PAYLOADS = "quick_pair_callback_payloads"
 # payload 信箱只在 flow 恢复时被 pop——若浏览器回跳后 flow 永远没恢复，
 # 条目会永久滞留。设上限并「先逐最旧、再插入」，保证刚存入的 payload 必然幸存。
 QUICK_PAIR_CALLBACK_PAYLOAD_LIMIT = 16
+QUICK_PAIR_APP_RETURN_PATH = "/api/seenzus_bridge/quick_pair/app_return"
+QUICK_PAIR_APP_RETURN_VIEW_REGISTERED = "quick_pair_app_return_view_registered"
+# 返回链接允许的 scheme 白名单：backend 契约只发 http(s) 通用链接或
+# seenzus:// 深链。config_flow._sanitize_app_return_url（渲染前的严格校验）
+# 与 app-return 中转 view（跳转前的二次校验）共用，单一事实源防止两处漂移。
+APP_RETURN_URL_ALLOW_SCHEMES = {"http", "https", "seenzus"}
 FLOW_MANAGER_CONFIG = "config"
 FLOW_MANAGER_OPTIONS = "options"
 _LOGGER = logging.getLogger(__name__)
@@ -116,17 +125,107 @@ class SeenzusQuickPairCallbackView(http.HomeAssistantView):
 SavanAIQuickPairCallbackView = SeenzusQuickPairCallbackView
 
 
-def _ensure_quick_pair_callback_view(hass: HomeAssistant) -> None:
+class SeenzusAppReturnView(http.HomeAssistantView):
+    """Dismiss the pairing-complete notification, then bounce to the app.
+
+    通知里的 markdown 链接无法执行任何脚本，所以「点击即关闭通知」只能在服务端
+    实现：通知链接指向本 view，携带签名 JWT（内含真实回跳 URL，签名防篡改 /
+    开放重定向）；view 先 dismiss 通知再跳转。http(s) 目标用 302；seenzus://
+    深链返回一个极小 HTML 页做 JS 跳转（部分浏览器 / WebView 对指向自定义
+    scheme 的 302 Location 不可靠），并留手动点击的后备链接。
+    """
+
+    requires_auth = False
+    url = QUICK_PAIR_APP_RETURN_PATH
+    name = "api:seenzus_bridge:quick_pair_app_return"
+
+    async def get(self, request: web.Request) -> web.Response:
+        token = request.query.get("token", "")
+        if not token:
+            return web.Response(text="Missing token parameter", status=400)
+
+        hass = request.app.get(http.KEY_HASS) or request.app.get("hass")
+        payload = _decode_jwt(hass, token)
+        if payload is None:
+            _LOGGER.warning("App return link rejected invalid token")
+            return web.Response(text="Invalid token parameter", status=400)
+
+        target = str(payload.get("app_return_url", "") or "").strip()
+        scheme = urlsplit(target).scheme.lower()
+        if scheme not in APP_RETURN_URL_ALLOW_SCHEMES:
+            return web.Response(text="Invalid return URL", status=400)
+
+        # 点击即视为「已返回应用」，先关掉配对完成通知再跳转；dismiss 幂等，
+        # 重复点击（如从历史记录）仍可正常跳转。
+        try:
+            persistent_notification.async_dismiss(hass, _NOTIFY_APP_RETURN_ID)
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("dismissing app return notification failed", exc_info=True)
+
+        if scheme in ("http", "https"):
+            return web.Response(status=302, headers={"Location": target})
+        # json.dumps 不转义 "<"，字面 "</script>" 会终结脚本块（脚本元素内容按
+        # 原文解析，HTML 实体无效）——补转义成 <，JS 字符串语义不变。
+        # 正常签发路径的 URL 已被 _sanitize_app_return_url 拒绝过 "<"，这里是
+        # 对「任何持共享签名密钥的组件签出的 token」的纵深防御。
+        js_target = json.dumps(target).replace("<", "\\u003c")
+        return web.Response(
+            content_type="text/html",
+            text=(
+                '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
+                "<title>返回 seenzus 应用</title></head><body>"
+                "<p>正在打开 seenzus 应用…</p>"
+                f'<p><a href="{_html_escape(target, quote=True)}">如未自动跳转，请点击这里</a></p>'
+                f"<script>window.location.href = {js_target};</script>"
+                "</body></html>"
+            ),
+        )
+
+
+def _ensure_view_registered(hass: HomeAssistant, *, flag: str, view_factory) -> None:
+    """Register a plugin HTTP view once per hass, guarded by a domain-data flag."""
     domain_data = hass.data.setdefault(DOMAIN, {})
-    if domain_data.get(QUICK_PAIR_CALLBACK_VIEW_REGISTERED):
+    if domain_data.get(flag):
         return
 
     hass_http = getattr(hass, "http", None)
     if hass_http is None:
         raise RuntimeError("home_assistant_http_not_available")
 
-    hass_http.register_view(SeenzusQuickPairCallbackView())
-    domain_data[QUICK_PAIR_CALLBACK_VIEW_REGISTERED] = True
+    hass_http.register_view(view_factory())
+    domain_data[flag] = True
+
+
+def _ensure_quick_pair_callback_view(hass: HomeAssistant) -> None:
+    _ensure_view_registered(
+        hass,
+        flag=QUICK_PAIR_CALLBACK_VIEW_REGISTERED,
+        view_factory=SeenzusQuickPairCallbackView,
+    )
+
+
+def _ensure_quick_pair_app_return_view(hass: HomeAssistant) -> None:
+    _ensure_view_registered(
+        hass,
+        flag=QUICK_PAIR_APP_RETURN_VIEW_REGISTERED,
+        view_factory=SeenzusAppReturnView,
+    )
+
+
+def _build_app_return_transit_url(hass: HomeAssistant, app_return_url: str) -> str | None:
+    """Relative transit URL for the notification link (dismiss + redirect).
+
+    相对路径（不用 get_url 拼绝对地址）：链接随用户当前访问 HA 的 base 解析，
+    内网 / 外网 / cloud 均可点。view 注册或签发 token 失败（FakeHass / 受限
+    环境）时返回 None，调用方回退为直接链接原始 URL——只损失自动关闭通知。
+    """
+    try:
+        _ensure_quick_pair_app_return_view(hass)
+        token = _encode_jwt(hass, {"app_return_url": app_return_url})
+        return f"{QUICK_PAIR_APP_RETURN_PATH}?token={quote(token, safe='')}"
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("building app return transit link failed", exc_info=True)
+        return None
 
 
 def _quick_pair_callback_payloads(hass: HomeAssistant) -> dict[str, dict[str, Any]]:
@@ -233,17 +332,37 @@ def _notify_app_return(hass: HomeAssistant, app_return_url: str) -> None:
     the link, and survives the success dialog being closed. ``app_return_url`` is
     already sanitised by ``_sanitize_app_return_url`` before it reaches here.
 
+    The link goes through the ``SeenzusAppReturnView`` transit endpoint so a
+    click also dismisses this notification server-side (markdown can't run
+    script); if the transit link can't be built we fall back to linking the raw
+    URL — still functional, just without the auto-dismiss.
+
     Success supersedes any earlier failure, so we also clear a leftover
     diagnostic notification — otherwise the user sees contradictory
     「快速配对失败」+「配对完成」 side by side. Defensive try/except mirrors the
     diagnostic helper for FakeHass / restricted environments; we log at debug so a
     real production failure is still traceable instead of fully silent.
     """
+    transit_url = _build_app_return_transit_url(hass, app_return_url)
+    link_url = transit_url or app_return_url
+    # 必须用带 target 的内联 HTML 锚点，不能用 markdown [x](url) 语法：前端对
+    # 「同源 + 无 target」的 <a> 会拦截成 SPA pushState 路由（frontend
+    # is-navigation-click.ts），请求根本不会发到中转 view——表现为点击后通知
+    # 仍在、第二次点击（地址未变）完全无操作。带 target 的锚点被放行为真实
+    # 浏览器导航；HA 的 markdown 渲染（xss 库白名单 a[target|href|title]）
+    # 会保留 target 属性。
+    link_html = f'<a href="{_html_escape(link_url, quote=True)}" target="_blank">返回 seenzus 应用</a>'
+    message = f"{PRODUCT_NAME} 已成功绑定。\n\n## 👉 {link_html}"
+    if transit_url is None:
+        # 回退直链时，seenzus:// 这类自定义 scheme 的 href 会被前端 markdown
+        # 的 xss 过滤器清空（js-xss 默认 safeAttrValue 只放行 http(s)/mailto
+        # 等标准 scheme）成死链接——补一行可复制的明文地址兜底。
+        message += f"\n\n若链接无法点击，请手动打开：`{app_return_url}`"
     try:
         persistent_notification.async_dismiss(hass, _NOTIFY_DIAGNOSTIC_ID)
         persistent_notification.async_create(
             hass,
-            f"{PRODUCT_NAME} 已成功绑定。\n\n## 👉 [返回 seenzus 应用]({app_return_url})",
+            message,
             title="seenzus Bridge 配对完成",
             notification_id=_NOTIFY_APP_RETURN_ID,
         )
