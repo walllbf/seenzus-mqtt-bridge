@@ -98,17 +98,17 @@ custom_components/
 
 ## 四、快速配对（推荐）
 
-### 1. 填写 seenzus API 地址
+### 1. 提交快速配对
 
-快速配对页只需确认 **seenzus API 地址**，默认即为生产地址：
+快速配对页**无需填写任何内容**，直接点「提交」即可——插件内置生产地址：
 
 ```text
 https://seenzus.ai/api/seenzus
 ```
 
-> 仅当 HAOS 无法访问默认域名（如纯内网联调）时，才改为当前网络可访问的地址。
+> 「seenzus API 地址」输入框仅在 HA 个人资料开启**「高级模式」**后才会出现，用于本地联调后端（如 `http://192.168.x.x:5078`）。正常使用不要开启高级模式去修改它。
 
-![填写 seenzus API 地址](images/08-api-base.png)
+![提交快速配对](images/08-api-base.png)
 
 ### 2. 外部授权
 

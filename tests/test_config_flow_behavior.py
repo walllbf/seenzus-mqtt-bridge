@@ -109,9 +109,16 @@ def test_mode_schema_only_shows_pairing_mode() -> None:
     assert _schema_field_names(_mode_schema()) == {CONF_PAIRING_MODE}
 
 
-def test_schema_shows_pairing_api_base_in_seamless_step() -> None:
+def test_schema_hides_pairing_api_base_unless_advanced() -> None:
+    # 正式使用一律走默认生产地址：普通模式下快速配对表单不暴露 API 地址字段
+    # （无处自行填写）；开发者在 HA 个人资料开启「高级模式」后字段才出现，
+    # 用于连本地联调后端。
     names = _schema_field_names(_schema("seamless", {CONF_PAIRING_MODE: "seamless"}))
+    assert names == set()
 
+    names = _schema_field_names(
+        _schema("seamless", {CONF_PAIRING_MODE: "seamless"}, show_advanced=True)
+    )
     assert CONF_PAIRING_API_BASE in names
     assert CONF_MQTT_SETTINGS not in names
     assert CONF_PAIRING_MODE not in names
@@ -264,6 +271,8 @@ async def test_user_step_shows_mode_selection_form(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_user_step_routes_to_seamless_form(monkeypatch) -> None:
     flow = SavanAIBridgeConfigFlow()
+    # 高级模式下校验字段仍在；普通模式的隐藏行为由 schema 级测试覆盖。
+    flow.context = {"show_advanced_options": True}
     monkeypatch.setattr(flow, "_async_current_entries", lambda: [])
     flow.async_show_form = lambda *, step_id, data_schema, errors=None: {
         "type": "form",
@@ -644,6 +653,8 @@ async def test_options_seamless_form_seeds_api_base_from_entry_data() -> None:
         }
     )
     flow = SavanAIBridgeOptionsFlow(config_entry)
+    # API 地址字段仅高级模式可见（联调场景本来就是高级模式的地盘）。
+    flow.context = {"show_advanced_options": True}
     flow.async_show_form = lambda *, step_id, data_schema, errors, description_placeholders=None: {
         "type": "form",
         "step_id": step_id,
@@ -660,6 +671,30 @@ async def test_options_seamless_form_seeds_api_base_from_entry_data() -> None:
         _schema_field_default(result["data_schema"], CONF_PAIRING_API_BASE)
         == "http://192.168.9.99:5078"
     )
+
+
+@pytest.mark.asyncio
+async def test_options_seamless_form_hides_api_base_without_advanced_mode() -> None:
+    # 普通模式（未开高级）下即使 entry 里存过联调地址，表单也不暴露该字段；
+    # 提交后 _resolve_pairing_api_base 回退生产默认值，联调地址不被沿用。
+    config_entry = FakeConfigEntry(
+        data={
+            "mqtt_host": "old-broker",
+            CONF_PAIRING_API_BASE: "http://192.168.9.99:5078",
+        }
+    )
+    flow = SavanAIBridgeOptionsFlow(config_entry)
+    flow.async_show_form = lambda *, step_id, data_schema, errors, description_placeholders=None: {
+        "type": "form",
+        "step_id": step_id,
+        "data_schema": data_schema,
+        "errors": errors,
+    }
+
+    result = await flow.async_step_seamless()
+
+    assert result["type"] == "form"
+    assert _schema_field_names(result["data_schema"]) == set()
 
 
 @pytest.mark.asyncio
@@ -705,6 +740,8 @@ async def test_options_seamless_finish_creates_entry_with_empty_title() -> None:
 async def test_seamless_finish_error_reshows_seamless_form_without_placeholder_support() -> None:
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
+    # 高级模式：重显表单需回填当前 api base 供联调核对。
+    flow.context = {"show_advanced_options": True}
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
     flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
@@ -794,6 +831,8 @@ async def test_seamless_finish_polls_legacy_status_until_bound(monkeypatch) -> N
 async def test_seamless_finish_reshows_form_when_session_never_bound(monkeypatch) -> None:
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
+    # 高级模式：重显表单需回填当前 api base 供联调核对。
+    flow.context = {"show_advanced_options": True}
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
     flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"

@@ -11,7 +11,7 @@
       },
       "seamless": {
         "title": "快速配对",
-        "description": "集成会连接 seenzus API 创建网页配对会话并跳转到外部 seenzus 页面完成授权。若 HAOS 无法解析默认域名，请改填当前网络可访问的 seenzus API 地址。",
+        "description": "集成会连接 seenzus API 创建网页配对会话并跳转到外部 seenzus 页面完成授权，直接提交即可。如需连接本地联调后端，请先在个人资料开启「高级模式」，再回到此处填写联调地址。",
         "data": {
           "pairing_api_base": "seenzus API 地址"
         },
