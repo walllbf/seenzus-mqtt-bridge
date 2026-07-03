@@ -366,6 +366,14 @@ docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 
 ## 版本变更记录
 
+### v0.2.0 (2026-07-03)
+
+- **支持 MQTT over WebSocket（wss）/ mqtts 传输**（issue #14，配合后端 CDN 前置抗封锁）：快速配对兑换响应下发 `scheme`/`path` 时，桥经 `wss://edge.seenzus.ai:443/mqtt`（Cloudflare 前置）连接；旧 entry 与裸 TCP 下发行为完全不变，无新依赖
+- 传输健壮性：scheme/path 显式落盘（重配对不残留旧传输配置）、显式 JSON null 归一、缺 port 按 scheme 取惯例端口（wss 443 / mqtts 8883）、TLS 上下文缓存；keepalive 保持 60s 适配 CF 空闲窗口
+- **通知返回链接点击即关**：「返回 seenzus 应用」链接改走签名中转端点，点击后自动关闭通知再跳转（深链走 HTML 跳转页）；修复链接被前端拦截成 SPA 路由导致点击无效的问题
+- 诊断可观测性：状态传感器新增 `mqtt_transport`/`mqtt_ws_path` 属性，presence 载荷新增 `transport`/`wsPath`；快速配对失败诊断收敛到「配对状态」传感器属性（原先只在日志与通知）
+- 测试 **170 passed**
+
 ### v0.1.9 (2026-07-01)
 
 - 品牌显示名统一小写为 `seenzus MQTT Bridge`（`MQTT` 保持大写；集成名、传感器、通知、配置页文案全覆盖）
