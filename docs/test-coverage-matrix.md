@@ -4,7 +4,7 @@
 > 运行：`python -m pytest tests -q`（或先建隔离环境，见 `README.md` 的「测试与验证」）。
 > 本表由 `tests/` 实际收集重建；新增/重命名测试后请同步更新，或直接以 `pytest --collect-only` 为准。
 
-## `tests/test_config_flow_behavior.py` — 配置流 / 快速配对 UI（52）
+## `tests/test_config_flow_behavior.py` — 配置流 / 快速配对 UI（51）
 
 | 测试 | 验证行为 |
 |---|---|
@@ -14,7 +14,7 @@
 | `test_validate_rejects_invalid_pairing_api_base_when_seamless_mode` | 快速配对模式拒绝非法 API 地址 |
 | `test_validate_accepts_local_http_pairing_api_base_when_seamless_mode` | 快速配对接受局域网 `http://IP:port` 地址 |
 | `test_mode_schema_only_shows_pairing_mode` | 第一步只展示模式选择 |
-| `test_schema_hides_pairing_api_base_unless_advanced` | API 地址字段仅高级模式展示，普通模式隐藏 |
+| `test_schema_puts_pairing_api_base_in_collapsed_section` | API 地址收进默认折叠的「开发者选项」分组（预填生产地址） |
 | `test_schema_shows_only_manual_fields_in_manual_step` | 手动步骤只展示手动字段 |
 | `test_build_quick_pair_callback_context_uses_plugin_callback` | 回调上下文使用插件本地 callback 路径 |
 | `test_quick_pair_callback_view_routes_options_flow` | callback 能路由到 options flow |
@@ -31,8 +31,7 @@
 | `test_options_init_shows_mode_selection_form` | options 流首步展示模式选择 |
 | `test_options_flow_creates_entry_with_flattened_data` | options 流用展平数据建 entry |
 | `test_options_seamless_step_uses_options_flow_manager` | options 的快速配对用 options flow manager 恢复 |
-| `test_options_seamless_form_seeds_api_base_from_entry_data` | options 表单（高级模式）用现有 entry 的 API 地址回填 |
-| `test_options_seamless_form_hides_api_base_without_advanced_mode` | 普通模式 options 表单隐藏 API 地址（不沿用联调地址） |
+| `test_options_seamless_form_never_seeds_stored_api_base` | options 重配对绝不回填 entry 残留的联调地址（预填生产默认） |
 | `test_options_seamless_finish_creates_entry_with_empty_title` | options 收尾建 entry（空标题） |
 | `test_seamless_finish_error_reshows_seamless_form_without_placeholder_support` | 老核缺 placeholder 时降级重显表单 |
 | `test_seamless_finish_polls_legacy_status_until_bound` | 旧核走状态轮询直到 bound |

@@ -30,6 +30,7 @@ from seenzus_bridge.config_flow import (
 )
 from seenzus_bridge.pairing_bootstrap import _read_app_return_url
 from seenzus_bridge.const import (
+    CONF_ADVANCED_SETTINGS,
     CONF_BRIDGE_ID,
     CONF_CONFIG_SOURCE,
     CONF_MQTT_SCHEME,
@@ -60,6 +61,19 @@ def _schema_field_default(schema, field_name: str):
             default = getattr(key, "default", None)
             return default() if callable(default) else default
     raise AssertionError(f"{field_name} not present in schema")
+
+
+def _section_schema(schema, section_key: str):
+    """取出折叠分组的内层 vol.Schema（兼容老核无 section 时的裸 Schema 回退）。
+
+    section 实例的 .schema 是 vol.Schema；老核回退时 value 本身就是 vol.Schema
+    （其 .schema 是普通 dict，没有再一层 .schema）。
+    """
+    for key, value in schema.schema.items():
+        if getattr(key, "schema", key) == section_key:
+            inner = getattr(value, "schema", value)
+            return inner if hasattr(inner, "schema") else value
+    raise AssertionError(f"{section_key} not present in schema")
 
 
 def test_flatten_form_input_merges_section_values() -> None:
@@ -109,19 +123,16 @@ def test_mode_schema_only_shows_pairing_mode() -> None:
     assert _schema_field_names(_mode_schema()) == {CONF_PAIRING_MODE}
 
 
-def test_schema_hides_pairing_api_base_unless_advanced() -> None:
-    # 正式使用一律走默认生产地址：普通模式下快速配对表单不暴露 API 地址字段
-    # （无处自行填写）；开发者在 HA 个人资料开启「高级模式」后字段才出现，
-    # 用于连本地联调后端。
-    names = _schema_field_names(_schema("seamless", {CONF_PAIRING_MODE: "seamless"}))
-    assert names == set()
+def test_schema_puts_pairing_api_base_in_collapsed_section() -> None:
+    # 正式使用直接提交走默认生产地址：API 地址收进默认折叠的「开发者选项」
+    # 分组（HA 2026.6 移除「高级模式」后的官方替代模式），顶层无裸字段；
+    # 联调时展开分组填写。
+    schema = _schema("seamless", {CONF_PAIRING_MODE: "seamless"})
+    assert _schema_field_names(schema) == {CONF_ADVANCED_SETTINGS}
 
-    names = _schema_field_names(
-        _schema("seamless", {CONF_PAIRING_MODE: "seamless"}, show_advanced=True)
-    )
-    assert CONF_PAIRING_API_BASE in names
-    assert CONF_MQTT_SETTINGS not in names
-    assert CONF_PAIRING_MODE not in names
+    inner = _section_schema(schema, CONF_ADVANCED_SETTINGS)
+    assert _schema_field_names(inner) == {CONF_PAIRING_API_BASE}
+    assert _schema_field_default(inner, CONF_PAIRING_API_BASE) == DEFAULT_PAIRING_API_BASE
 
 
 def test_schema_shows_only_manual_fields_in_manual_step() -> None:
@@ -271,8 +282,6 @@ async def test_user_step_shows_mode_selection_form(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_user_step_routes_to_seamless_form(monkeypatch) -> None:
     flow = SavanAIBridgeConfigFlow()
-    # 高级模式下校验字段仍在；普通模式的隐藏行为由 schema 级测试覆盖。
-    flow.context = {"show_advanced_options": True}
     monkeypatch.setattr(flow, "_async_current_entries", lambda: [])
     flow.async_show_form = lambda *, step_id, data_schema, errors=None: {
         "type": "form",
@@ -284,7 +293,7 @@ async def test_user_step_routes_to_seamless_form(monkeypatch) -> None:
     result = await flow.async_step_user({CONF_PAIRING_MODE: "seamless"})
 
     assert result["step_id"] == "seamless"
-    assert _schema_field_names(result["data_schema"]) == {CONF_PAIRING_API_BASE}
+    assert _schema_field_names(result["data_schema"]) == {CONF_ADVANCED_SETTINGS}
 
 
 @pytest.mark.asyncio
@@ -645,7 +654,7 @@ async def test_options_seamless_step_uses_options_flow_manager(monkeypatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_options_seamless_form_seeds_api_base_from_entry_data() -> None:
+async def test_options_seamless_form_never_seeds_stored_api_base() -> None:
     config_entry = FakeConfigEntry(
         data={
             "mqtt_host": "old-broker",
@@ -653,8 +662,6 @@ async def test_options_seamless_form_seeds_api_base_from_entry_data() -> None:
         }
     )
     flow = SavanAIBridgeOptionsFlow(config_entry)
-    # API 地址字段仅高级模式可见（联调场景本来就是高级模式的地盘）。
-    flow.context = {"show_advanced_options": True}
     flow.async_show_form = lambda *, step_id, data_schema, errors, description_placeholders=None: {
         "type": "form",
         "step_id": step_id,
@@ -664,37 +671,13 @@ async def test_options_seamless_form_seeds_api_base_from_entry_data() -> None:
 
     result = await flow.async_step_seamless()
 
+    # entry 里残留的联调地址绝不回填：折叠分组不展开也会按默认值提交，若回填
+    # 存量地址，普通重配对会静默连回联调后端——新表单一律预填生产默认值。
     assert result["type"] == "form"
     assert result["step_id"] == "seamless"
     assert result["errors"] == {}
-    assert (
-        _schema_field_default(result["data_schema"], CONF_PAIRING_API_BASE)
-        == "http://192.168.9.99:5078"
-    )
-
-
-@pytest.mark.asyncio
-async def test_options_seamless_form_hides_api_base_without_advanced_mode() -> None:
-    # 普通模式（未开高级）下即使 entry 里存过联调地址，表单也不暴露该字段；
-    # 提交后 _resolve_pairing_api_base 回退生产默认值，联调地址不被沿用。
-    config_entry = FakeConfigEntry(
-        data={
-            "mqtt_host": "old-broker",
-            CONF_PAIRING_API_BASE: "http://192.168.9.99:5078",
-        }
-    )
-    flow = SavanAIBridgeOptionsFlow(config_entry)
-    flow.async_show_form = lambda *, step_id, data_schema, errors, description_placeholders=None: {
-        "type": "form",
-        "step_id": step_id,
-        "data_schema": data_schema,
-        "errors": errors,
-    }
-
-    result = await flow.async_step_seamless()
-
-    assert result["type"] == "form"
-    assert _schema_field_names(result["data_schema"]) == set()
+    inner = _section_schema(result["data_schema"], CONF_ADVANCED_SETTINGS)
+    assert _schema_field_default(inner, CONF_PAIRING_API_BASE) == DEFAULT_PAIRING_API_BASE
 
 
 @pytest.mark.asyncio
@@ -740,8 +723,6 @@ async def test_options_seamless_finish_creates_entry_with_empty_title() -> None:
 async def test_seamless_finish_error_reshows_seamless_form_without_placeholder_support() -> None:
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
-    # 高级模式：重显表单需回填当前 api base 供联调核对。
-    flow.context = {"show_advanced_options": True}
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
     flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
@@ -761,8 +742,12 @@ async def test_seamless_finish_error_reshows_seamless_form_without_placeholder_s
     assert result["type"] == "form"
     assert result["step_id"] == "seamless"
     assert result["errors"] == {"base": "quick_pair_callback_timeout"}
+    # 流程内错误重显：回填本次会话正在用的 api base（折叠分组内）。
     assert (
-        _schema_field_default(result["data_schema"], CONF_PAIRING_API_BASE)
+        _schema_field_default(
+            _section_schema(result["data_schema"], CONF_ADVANCED_SETTINGS),
+            CONF_PAIRING_API_BASE,
+        )
         == "https://api.seenzus.xxx/api"
     )
 
@@ -831,8 +816,6 @@ async def test_seamless_finish_polls_legacy_status_until_bound(monkeypatch) -> N
 async def test_seamless_finish_reshows_form_when_session_never_bound(monkeypatch) -> None:
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
-    # 高级模式：重显表单需回填当前 api base 供联调核对。
-    flow.context = {"show_advanced_options": True}
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
     flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
@@ -865,8 +848,12 @@ async def test_seamless_finish_reshows_form_when_session_never_bound(monkeypatch
     assert result["type"] == "form"
     assert result["step_id"] == "seamless"
     assert result["errors"] == {"base": "quick_pair_bootstrap_failed"}
+    # 流程内错误重显：回填本次会话正在用的 api base（折叠分组内）。
     assert (
-        _schema_field_default(result["data_schema"], CONF_PAIRING_API_BASE)
+        _schema_field_default(
+            _section_schema(result["data_schema"], CONF_ADVANCED_SETTINGS),
+            CONF_PAIRING_API_BASE,
+        )
         == "https://api.seenzus.xxx/api"
     )
 

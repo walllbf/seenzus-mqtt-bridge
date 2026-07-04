@@ -11,11 +11,17 @@
       },
       "seamless": {
         "title": "快速配对",
-        "description": "集成会连接 seenzus API 创建网页配对会话并跳转到外部 seenzus 页面完成授权，直接提交即可。如需连接本地联调后端，请先在个人资料开启「高级模式」，再回到此处填写联调地址。",
-        "data": {
-          "pairing_api_base": "seenzus API 地址"
-        },
-        "sections": {}
+        "description": "集成会连接 seenzus API 创建网页配对会话并跳转到外部 seenzus 页面完成授权，直接提交即可，无需修改任何选项。",
+        "data": {},
+        "sections": {
+          "advanced_settings": {
+            "name": "开发者选项（联调用）",
+            "description": "正常使用请勿展开或修改。仅在连接本地联调后端时，才在此覆盖 seenzus API 地址。",
+            "data": {
+              "pairing_api_base": "seenzus API 地址"
+            }
+          }
+        }
       },
       "manual": {
         "title": "手动配置",
@@ -80,11 +86,17 @@
       },
       "seamless": {
         "title": "快速配对",
-        "description": "重新发起外部 seenzus 快速配对。保存后会使用 seenzus API 创建网页配对会话，授权成功后浏览器会直接回跳到 Home Assistant 并自动刷新 MQTT 桥接配置。",
-        "data": {
-          "pairing_api_base": "seenzus API 地址"
-        },
-        "sections": {}
+        "description": "重新发起外部 seenzus 快速配对，直接提交即可，无需修改任何选项。保存后会使用 seenzus API 创建网页配对会话，授权成功后浏览器会直接回跳到 Home Assistant 并自动刷新 MQTT 桥接配置。",
+        "data": {},
+        "sections": {
+          "advanced_settings": {
+            "name": "开发者选项（联调用）",
+            "description": "正常使用请勿展开或修改。仅在连接本地联调后端时，才在此覆盖 seenzus API 地址。",
+            "data": {
+              "pairing_api_base": "seenzus API 地址"
+            }
+          }
+        }
       },
       "manual": {
         "title": "手动配置",

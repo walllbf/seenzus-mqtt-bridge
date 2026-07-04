@@ -174,35 +174,29 @@ def _mode_schema(default_mode: str = DEFAULT_PAIRING_MODE) -> vol.Schema:
     )
 
 
-def _show_advanced_options(flow) -> bool:
-    """HA「高级模式」开关（用户资料里的 advanced mode，随 flow context 传入）。
-
-    受限 / 测试环境的裸 flow 实例可能没有 context，一律按 False（隐藏高级字段）。
-    """
-    try:
-        return bool(flow.show_advanced_options)
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def _schema(pairing_mode: str, defaults: dict | None = None, *, show_advanced: bool = False) -> vol.Schema:
+def _schema(pairing_mode: str, defaults: dict | None = None) -> vol.Schema:
     d = _flatten_form_input(defaults)
     schema_fields: dict = {}
 
     if pairing_mode == PAIRING_MODE_SEAMLESS:
-        # API 地址字段只在 HA「高级模式」下展示：正式使用一律走
-        # DEFAULT_PAIRING_API_BASE（普通用户不该、也无处自行填写——手填易漏
-        # /api/seenzus 路径或误填测试地址导致配对失败）；连本地联调后端时，
-        # 开发者在个人资料开启高级模式后该字段照旧出现。字段隐藏时提交的
-        # 表单不含该键，_resolve_pairing_api_base 自然回退生产默认值，
-        # 即使 entry 里存过联调地址也不会被普通模式的重配对继续沿用。
-        if show_advanced:
-            schema_fields[
-                vol.Optional(
-                    CONF_PAIRING_API_BASE,
-                    default=d.get(CONF_PAIRING_API_BASE, DEFAULT_PAIRING_API_BASE),
-                )
-            ] = TextSelector()
+        # API 地址收进默认折叠的「开发者选项」分组：正式使用直接提交、走折叠里
+        # 预填的 DEFAULT_PAIRING_API_BASE（不展开就不会碰到）；连本地联调后端时
+        # 展开分组填写。不能用「高级模式」做门控——HA 2026.6 已移除该开关，
+        # 兼容期 show_advanced_options 恒为 True，折叠 section 是官方给出的
+        # 替代模式（advanced-mode-config-flow-deprecation dev blog）。
+        # 默认值只从本流程内的 seed（错误重显）读取：新表单一律预填生产地址，
+        # 不回填 entry 里可能残留的联调地址（防止普通重配对静默沿用联调后端）。
+        schema_fields[vol.Required(CONF_ADVANCED_SETTINGS)] = section(
+            vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_PAIRING_API_BASE,
+                        default=d.get(CONF_PAIRING_API_BASE, DEFAULT_PAIRING_API_BASE),
+                    ): TextSelector(),
+                }
+            ),
+            {"collapsed": True},
+        )
         return vol.Schema(schema_fields)
 
     schema_fields[
@@ -504,11 +498,7 @@ class _QuickPairFlowMixin:
         return _show_form_with_diagnostic(
             self,
             step_id="seamless",
-            data_schema=_schema(
-                PAIRING_MODE_SEAMLESS,
-                {CONF_PAIRING_API_BASE: self._quick_pair_api_base},
-                show_advanced=_show_advanced_options(self),
-            ),
+            data_schema=_schema(PAIRING_MODE_SEAMLESS, {CONF_PAIRING_API_BASE: self._quick_pair_api_base}),
             errors={"base": error_key},
             diagnostic=self._quick_pair_diagnostic,
         )
@@ -607,16 +597,14 @@ class _QuickPairFlowMixin:
                         self._quick_pair_diagnostic = _diagnostic_from_result(result)
                         return await self.async_step_seamless_authorize()
 
-        # With no input yet, seed the form from _current_config()
-        # ({} in the config flow, the existing entry config in the options flow).
+        # 只用本流程自己的输入做回填（校验失败重显时保留刚输入的值）。
+        # 刻意不用 _current_config()：折叠分组不展开也会按默认值提交，若回填
+        # entry 里残留的联调 API 地址，options 重配对会静默连回联调后端——
+        # 新表单一律预填生产默认值。
         return _show_form_with_diagnostic(
             self,
             step_id="seamless",
-            data_schema=_schema(
-                PAIRING_MODE_SEAMLESS,
-                user_input or self._current_config(),
-                show_advanced=_show_advanced_options(self),
-            ),
+            data_schema=_schema(PAIRING_MODE_SEAMLESS, user_input or {}),
             errors=errors,
             diagnostic=self._quick_pair_diagnostic,
         )
