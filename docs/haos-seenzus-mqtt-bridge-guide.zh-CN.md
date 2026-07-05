@@ -207,6 +207,15 @@ https://seenzus.ai/ha-pairing?session_id=...&redirect_uri=...&bridge_name=seenzu
 **集成创建成功但显示离线？**
 检查 MQTT Broker 地址 / 账号密码，以及 ACL 是否允许订阅 `command/+` 和发布 `presence`/`state`/`result`/`catalog`。
 
+**某个设备已在原 App 恢复，但 HA / 桥里仍显示离线（unavailable）或旧状态？**
+这是**来源集成**（如米家、美的美居等）的状态同步滞后，不是桥的问题——桥只如实转发它从 HA 读到的状态。该设备的实体通常还在，只是没跟着刷新。两种修法，先轻后重：
+
+1. **只刷新那一个设备（推荐，扰动最小）**：在 HA「开发者工具 → 操作」里调用
+   `homeassistant.update_entity`，目标选那个卡住的实体（如 `climate.meiju_xxx`）。它会逼来源集成重新拉一次该设备状态，其他设备不受影响。
+2. **上面无效时，重载整个来源集成**（多为纯推送型集成、`update_entity` 无法触发刷新）：在「设置 → 设备与服务」找到该集成，右上角 `⋮ → 重新加载`；等价于调用 `homeassistant.reload_config_entry`。会让该集成下**全部**设备短暂离线后重连。
+
+> 频率通常很低，属于来源集成的偶发同步问题，手动处理即可，无需在桥侧做额外配置。
+
 ---
 
 ## 附：技术参考
