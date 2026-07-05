@@ -365,6 +365,13 @@ docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 
 ## 版本变更记录
 
+### v0.2.1 (2026-07-05)
+
+- **配对 API 地址改用本地覆盖文件**：快速配对表单彻底无输入项，配对地址走内置生产默认；仅联调本地后端时，在 HA 配置目录放置 `<config>/seenzus_bridge_dev.json`（`{"pairing_api_base":"http://…"}`）覆盖。该文件不在插件包内、重装不丢，故联调包与上线包逐字节同一份（详见 `custom_components/seenzus_bridge/dev_override.py`）
+- **选中「快速配对」即直接发起配对**：跳过原来那屏"直接提交"确认页，成功即跳外部授权、失败才回落到带错误提示的表单
+- 兼容说明：HA 2026.6 已移除用户资料的「高级模式」开关，本版不再依赖它做任何门控
+- 测试 **179 passed**
+
 ### v0.2.0 (2026-07-03)
 
 - **支持 MQTT over WebSocket（wss）/ mqtts 传输**（issue #14，配合后端 CDN 前置抗封锁）：快速配对兑换响应下发 `scheme`/`path` 时，桥经 `wss://edge.seenzus.ai:443/mqtt`（Cloudflare 前置）连接；旧 entry 与裸 TCP 下发行为完全不变，无新依赖
