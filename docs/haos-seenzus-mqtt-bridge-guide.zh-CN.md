@@ -106,7 +106,7 @@ custom_components/
 https://seenzus.ai/api/seenzus
 ```
 
-> 「seenzus API 地址」折叠在**「开发者选项（联调用）」**分组里，默认收起且已预填生产地址。仅在连接本地联调后端（如 `http://192.168.x.x:5078`）时才展开修改；正常使用请勿展开。
+> 配对页没有任何输入项，配对 API 地址走上面这个内置生产地址。**仅开发者联调本地后端**时，才在 HA 配置目录放置 `<config>/seenzus_bridge_dev.json`（内容 `{"pairing_api_base":"http://192.168.x.x:5078/api"}`）覆盖；该文件不在插件包内、重装不丢，正常安装不涉及。
 
 ![提交快速配对](images/08-api-base.png)
 
@@ -199,7 +199,7 @@ https://seenzus.ai/ha-pairing?session_id=...&redirect_uri=...&bridge_name=seenzu
 确认 HACS 已添加自定义仓库并下载，且**已重启 HA**；手动安装则确认目录为 `/config/custom_components/seenzus_bridge/`。
 
 **快速配对创建会话失败？**
-确认 `seenzus API 地址` 可从 HAOS 访问（DNS / 网络）。
+确认内置生产地址 `https://seenzus.ai/api/seenzus`（或联调覆盖文件里的地址）可从 HAOS 访问（DNS / 网络）。
 
 **外部授权成功但 HA 没完成配置？**
 确认 HA 的访问地址能被浏览器回跳到，即 `/api/seenzus_bridge/quick_pair/callback` 可达。

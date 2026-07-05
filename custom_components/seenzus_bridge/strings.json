@@ -11,17 +11,9 @@
       },
       "seamless": {
         "title": "快速配对",
-        "description": "集成会连接 seenzus API 创建网页配对会话并跳转到外部 seenzus 页面完成授权，直接提交即可，无需修改任何选项。",
+        "description": "集成会连接 seenzus API 创建网页配对会话并跳转到外部 seenzus 页面完成授权。直接点「提交」即可，无需填写任何内容。",
         "data": {},
-        "sections": {
-          "advanced_settings": {
-            "name": "开发者选项（联调用）",
-            "description": "正常使用请勿展开或修改。仅在连接本地联调后端时，才在此覆盖 seenzus API 地址。",
-            "data": {
-              "pairing_api_base": "seenzus API 地址"
-            }
-          }
-        }
+        "sections": {}
       },
       "manual": {
         "title": "手动配置",
@@ -58,7 +50,7 @@
     },
     "error": {
       "host_required": "MQTT Broker 地址不能为空",
-      "invalid_pairing_api_base": "seenzus API 地址无效",
+      "dev_override_invalid": "开发者覆盖文件 seenzus_bridge_dev.json 内容无效（JSON 损坏或 pairing_api_base 不是合法的 http(s) 地址），请修正或删除该文件后重试",
       "quick_pair_session_failed": "创建快速配对会话失败，请检查 seenzus API 地址、DNS 和服务状态",
       "quick_pair_bootstrap_failed": "读取网页配对最终状态失败，请确认页面侧已经完成绑定",
       "quick_pair_mqtt_missing": "后端未返回 MQTT 桥接配置，无法完成快速配对",
@@ -86,17 +78,9 @@
       },
       "seamless": {
         "title": "快速配对",
-        "description": "重新发起外部 seenzus 快速配对，直接提交即可，无需修改任何选项。保存后会使用 seenzus API 创建网页配对会话，授权成功后浏览器会直接回跳到 Home Assistant 并自动刷新 MQTT 桥接配置。",
+        "description": "重新发起外部 seenzus 快速配对，直接点「提交」即可，无需填写任何内容。保存后会使用 seenzus API 创建网页配对会话，授权成功后浏览器会直接回跳到 Home Assistant 并自动刷新 MQTT 桥接配置。",
         "data": {},
-        "sections": {
-          "advanced_settings": {
-            "name": "开发者选项（联调用）",
-            "description": "正常使用请勿展开或修改。仅在连接本地联调后端时，才在此覆盖 seenzus API 地址。",
-            "data": {
-              "pairing_api_base": "seenzus API 地址"
-            }
-          }
-        }
+        "sections": {}
       },
       "manual": {
         "title": "手动配置",
@@ -133,7 +117,7 @@
     },
     "error": {
       "host_required": "MQTT Broker 地址不能为空",
-      "invalid_pairing_api_base": "seenzus API 地址无效",
+      "dev_override_invalid": "开发者覆盖文件 seenzus_bridge_dev.json 内容无效（JSON 损坏或 pairing_api_base 不是合法的 http(s) 地址），请修正或删除该文件后重试",
       "quick_pair_session_failed": "创建快速配对会话失败，请检查 seenzus API 地址、DNS 和服务状态",
       "quick_pair_bootstrap_failed": "读取网页配对最终状态失败，请确认页面侧已经完成绑定",
       "quick_pair_mqtt_missing": "后端未返回 MQTT 桥接配置，无法完成快速配对",

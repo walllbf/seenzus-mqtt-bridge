@@ -63,7 +63,7 @@ config/custom_components/seenzus_bridge/
 
 - 第一步先选择 `快速配对（推荐）` 或 `手动配置（高级）`
 - 第二步进入对应模式的专属表单
-- 快速配对页无需填写任何内容（直接提交），随后跳转外部 seenzus 页面完成授权；`seenzus API 地址` 折叠在「开发者选项（联调用）」分组里（默认收起、预填内置生产地址），仅本地联调后端时才展开覆盖
+- 快速配对页无需填写任何内容（直接提交），随后跳转外部 seenzus 页面完成授权；配对 API 地址走内置生产默认，界面上没有任何输入项。**仅联调本地后端时**，在 HA 配置目录放置 `<config>/seenzus_bridge_dev.json`（内容 `{"pairing_api_base":"http://192.168.x.x:5078/api"}`）即可覆盖；该文件不在插件包内、重装不丢，正常安装无此文件
 - 外部授权成功后，浏览器会直接回跳到 HA 本地 callback，由插件自动兑换 MQTT 桥接配置并创建 entry
 - 手动配置页仍保留 MQTT 连接参数、手动配对参数和高级参数
 - 保存后会自动重载集成，配置立即生效，无需手动重启 HA
@@ -71,14 +71,13 @@ config/custom_components/seenzus_bridge/
 | 配置项 | 说明 | 默认值 |
 |---|---|---|
 | 配对模式 | `seamless` / `manual` | `seamless` |
-| seenzus API 地址（快速配对） | 折叠在「开发者选项」分组，仅联调时展开覆盖；创建外部配对会话并自动回写桥接配置 | 内置生产地址 |
+| 配对 API 地址（快速配对） | 界面无此项；走内置生产地址，联调用 `<config>/seenzus_bridge_dev.json` 覆盖 | 内置生产地址 |
 | MQTT Broker 地址 | 手动配置时填写的公网 MQTT 地址 | - |
 | MQTT 端口 | Broker 端口 | `1883` |
 | MQTT 用户名/密码 | Broker 认证 | 空 |
 | V2 Topic 根路径 | v2 协议根路径 | `seenzus/v2` |
 | Bridge ID | 留空自动生成稳定 ID | 自动 |
 | 启用实体状态事件推送 | 推送 `state` 通道 | `true` |
-| seenzus API 地址 | 手动 MQTT 桥接配置时不使用 | 空 |
 
 
 
@@ -220,7 +219,7 @@ Payload:
 配置页执行链路：
 
 ```text
-提交快速配对表单（API 地址走内置生产默认值；联调时展开「开发者选项」分组覆盖）
+提交快速配对表单（API 地址走内置生产默认值；联调时由 <config>/seenzus_bridge_dev.json 覆盖）
   -> 创建带 redirect_uri/state 的 web pairing session
   -> 跳转外部 seenzus 页面
   -> 用户完成授权
