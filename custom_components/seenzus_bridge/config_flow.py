@@ -65,6 +65,7 @@ from .const import (
     PRODUCT_NAME,
     normalize_pairing_mode,
 )
+from .dev_override import DevOverrideError, resolve_dev_pairing_api_base
 from .pairing_bootstrap import (
     create_web_pairing_session,
     exchange_web_pairing_callback_code,
@@ -179,13 +180,10 @@ def _schema(pairing_mode: str, defaults: dict | None = None) -> vol.Schema:
     schema_fields: dict = {}
 
     if pairing_mode == PAIRING_MODE_SEAMLESS:
-        schema_fields[
-            vol.Optional(
-                CONF_PAIRING_API_BASE,
-                default=d.get(CONF_PAIRING_API_BASE, DEFAULT_PAIRING_API_BASE),
-            )
-        ] = TextSelector()
-        return vol.Schema(schema_fields)
+        # 快速配对无任何输入字段——直接提交即可：配对 API 地址走内置生产默认
+        # （const.DEFAULT_PAIRING_API_BASE）。本地联调后端时，在 HA 配置目录放置
+        # <config>/seenzus_bridge_dev.json 覆盖（见 dev_override），不经 UI。
+        return vol.Schema({})
 
     schema_fields[
         vol.Required(CONF_MQTT_SETTINGS)
@@ -254,24 +252,12 @@ def _validate(data: dict) -> dict[str, str]:
     errors: dict[str, str] = {}
     pairing_mode = str(data.get(CONF_PAIRING_MODE, DEFAULT_PAIRING_MODE)).strip()
     if pairing_mode == PAIRING_MODE_SEAMLESS:
-        api_base = str(data.get(CONF_PAIRING_API_BASE, "")).strip()
-        if api_base and not _is_valid_api_base(api_base):
-            errors[CONF_PAIRING_API_BASE] = "invalid_pairing_api_base"
+        # 快速配对无表单字段（API 地址走内置默认 / dev 覆盖文件），无需校验。
         return errors
 
     if not str(data.get(CONF_MQTT_HOST, "")).strip():
         errors[CONF_MQTT_HOST] = "host_required"
     return errors
-
-
-def _is_valid_api_base(value: str) -> bool:
-    parsed = urlparse(value.strip())
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
-
-
-def _resolve_pairing_api_base(data: dict | None = None) -> str:
-    configured = str((data or {}).get(CONF_PAIRING_API_BASE, "")).strip()
-    return configured.rstrip("/") if configured else DEFAULT_PAIRING_API_BASE
 
 
 def _build_quick_pair_entry_data(
@@ -482,11 +468,11 @@ class _QuickPairFlowMixin:
         self._quick_pair_app_return_url: str | None = None
 
     def _reshow_seamless_form(self, error_key: str) -> config_entries.ConfigFlowResult:
-        """Re-show the seamless form after a failure, seeded with the active api base."""
+        """Re-show the (field-less) seamless form after a failure, with the error."""
         return _show_form_with_diagnostic(
             self,
             step_id="seamless",
-            data_schema=_schema(PAIRING_MODE_SEAMLESS, {CONF_PAIRING_API_BASE: self._quick_pair_api_base}),
+            data_schema=_schema(PAIRING_MODE_SEAMLESS),
             errors={"base": error_key},
             diagnostic=self._quick_pair_diagnostic,
         )
@@ -556,41 +542,52 @@ class _QuickPairFlowMixin:
                 except (NoURLAvailableError, RuntimeError, ValueError):
                     errors["base"] = "quick_pair_callback_unavailable"
                 else:
-                    api_base = _resolve_pairing_api_base(data)
-                    result = await create_web_pairing_session(
-                        api_base=api_base,
-                        bridge_name=_backend_bridge_name(self.hass),
-                        bridge_version=BRIDGE_VERSION,
-                        ha_version=str(config_data.get("version", "")),
-                        redirect_uri=redirect_uri,
-                        state=callback_state_token,
-                        ha_instance_id=await _resolve_ha_instance_id(self.hass),
-                    )
-                    if not result.ok or not result.pairing_page_url or not result.session_id:
-                        errors["base"] = "quick_pair_session_failed"
-                        self._quick_pair_diagnostic = _diagnostic_from_result(result)
-                        _record_quick_pair_diagnostic(self.hass, "quick_pair_session_failed", self._quick_pair_diagnostic)
-                    else:
-                        self._quick_pair_api_base = api_base
-                        self._quick_pair_page_url = result.pairing_page_url
-                        self._quick_pair_session_id = result.session_id
-                        self._quick_pair_external_opened = False
-                        self._quick_pair_callback_state = callback_state
-                        self._quick_pair_callback_state_token = callback_state_token
-                        self._quick_pair_exchange_result = None
-                        self._quick_pair_finish_error = None
-                        self._quick_pair_app_return_url = _sanitize_app_return_url(
-                            getattr(result, "app_return_url", None)
+                    # 配对 API 地址（模型 A）：每次会话在此新鲜解析——有 dev 覆盖
+                    # 文件且合法则用它，否则用内置生产默认；文件存在但非法则
+                    # fail-loud 拦住配对（DevOverrideError），绝不静默连生产。
+                    # 全程不读 entry 存值，联调地址不会跨重配对残留。
+                    try:
+                        api_base = (
+                            await resolve_dev_pairing_api_base(self.hass)
+                            or DEFAULT_PAIRING_API_BASE
                         )
-                        self._quick_pair_diagnostic = _diagnostic_from_result(result)
-                        return await self.async_step_seamless_authorize()
+                    except DevOverrideError as err:
+                        _LOGGER.warning("Quick pair dev override rejected: %s", err)
+                        errors["base"] = "dev_override_invalid"
+                    else:
+                        result = await create_web_pairing_session(
+                            api_base=api_base,
+                            bridge_name=_backend_bridge_name(self.hass),
+                            bridge_version=BRIDGE_VERSION,
+                            ha_version=str(config_data.get("version", "")),
+                            redirect_uri=redirect_uri,
+                            state=callback_state_token,
+                            ha_instance_id=await _resolve_ha_instance_id(self.hass),
+                        )
+                        if not result.ok or not result.pairing_page_url or not result.session_id:
+                            errors["base"] = "quick_pair_session_failed"
+                            self._quick_pair_diagnostic = _diagnostic_from_result(result)
+                            _record_quick_pair_diagnostic(self.hass, "quick_pair_session_failed", self._quick_pair_diagnostic)
+                        else:
+                            self._quick_pair_api_base = api_base
+                            self._quick_pair_page_url = result.pairing_page_url
+                            self._quick_pair_session_id = result.session_id
+                            self._quick_pair_external_opened = False
+                            self._quick_pair_callback_state = callback_state
+                            self._quick_pair_callback_state_token = callback_state_token
+                            self._quick_pair_exchange_result = None
+                            self._quick_pair_finish_error = None
+                            self._quick_pair_app_return_url = _sanitize_app_return_url(
+                                getattr(result, "app_return_url", None)
+                            )
+                            self._quick_pair_diagnostic = _diagnostic_from_result(result)
+                            return await self.async_step_seamless_authorize()
 
-        # With no input yet, seed the form from _current_config()
-        # ({} in the config flow, the existing entry config in the options flow).
+        # 快速配对表单无字段（直接提交），无需回填。
         return _show_form_with_diagnostic(
             self,
             step_id="seamless",
-            data_schema=_schema(PAIRING_MODE_SEAMLESS, user_input or self._current_config()),
+            data_schema=_schema(PAIRING_MODE_SEAMLESS),
             errors=errors,
             diagnostic=self._quick_pair_diagnostic,
         )
@@ -726,7 +723,9 @@ class SavanAIBridgeConfigFlow(_QuickPairFlowMixin, config_entries.ConfigFlow, do
             self._selected_pairing_mode = _default_pairing_mode(user_input)
             if self._selected_pairing_mode == PAIRING_MODE_MANUAL:
                 return await self.async_step_manual()
-            return await self.async_step_seamless()
+            # 快速配对无表单字段，直接带空输入发起——选中即开始配对（成功→跳外部
+            # 授权；失败才回落到带错误提示的表单），省掉一屏"直接提交"确认页。
+            return await self.async_step_seamless({})
 
         return self.async_show_form(
             step_id="user",
@@ -750,9 +749,9 @@ class SavanAIBridgeOptionsFlow(_QuickPairFlowMixin, config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._config_entry = config_entry
         self._init_quick_pair_state()
-        current = self._current_config()
-        self._selected_pairing_mode = _default_pairing_mode(current)
-        self._quick_pair_api_base = str(current.get(CONF_PAIRING_API_BASE, "")).strip() or None
+        self._selected_pairing_mode = _default_pairing_mode(self._current_config())
+        # 刻意不从 entry 预读 api_base（模型 A）：地址只在配对发起时由
+        # dev_override 解析并贯穿会话，重配对绝不沿用 entry 里残留的联调地址。
 
     def _current_config(self) -> dict:
         return {**self._config_entry.data, **self._config_entry.options}
@@ -762,7 +761,8 @@ class SavanAIBridgeOptionsFlow(_QuickPairFlowMixin, config_entries.OptionsFlow):
             self._selected_pairing_mode = _default_pairing_mode(user_input)
             if self._selected_pairing_mode == PAIRING_MODE_MANUAL:
                 return await self.async_step_manual()
-            return await self.async_step_seamless()
+            # 同 config 流：选中快速配对即直接发起，跳过无字段的确认页。
+            return await self.async_step_seamless({})
 
         return self.async_show_form(
             step_id="init",

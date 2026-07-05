@@ -28,6 +28,7 @@ from seenzus_bridge.config_flow import (
     _schema,
     _validate,
 )
+from seenzus_bridge.dev_override import DevOverrideError
 from seenzus_bridge.pairing_bootstrap import _read_app_return_url
 from seenzus_bridge.const import (
     CONF_BRIDGE_ID,
@@ -54,12 +55,9 @@ def _schema_field_names(schema) -> set[str]:
     return {getattr(key, "schema", key) for key in schema.schema}
 
 
-def _schema_field_default(schema, field_name: str):
-    for key in schema.schema:
-        if getattr(key, "schema", key) == field_name:
-            default = getattr(key, "default", None)
-            return default() if callable(default) else default
-    raise AssertionError(f"{field_name} not present in schema")
+async def _dev_override_none(_hass):
+    """monkeypatch 替身:无 dev 覆盖文件 → 配对走内置生产默认地址。"""
+    return None
 
 
 def test_flatten_form_input_merges_section_values() -> None:
@@ -81,40 +79,20 @@ def test_validate_requires_mqtt_host_in_manual_mode() -> None:
     assert _validate({CONF_PAIRING_MODE: "manual"}) == {"mqtt_host": "host_required"}
 
 
-def test_validate_allows_empty_pairing_api_base_in_seamless_mode() -> None:
+def test_validate_seamless_mode_needs_no_fields() -> None:
+    # 快速配对无表单字段（API 地址走内置默认 / dev 覆盖文件），_validate 恒过。
+    # api_base 合法性校验已挪到 dev_override（见 test_dev_override.py）。
     assert _validate({CONF_PAIRING_MODE: "seamless"}) == {}
-
-
-def test_validate_rejects_invalid_pairing_api_base_when_seamless_mode() -> None:
-    errors = _validate(
-        {
-            CONF_PAIRING_MODE: "seamless",
-            CONF_PAIRING_API_BASE: "ftp://evil.example.com",
-        }
-    )
-
-    assert errors == {CONF_PAIRING_API_BASE: "invalid_pairing_api_base"}
-
-
-def test_validate_accepts_local_http_pairing_api_base_when_seamless_mode() -> None:
-    assert _validate(
-        {
-            CONF_PAIRING_MODE: "seamless",
-            CONF_PAIRING_API_BASE: "http://192.168.9.99:5078/api",
-        }
-    ) == {}
 
 
 def test_mode_schema_only_shows_pairing_mode() -> None:
     assert _schema_field_names(_mode_schema()) == {CONF_PAIRING_MODE}
 
 
-def test_schema_shows_pairing_api_base_in_seamless_step() -> None:
-    names = _schema_field_names(_schema("seamless", {CONF_PAIRING_MODE: "seamless"}))
-
-    assert CONF_PAIRING_API_BASE in names
-    assert CONF_MQTT_SETTINGS not in names
-    assert CONF_PAIRING_MODE not in names
+def test_seamless_schema_has_no_fields() -> None:
+    # 正式使用直接提交:快速配对表单零字段(API 地址走内置生产默认,联调用
+    # <config>/seenzus_bridge_dev.json 覆盖,不经 UI)。
+    assert _schema_field_names(_schema("seamless", {CONF_PAIRING_MODE: "seamless"})) == set()
 
 
 def test_schema_shows_only_manual_fields_in_manual_step() -> None:
@@ -262,20 +240,39 @@ async def test_user_step_shows_mode_selection_form(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_user_step_routes_to_seamless_form(monkeypatch) -> None:
+async def test_user_step_seamless_launches_pairing_directly(monkeypatch) -> None:
+    # 选中快速配对即直接发起配对(跳过无字段的确认页):不显示表单,直接
+    # 创建会话并进入外部授权步骤。
     flow = SavanAIBridgeConfigFlow()
+    flow.hass = FakeHass()
     monkeypatch.setattr(flow, "_async_current_entries", lambda: [])
-    flow.async_show_form = lambda *, step_id, data_schema, errors=None: {
-        "type": "form",
+    monkeypatch.setattr(
+        "seenzus_bridge.config_flow._build_quick_pair_callback_context",
+        lambda *_a, **_k: (f"http://homeassistant.local:8123{QUICK_PAIR_CALLBACK_PATH}", "ps", "jwt"),
+    )
+    monkeypatch.setattr(
+        "seenzus_bridge.config_flow.resolve_dev_pairing_api_base", _dev_override_none
+    )
+    create_calls: list[dict] = []
+
+    async def _fake_create(**kwargs):
+        create_calls.append(dict(kwargs))
+        return _result_obj(
+            {"ok": True, "session_id": "wps_1", "pairing_page_url": "https://app.x/wps_1"}
+        )
+
+    monkeypatch.setattr("seenzus_bridge.config_flow.create_web_pairing_session", _fake_create)
+    flow.async_external_step = lambda *, step_id, url, description_placeholders=None: {
+        "type": "external",
         "step_id": step_id,
-        "data_schema": data_schema,
-        "errors": errors or {},
+        "url": url,
     }
 
     result = await flow.async_step_user({CONF_PAIRING_MODE: "seamless"})
 
-    assert result["step_id"] == "seamless"
-    assert _schema_field_names(result["data_schema"]) == {CONF_PAIRING_API_BASE}
+    assert result["type"] == "external"
+    assert result["step_id"] == "seamless_authorize"
+    assert len(create_calls) == 1
 
 
 @pytest.mark.asyncio
@@ -326,6 +323,9 @@ async def test_seamless_step_starts_external_quick_pair(monkeypatch) -> None:
         _fake_create_web_pairing_session,
     )
     monkeypatch.setattr(
+        "seenzus_bridge.config_flow.resolve_dev_pairing_api_base", _dev_override_none
+    )
+    monkeypatch.setattr(
         flow,
         "async_external_step",
         lambda *, step_id, url, description_placeholders=None: {
@@ -342,9 +342,81 @@ async def test_seamless_step_starts_external_quick_pair(monkeypatch) -> None:
     assert result["type"] == "external"
     assert result["step_id"] == "seamless_authorize"
     assert result["url"] == "https://app.seenzus.xxx/web-pairing/wps_1"
+    # 无 dev 覆盖文件 → 用内置生产默认地址。
     assert create_calls[0]["api_base"] == DEFAULT_PAIRING_API_BASE
     assert create_calls[0]["redirect_uri"] == f"http://homeassistant.local:8123{QUICK_PAIR_CALLBACK_PATH}"
     assert create_calls[0]["state"] == "jwt-state"
+
+
+@pytest.mark.asyncio
+async def test_seamless_uses_dev_override_api_base_when_present(monkeypatch) -> None:
+    # 存在合法 dev 覆盖文件 → 配对连联调地址而非生产默认。
+    flow = SavanAIBridgeConfigFlow()
+    flow.hass = FakeHass()
+    monkeypatch.setattr(flow, "_async_current_entries", lambda: [])
+    monkeypatch.setattr(
+        "seenzus_bridge.config_flow._build_quick_pair_callback_context",
+        lambda *_a, **_k: (f"http://homeassistant.local:8123{QUICK_PAIR_CALLBACK_PATH}", "ps", "jwt"),
+    )
+
+    async def _override(_hass):
+        return "http://192.168.9.99:5078/api"
+
+    monkeypatch.setattr("seenzus_bridge.config_flow.resolve_dev_pairing_api_base", _override)
+
+    create_calls: list[dict] = []
+
+    async def _fake_create(**kwargs):
+        create_calls.append(dict(kwargs))
+        return _result_obj(
+            {"ok": True, "session_id": "wps_1", "pairing_page_url": "https://app.x/wps_1"}
+        )
+
+    monkeypatch.setattr("seenzus_bridge.config_flow.create_web_pairing_session", _fake_create)
+    flow.async_external_step = lambda *, step_id, url, description_placeholders=None: {
+        "type": "external",
+        "url": url,
+    }
+
+    await flow.async_step_seamless({})
+
+    assert create_calls[0]["api_base"] == "http://192.168.9.99:5078/api"
+
+
+@pytest.mark.asyncio
+async def test_seamless_dev_override_invalid_blocks_pairing(monkeypatch) -> None:
+    # fail-loud:dev 文件存在但非法 → 报错拦住配对,绝不静默连生产,不创建会话。
+    flow = SavanAIBridgeConfigFlow()
+    flow.hass = FakeHass()
+    monkeypatch.setattr(flow, "_async_current_entries", lambda: [])
+    monkeypatch.setattr(
+        "seenzus_bridge.config_flow._build_quick_pair_callback_context",
+        lambda *_a, **_k: (f"http://homeassistant.local:8123{QUICK_PAIR_CALLBACK_PATH}", "ps", "jwt"),
+    )
+
+    async def _override(_hass):
+        raise DevOverrideError("bad url")
+
+    monkeypatch.setattr("seenzus_bridge.config_flow.resolve_dev_pairing_api_base", _override)
+
+    create_calls: list[dict] = []
+
+    async def _fake_create(**kwargs):
+        create_calls.append(dict(kwargs))
+        return _result_obj({"ok": True})
+
+    monkeypatch.setattr("seenzus_bridge.config_flow.create_web_pairing_session", _fake_create)
+    flow.async_show_form = lambda *, step_id, data_schema, errors, description_placeholders=None: {
+        "type": "form",
+        "step_id": step_id,
+        "errors": errors,
+    }
+
+    result = await flow.async_step_seamless({})
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "dev_override_invalid"}
+    assert create_calls == []
 
 
 @pytest.mark.asyncio
@@ -619,6 +691,9 @@ async def test_options_seamless_step_uses_options_flow_manager(monkeypatch) -> N
         "seenzus_bridge.config_flow.create_web_pairing_session",
         _fake_create_web_pairing_session,
     )
+    monkeypatch.setattr(
+        "seenzus_bridge.config_flow.resolve_dev_pairing_api_base", _dev_override_none
+    )
     flow.async_external_step = lambda *, step_id, url, description_placeholders=None: {
         "type": "external",
         "step_id": step_id,
@@ -628,6 +703,7 @@ async def test_options_seamless_step_uses_options_flow_manager(monkeypatch) -> N
     result = await flow.async_step_seamless({})
 
     assert context_calls == [(flow.hass, "options-flow-7", FLOW_MANAGER_OPTIONS)]
+    # 模型 A:重配对无视 entry 存值,无 dev 文件 → 内置生产默认。
     assert create_calls[0]["api_base"] == DEFAULT_PAIRING_API_BASE
     assert create_calls[0]["state"] == "jwt-state"
     assert result["type"] == "external"
@@ -636,7 +712,9 @@ async def test_options_seamless_step_uses_options_flow_manager(monkeypatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_options_seamless_form_seeds_api_base_from_entry_data() -> None:
+async def test_options_seamless_form_has_no_fields_ignoring_stored_api_base() -> None:
+    # 即使 entry 里残留联调地址,options 快速配对表单也是零字段——地址只在
+    # 配对发起时由 dev_override 解析,重配对绝不沿用 entry 存值(模型 A)。
     config_entry = FakeConfigEntry(
         data={
             "mqtt_host": "old-broker",
@@ -656,10 +734,7 @@ async def test_options_seamless_form_seeds_api_base_from_entry_data() -> None:
     assert result["type"] == "form"
     assert result["step_id"] == "seamless"
     assert result["errors"] == {}
-    assert (
-        _schema_field_default(result["data_schema"], CONF_PAIRING_API_BASE)
-        == "http://192.168.9.99:5078"
-    )
+    assert _schema_field_names(result["data_schema"]) == set()
 
 
 @pytest.mark.asyncio
@@ -724,10 +799,8 @@ async def test_seamless_finish_error_reshows_seamless_form_without_placeholder_s
     assert result["type"] == "form"
     assert result["step_id"] == "seamless"
     assert result["errors"] == {"base": "quick_pair_callback_timeout"}
-    assert (
-        _schema_field_default(result["data_schema"], CONF_PAIRING_API_BASE)
-        == "https://api.seenzus.xxx/api"
-    )
+    # 重显的快速配对表单无字段(直接提交),错误通过 errors 传达。
+    assert _schema_field_names(result["data_schema"]) == set()
 
 
 @pytest.mark.asyncio
@@ -826,10 +899,8 @@ async def test_seamless_finish_reshows_form_when_session_never_bound(monkeypatch
     assert result["type"] == "form"
     assert result["step_id"] == "seamless"
     assert result["errors"] == {"base": "quick_pair_bootstrap_failed"}
-    assert (
-        _schema_field_default(result["data_schema"], CONF_PAIRING_API_BASE)
-        == "https://api.seenzus.xxx/api"
-    )
+    # 重显的快速配对表单无字段(直接提交),错误通过 errors 传达。
+    assert _schema_field_names(result["data_schema"]) == set()
 
 
 @pytest.mark.asyncio
@@ -1358,6 +1429,9 @@ async def test_seamless_captures_app_return_url_from_session(monkeypatch) -> Non
     monkeypatch.setattr(
         "seenzus_bridge.config_flow.create_web_pairing_session",
         _fake_create_web_pairing_session,
+    )
+    monkeypatch.setattr(
+        "seenzus_bridge.config_flow.resolve_dev_pairing_api_base", _dev_override_none
     )
     flow.async_external_step = lambda *, step_id, url, description_placeholders=None: {
         "type": "external",

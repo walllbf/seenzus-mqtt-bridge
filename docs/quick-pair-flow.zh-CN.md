@@ -44,10 +44,10 @@ sequenceDiagram
 
 入口在 `SavanAIBridgeConfigFlow.async_step_seamless()`。
 
-用户在 HA 添加集成时选择“快速配对”，插件要求用户填写 `seenzus API 地址`，例如：
+用户在 HA 添加集成时选择“快速配对”后直接提交即可——`api_base` 走内置生产默认值（`https://seenzus.ai/api/seenzus`），界面无任何输入项。仅本地联调后端时，在 HA 配置目录放置 `<config>/seenzus_bridge_dev.json` 覆盖（见 `custom_components/seenzus_bridge/dev_override.py`），例如：
 
 ```text
-https://test.neuroncloud.ai/gatewayka/seenzus
+http://192.168.9.99:5078/api
 ```
 
 插件随后构造 HA callback 上下文：
