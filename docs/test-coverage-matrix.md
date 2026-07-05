@@ -1,6 +1,6 @@
 # seenzus MQTT Bridge 测试覆盖对照表
 
-> 现状对照（v0.2.0）。所有测试位于 `tests/` 目录，共 16 个文件。
+> 现状对照（v0.2.0）。所有测试位于 `tests/` 目录，共 17 个文件。
 > 运行：`python -m pytest tests -q`（或先建隔离环境，见 `README.md` 的「测试与验证」）。
 > 本表由 `tests/` 实际收集重建；新增/重命名测试后请同步更新，或直接以 `pytest --collect-only` 为准。
 
@@ -10,19 +10,19 @@
 |---|---|
 | `test_flatten_form_input_merges_section_values` | 分组 section 表单值会被展平合并 |
 | `test_validate_requires_mqtt_host_in_manual_mode` | 手动模式缺 MQTT host 时校验报错 |
-| `test_validate_allows_empty_pairing_api_base_in_seamless_mode` | 快速配对模式允许空 API 地址（回退默认生产地址） |
-| `test_validate_rejects_invalid_pairing_api_base_when_seamless_mode` | 快速配对模式拒绝非法 API 地址 |
-| `test_validate_accepts_local_http_pairing_api_base_when_seamless_mode` | 快速配对接受局域网 `http://IP:port` 地址 |
+| `test_validate_seamless_mode_needs_no_fields` | 快速配对无字段、_validate 恒过（API 地址校验移至 dev_override） |
 | `test_mode_schema_only_shows_pairing_mode` | 第一步只展示模式选择 |
-| `test_schema_shows_pairing_api_base_in_seamless_step` | 快速配对步骤展示 API 地址字段 |
+| `test_seamless_schema_has_no_fields` | 快速配对表单零字段（直接提交，走内置默认 / dev 覆盖文件） |
 | `test_schema_shows_only_manual_fields_in_manual_step` | 手动步骤只展示手动字段 |
 | `test_build_quick_pair_callback_context_uses_plugin_callback` | 回调上下文使用插件本地 callback 路径 |
 | `test_quick_pair_callback_view_routes_options_flow` | callback 能路由到 options flow |
 | `test_seamless_authorize_consumes_stored_callback_payload` | 授权步骤消费信箱中暂存的 callback payload |
 | `test_user_step_shows_mode_selection_form` | 首步展示模式选择表单 |
-| `test_user_step_routes_to_seamless_form` | 选快速配对进入对应表单 |
+| `test_user_step_seamless_launches_pairing_directly` | 选快速配对即直接发起配对（跳过无字段确认页） |
 | `test_user_step_routes_to_manual_form` | 选手动进入对应表单 |
-| `test_seamless_step_starts_external_quick_pair` | 快速配对触发外部授权步骤 |
+| `test_seamless_step_starts_external_quick_pair` | 快速配对触发外部授权步骤（无 dev 文件走生产默认） |
+| `test_seamless_uses_dev_override_api_base_when_present` | 有合法 dev 覆盖文件时配对连联调地址 |
+| `test_seamless_dev_override_invalid_blocks_pairing` | dev 文件非法时 fail-loud 报错拦住配对、不建会话 |
 | `test_seamless_authorize_exchanges_callback_code` | 回跳后用 code 兑换 MQTT 配置 |
 | `test_seamless_authorize_rejects_mismatched_state` | state 不匹配时拒绝 |
 | `test_seamless_authorize_does_not_raise_when_exchange_fails` | 兑换失败不抛异常、走错误提示 |
@@ -31,7 +31,7 @@
 | `test_options_init_shows_mode_selection_form` | options 流首步展示模式选择 |
 | `test_options_flow_creates_entry_with_flattened_data` | options 流用展平数据建 entry |
 | `test_options_seamless_step_uses_options_flow_manager` | options 的快速配对用 options flow manager 恢复 |
-| `test_options_seamless_form_seeds_api_base_from_entry_data` | options 表单用现有 entry 的 API 地址回填 |
+| `test_options_seamless_form_has_no_fields_ignoring_stored_api_base` | options 快速配对表单零字段，无视 entry 残留的联调地址（模型 A） |
 | `test_options_seamless_finish_creates_entry_with_empty_title` | options 收尾建 entry（空标题） |
 | `test_seamless_finish_error_reshows_seamless_form_without_placeholder_support` | 老核缺 placeholder 时降级重显表单 |
 | `test_seamless_finish_polls_legacy_status_until_bound` | 旧核走状态轮询直到 bound |
@@ -59,6 +59,20 @@
 | `test_read_app_return_url_accepts_key_aliases` | 兼容 appReturnUrl/appReturnUri/returnUrl/returnUri |
 | `test_seamless_captures_app_return_url_from_session` | 从 session 捕获返回链接 |
 | `test_seamless_finish_creates_entry_with_return_link` | 成功页附返回链接 + 通知 |
+
+## `tests/test_dev_override.py` — 联调 API 地址覆盖文件（9）
+
+| 测试 | 验证行为 |
+|---|---|
+| `test_read_missing_file_returns_none` | 缺覆盖文件返回 None（普通用户常态，走生产默认） |
+| `test_read_valid_file_returns_raw_value` | 读出合法文件里的 pairing_api_base 原文 |
+| `test_read_empty_or_missing_key_returns_none` | 空值 / 缺键 → None（建了文件未填不算覆盖） |
+| `test_read_malformed_json_raises` | JSON 损坏 → DevOverrideError（fail-loud） |
+| `test_read_non_object_or_non_string_raises` | 顶层非对象 / 值非字符串 → DevOverrideError |
+| `test_resolve_missing_returns_none` | 无文件解析为 None |
+| `test_resolve_valid_returns_normalized_url` | 合法地址归一化（去尾斜杠）后返回 |
+| `test_resolve_invalid_scheme_raises` | 非 http(s) scheme → fail-loud 报错 |
+| `test_resolve_no_scheme_raises` | 缺 scheme 的地址 → fail-loud 报错 |
 
 ## `tests/test_pairing_bootstrap.py` — 配对 HTTP 客户端 / 脱敏（12）
 
