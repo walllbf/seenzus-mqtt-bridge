@@ -723,7 +723,9 @@ class SavanAIBridgeConfigFlow(_QuickPairFlowMixin, config_entries.ConfigFlow, do
             self._selected_pairing_mode = _default_pairing_mode(user_input)
             if self._selected_pairing_mode == PAIRING_MODE_MANUAL:
                 return await self.async_step_manual()
-            return await self.async_step_seamless()
+            # 快速配对无表单字段，直接带空输入发起——选中即开始配对（成功→跳外部
+            # 授权；失败才回落到带错误提示的表单），省掉一屏"直接提交"确认页。
+            return await self.async_step_seamless({})
 
         return self.async_show_form(
             step_id="user",
@@ -759,7 +761,8 @@ class SavanAIBridgeOptionsFlow(_QuickPairFlowMixin, config_entries.OptionsFlow):
             self._selected_pairing_mode = _default_pairing_mode(user_input)
             if self._selected_pairing_mode == PAIRING_MODE_MANUAL:
                 return await self.async_step_manual()
-            return await self.async_step_seamless()
+            # 同 config 流：选中快速配对即直接发起，跳过无字段的确认页。
+            return await self.async_step_seamless({})
 
         return self.async_show_form(
             step_id="init",

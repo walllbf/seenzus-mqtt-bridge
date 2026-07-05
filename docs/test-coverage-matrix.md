@@ -18,7 +18,7 @@
 | `test_quick_pair_callback_view_routes_options_flow` | callback 能路由到 options flow |
 | `test_seamless_authorize_consumes_stored_callback_payload` | 授权步骤消费信箱中暂存的 callback payload |
 | `test_user_step_shows_mode_selection_form` | 首步展示模式选择表单 |
-| `test_user_step_routes_to_seamless_form` | 选快速配对进入对应表单 |
+| `test_user_step_seamless_launches_pairing_directly` | 选快速配对即直接发起配对（跳过无字段确认页） |
 | `test_user_step_routes_to_manual_form` | 选手动进入对应表单 |
 | `test_seamless_step_starts_external_quick_pair` | 快速配对触发外部授权步骤（无 dev 文件走生产默认） |
 | `test_seamless_uses_dev_override_api_base_when_present` | 有合法 dev 覆盖文件时配对连联调地址 |

@@ -240,20 +240,39 @@ async def test_user_step_shows_mode_selection_form(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_user_step_routes_to_seamless_form(monkeypatch) -> None:
+async def test_user_step_seamless_launches_pairing_directly(monkeypatch) -> None:
+    # 选中快速配对即直接发起配对(跳过无字段的确认页):不显示表单,直接
+    # 创建会话并进入外部授权步骤。
     flow = SavanAIBridgeConfigFlow()
+    flow.hass = FakeHass()
     monkeypatch.setattr(flow, "_async_current_entries", lambda: [])
-    flow.async_show_form = lambda *, step_id, data_schema, errors=None: {
-        "type": "form",
+    monkeypatch.setattr(
+        "seenzus_bridge.config_flow._build_quick_pair_callback_context",
+        lambda *_a, **_k: (f"http://homeassistant.local:8123{QUICK_PAIR_CALLBACK_PATH}", "ps", "jwt"),
+    )
+    monkeypatch.setattr(
+        "seenzus_bridge.config_flow.resolve_dev_pairing_api_base", _dev_override_none
+    )
+    create_calls: list[dict] = []
+
+    async def _fake_create(**kwargs):
+        create_calls.append(dict(kwargs))
+        return _result_obj(
+            {"ok": True, "session_id": "wps_1", "pairing_page_url": "https://app.x/wps_1"}
+        )
+
+    monkeypatch.setattr("seenzus_bridge.config_flow.create_web_pairing_session", _fake_create)
+    flow.async_external_step = lambda *, step_id, url, description_placeholders=None: {
+        "type": "external",
         "step_id": step_id,
-        "data_schema": data_schema,
-        "errors": errors or {},
+        "url": url,
     }
 
     result = await flow.async_step_user({CONF_PAIRING_MODE: "seamless"})
 
-    assert result["step_id"] == "seamless"
-    assert _schema_field_names(result["data_schema"]) == set()
+    assert result["type"] == "external"
+    assert result["step_id"] == "seamless_authorize"
+    assert len(create_calls) == 1
 
 
 @pytest.mark.asyncio
