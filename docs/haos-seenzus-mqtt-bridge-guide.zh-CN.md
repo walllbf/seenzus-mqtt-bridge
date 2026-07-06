@@ -14,6 +14,9 @@
   - 快速配对：由 seenzus 后端自动下发，无需自备
   - 手动配置：需自备（推荐 EMQX Cloud / HiveMQ）
 
+> 设备还没接入 Home Assistant？各品牌接入教程（米家、涂鸦、美的、海尔等）与 HACS 安装详解见
+> **[seenzus 文档站 · 接入教程](https://docs.seenzus.ai/reference/faq/)**。桥只转发 HA 里已有的设备——先把设备接进 HA，再装桥。
+
 ---
 
 ## 一、通过 HACS 安装（推荐）
@@ -194,6 +197,9 @@ https://seenzus.ai/ha-pairing?session_id=...&redirect_uri=...&bridge_name=seenzu
 ---
 
 ## 八、常见问题
+
+**设备（米家 / 涂鸦 / 美的等）还没进 HA，去哪看接入教程？**
+见 [seenzus 文档站 · 接入教程](https://docs.seenzus.ai/reference/faq/)——含 HACS 安装与各品牌/类型设备的图文接入步骤。
 
 **搜不到 seenzus MQTT Bridge？**
 确认 HACS 已添加自定义仓库并下载，且**已重启 HA**；手动安装则确认目录为 `/config/custom_components/seenzus_bridge/`。
