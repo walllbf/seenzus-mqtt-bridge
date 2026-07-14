@@ -365,6 +365,14 @@ docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 
 ## 版本变更记录
 
+### v0.2.2 (2026-07-14)
+
+- **品牌图标更换为新版云朵图标**：`brand/` 全套（icon/logo 及 @2x）与组件内图标同步替换，源 SVG 经 Chromium 渲染为透明底 PNG，渐变与滤镜特效无损
+- 品牌小写补漏：`hacs.json` 名称改为 `seenzus MQTT Bridge`（HACS 列表显示随之修正）
+- 文档安全清理：移除文档中的真实 MQTT 凭据与内部测试地址（统一为占位符），安装指南截图对家庭内网设备信息打码
+- 已提交 HACS 官方默认库收录申请（hacs/default#9163，自动校验全部通过，排队人工审核中）
+- 本版无代码逻辑变更，测试基线同 v0.2.1（179 passed）
+
 ### v0.2.1 (2026-07-05)
 
 - **配对 API 地址改用本地覆盖文件**：快速配对表单彻底无输入项，配对地址走内置生产默认；仅联调本地后端时，在 HA 配置目录放置 `<config>/seenzus_bridge_dev.json`（`{"pairing_api_base":"http://…"}`）覆盖。该文件不在插件包内、重装不丢，故联调包与上线包逐字节同一份（详见 `custom_components/seenzus_bridge/dev_override.py`）

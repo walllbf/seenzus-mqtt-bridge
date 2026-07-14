@@ -1,6 +1,6 @@
 # seenzus MQTT Bridge 测试覆盖对照表
 
-> 现状对照（v0.2.1）。所有测试位于 `tests/` 目录，共 17 个文件。
+> 现状对照（v0.2.2）。所有测试位于 `tests/` 目录，共 17 个文件。
 > 运行：`python -m pytest tests -q`（或先建隔离环境，见 `README.md` 的「测试与验证」）。
 > 本表由 `tests/` 实际收集重建；新增/重命名测试后请同步更新，或直接以 `pytest --collect-only` 为准。
 
