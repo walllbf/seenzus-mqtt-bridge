@@ -226,7 +226,7 @@ http://localhost:5000/api/integrations/ha/web-pairing/session/{sessionId}/author
 原因是浏览器不会把 `localhost` 的登录 cookie 发送给远程 API 域名。开发环境需配合：
 
 ```text
-VITE_API_PROXY_TARGET=https://seenzus.ai/api/seenzus
+VITE_API_PROXY_TARGET=<联调后端的 api_base>
 ```
 
 ---
@@ -606,7 +606,7 @@ seenzus/v2/bridge/{bridgeId}/catalog
 
 - 授权请求是否访问了远程 `api_base`
 - 当前页面是否运行在 `localhost`
-- `seenzus.ai` 下是否存在 `sid` cookie
+- `api_base` 对应域名下是否存在 `sid` cookie
 - localhost 调试时是否启用了 `/api` 同源代理
 
 ### 11.2 HA callback 返回 500 UnknownFlow
@@ -713,20 +713,22 @@ mosquitto_sub \
   -v
 ```
 
+> 凭据以配对接口返回的 `mqtt.username/password` 或部署环境变量 `HaBridge__Mqtt__*` 为准，不要把真实凭据写进文档或提交到仓库。
+
 查询匿名 web pairing session：
 
 ```bash
-curl "https://seenzus.ai/api/seenzus/integrations/ha/web-pairing/session/{sessionId}"
+curl "{api_base}/integrations/ha/web-pairing/session/{sessionId}"
 ```
 
 查询设备目录：
 
 ```bash
-curl "https://seenzus.ai/api/seenzus/integrations/ha/bridges/{bridgeId}/device-catalog?refresh=true"
+curl "{api_base}/integrations/ha/bridges/{bridgeId}/device-catalog?refresh=true"
 ```
 
 查询桥接诊断：
 
 ```bash
-curl "https://seenzus.ai/api/seenzus/integrations/ha/bridges/{bridgeId}/diagnostics"
+curl "{api_base}/integrations/ha/bridges/{bridgeId}/diagnostics"
 ```
