@@ -52,6 +52,14 @@ def test_name_with_asterisk_is_model_marked() -> None:
     assert name_has_model_marker("Aqara T1*")
 
 
+def test_user_name_ending_with_asterisk_is_not_model_marked() -> None:
+    assert not name_has_model_marker("客厅灯*")
+
+
+def test_plain_word_ending_with_asterisk_is_not_model_marked() -> None:
+    assert not name_has_model_marker("Living Room Light*")
+
+
 def test_plain_name_is_not_model_marked() -> None:
     assert not name_has_model_marker("Living Room Light")
 

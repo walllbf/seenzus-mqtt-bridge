@@ -16,6 +16,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
+from .bridge_protocol import CATALOG_WIRE_VERSION
 from .entity_filters import name_has_model_marker
 
 # Membership is load-bearing — shrinking this set drops devices from backend catalogs.
@@ -208,8 +209,12 @@ def build_device_catalog_payload(
     payload: dict[str, Any] = {
         "eventId": str(uuid.uuid4()),
         "bridgeId": bridge_id,
+        "wireVersion": CATALOG_WIRE_VERSION,
         "source": source,
         "ts": utc_now_iso(),
+        # ``hass.states.async_all()`` is an atomic local registry snapshot: no
+        # pagination, remote permission boundary, or best-effort page merge.
+        "isComplete": True,
         "devices": catalog,
         "deviceCount": len(catalog),
         "entityCount": sum(int(device.get("entityCount", 0)) for device in catalog),

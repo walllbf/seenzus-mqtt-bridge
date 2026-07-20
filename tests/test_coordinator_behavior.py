@@ -271,6 +271,8 @@ async def test_publish_device_catalog_groups_entities_under_devices(monkeypatch)
     assert coordinator._mqtt_client.published[0]["retain"] is True
     payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
     assert payload["bridgeId"] == "ha-demo"
+    assert payload["wireVersion"] == "2.1"
+    assert payload["isComplete"] is True
     assert payload["deviceCount"] == 1
     assert payload["entityCount"] == 2
     assert payload["devices"][0]["deviceId"] == "device-kitchen"
@@ -510,6 +512,27 @@ async def test_device_catalog_excludes_model_marked_entities(monkeypatch) -> Non
         for entity in device["entities"]
     ]
     assert reported_entities == ["light.kitchen"]
+
+
+@pytest.mark.asyncio
+async def test_device_catalog_keeps_user_name_ending_with_asterisk(monkeypatch) -> None:
+    hass = FakeHass()
+    entry = FakeConfigEntry(data={"mqtt_host": "broker.example.com"})
+    entity_registry = FakeEntityRegistry()
+    device_registry = FakeDeviceRegistry()
+    entity_registry.add("light.living_room", name="客厅灯*")
+    monkeypatch.setattr(er, "async_get", lambda _hass: entity_registry)
+    monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
+    coordinator = BridgeCoordinator(hass, entry)
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    hass.states.set("light.living_room", state="on", attributes={"friendly_name": "客厅灯*"})
+
+    await coordinator._publish_device_catalog(coordinator._mqtt_client, source="test")
+
+    payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
+    assert payload["entityCount"] == 1
+    assert payload["devices"][0]["entities"][0]["entityId"] == "light.living_room"
 
 
 @pytest.mark.asyncio
