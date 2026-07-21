@@ -365,6 +365,12 @@ docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 
 ## 版本变更记录
 
+### v0.2.3 (2026-07-20)
+
+- Catalog 新增 `wireVersion=2.1` 与来源级 `isComplete=true`，让服务端只用完整快照判 soft-missing
+- 星号过滤收窄为末尾含数字的 ASCII 型号 token；`客厅灯*` 等用户命名不再被静默过滤
+- 测试 **182 passed**
+
 ### v0.2.2 (2026-07-14)
 
 - **品牌图标更换为新版云朵图标**：`brand/` 全套（icon/logo 及 @2x）与组件内图标同步替换，源 SVG 经 Chromium 渲染为透明底 PNG，渐变与滤镜特效无损

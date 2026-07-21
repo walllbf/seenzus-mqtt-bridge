@@ -226,7 +226,7 @@ seenzus/v2/bridge/ha-demo/state/light.living_room
 ### 4.8 特别说明
 
 - 插件会过滤自身诊断实体，避免桥内部状态反复镜像到 MQTT
-- 名称(friendly_name)带星号 `*` 的实体(型号/变体标注)不做 state 上报，详见 §5.7
+- 名称末尾带含数字 ASCII 型号 token（如 `T1*`）的实体不做 state 上报，详见 §5.7；普通用户命名里的 `*` 不受影响
 - `state` 默认不 retain
 - `startup_snapshot` 和 `full_snapshot` 的 state 发布使用 `qos=0`，其他 state 使用 `qos=1`
 
@@ -264,8 +264,10 @@ seenzus/v2/bridge/ha-demo/catalog
 {
   "eventId": "7e0afc45-77d8-40b2-b488-8b8cc08a18cb",
   "bridgeId": "ha-demo",
+  "wireVersion": "2.1",
   "source": "startup_snapshot",
   "ts": "2026-04-14T10:20:30.456789+00:00",
+  "isComplete": true,
   "devices": [
     {
       "deviceId": "device-kitchen",
@@ -301,8 +303,10 @@ seenzus/v2/bridge/ha-demo/catalog
 
 - `eventId`: 本次 catalog 快照事件唯一 ID
 - `bridgeId`: 当前桥实例 ID
+- `wireVersion`: Catalog wire Schema 版本；当前为 `2.1`，与插件发布版本、Topic 根路径版本分别演进
 - `source`: 本次 catalog 的来源，取值 `startup_snapshot`（首次连接全量）/ `reconnect`（断线重连重发）/ `command`（收到查询命令回发）。**为开放枚举**：消费方应只识别已知值、对未知值按惰性/基线处理（catalog 无论何种 source 都按整包重新校准设备基线，不据 source 派生事件），后续新增取值不应破坏现有消费方
 - `ts`: 快照生成时间
+- `isComplete`: 本次是否为完整的来源级快照。只有 `true` 才能把未出现的既有设备作为 soft-missing 证据；字段缺省表示旧插件，服务端按完整快照兼容处理。当前插件从 HA 本地状态注册表一次性取全量，无分页或远端权限截断，因此发布 `true`
 - `devices`: 设备列表
 - `deviceCount`: 设备数量
 - `entityCount`(顶层): 所有设备下实体总数
@@ -335,7 +339,7 @@ seenzus/v2/bridge/ha-demo/catalog
 
 - 插件会过滤自身诊断实体，避免桥内部状态进入设备目录
 - 只保留当前 HA 设备 domain 范围内的实体，包括 `light`、`switch`、`climate`、`cover`、`fan`、`lock`、`media_player`、`sensor`、`binary_sensor`、`number`、`select`、`button`、`camera` 等
-- 名称(friendly_name / 设备目录里上报的 `name`)中带有星号 `*` 的实体会被过滤(部分集成用 `*` 标注型号/变体)，既不进入 catalog 也不做 state 上报
+- 只过滤名称末尾形如 `T1*` 的 ASCII 型号 token（token 必须含数字）；用户自定义名称如 `客厅灯*`、`Living Room Light*` 不过滤。该规则同时用于 catalog 与 state 上报
 - 不再因为实体状态是 `unavailable` 或 `unknown` 就从 catalog 中排除；这些实体会保留，且 `available=false`
 - `update` 等非设备控制/感知 domain 不进入 catalog
 
@@ -387,7 +391,7 @@ seenzus/v2/bridge/ha-demo/presence
   "requestCount": 12,
   "errorCount": 1,
   "lastError": null,
-  "version": "0.2.2"
+  "version": "0.2.3"
 }
 ```
 

@@ -5,6 +5,11 @@ import re
 from dataclasses import dataclass
 
 
+# Catalog payload schema. It evolves independently from the plugin release
+# version and from the ``seenzus/v2`` transport topic root.
+CATALOG_WIRE_VERSION = "2.1"
+
+
 @dataclass(slots=True)
 class BridgeTopics:
     """Resolved topic routes for one bridge instance."""
