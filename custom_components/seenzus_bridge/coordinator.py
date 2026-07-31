@@ -81,6 +81,7 @@ from .ha_dispatcher import DispatchPolicy, dispatch
 _LOGGER = logging.getLogger(__name__)
 
 PRESENCE_HEARTBEAT_INTERVAL_SECONDS = 30
+MAX_INFLIGHT_COMMANDS = 8
 
 
 _TLS_CONTEXT_CACHE = None
@@ -191,6 +192,7 @@ class BridgeCoordinator:
         self._pending_state_events: dict[str, Event] = {}
         self._state_worker_task: asyncio.Task | None = None
         self._presence_heartbeat_task: asyncio.Task | None = None
+        self._command_tasks: set[asyncio.Task] = set()
 
     def register_update_listener(self, cb: Callable[[], None]) -> None:
         self._listeners.append(cb)
@@ -357,6 +359,14 @@ class BridgeCoordinator:
             except asyncio.CancelledError:
                 pass
 
+        command_tasks = tuple(self._command_tasks)
+        for task in command_tasks:
+            if not task.done():
+                task.cancel()
+        if command_tasks:
+            await asyncio.gather(*command_tasks, return_exceptions=True)
+        self._command_tasks.clear()
+
         await self._stop_presence_heartbeat()
 
         self._task = None
@@ -508,8 +518,24 @@ class BridgeCoordinator:
             async for message in client.messages:
                 topic = str(message.topic)
                 raw = message.payload.decode(errors="replace")
-                self.hass.async_create_task(self._handle_message(topic, raw, client))
+                self._schedule_message(topic, raw, client)
 
+        return True
+
+    def _schedule_message(self, topic: str, raw: str, client: Any) -> bool:
+        if len(self._command_tasks) >= MAX_INFLIGHT_COMMANDS:
+            self.err_count += 1
+            self.last_error = "command_overload"
+            self._fire()
+            _LOGGER.warning(
+                "Dropping MQTT command while %s handlers are active: %s",
+                MAX_INFLIGHT_COMMANDS,
+                topic,
+            )
+            return False
+        task = self.hass.async_create_task(self._handle_message(topic, raw, client))
+        self._command_tasks.add(task)
+        task.add_done_callback(self._command_tasks.discard)
         return True
 
     async def _try_pairing(self) -> None:

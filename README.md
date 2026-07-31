@@ -365,6 +365,12 @@ docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 
 ## 版本变更记录
 
+### v0.2.4 (2026-07-31)
+
+- MQTT command 处理增加 8 个在飞任务的硬上限，超额消息触发负载保护，不再为每条消息无限创建 task
+- 插件停止时统一取消并回收仍在运行的 command task，避免重载/卸载后残留
+- 测试 **183 passed**
+
 ### v0.2.3 (2026-07-20)
 
 - Catalog 新增 `wireVersion=2.1` 与来源级 `isComplete=true`，让服务端只用完整快照判 soft-missing
