@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
 
 from seenzus_bridge import BridgeCoordinator, er
+from seenzus_bridge.coordinator import MAX_INFLIGHT_COMMANDS
 from seenzus_bridge.bridge_protocol import build_topics
 from tests.helpers import AsyncFakeMQTTClient, FakeConfigEntry, FakeEntityRegistry, FakeHass
 
@@ -154,3 +156,28 @@ async def test_last_req_is_timezone_aware_after_command(command_coordinator) -> 
 
     assert command_coordinator.last_req is not None
     assert command_coordinator.last_req.tzinfo is not None
+
+
+@pytest.mark.asyncio
+async def test_command_scheduling_has_a_hard_inflight_limit(command_coordinator, monkeypatch) -> None:
+    client = AsyncFakeMQTTClient()
+    release = asyncio.Event()
+
+    async def blocked_handler(_topic, _raw, _client) -> None:
+        await release.wait()
+
+    monkeypatch.setattr(command_coordinator, "_handle_message", blocked_handler)
+
+    accepted = [
+        command_coordinator._schedule_message(f"topic/{index}", "{}", client)
+        for index in range(MAX_INFLIGHT_COMMANDS + 1)
+    ]
+
+    assert accepted == ([True] * MAX_INFLIGHT_COMMANDS) + [False]
+    assert len(command_coordinator._command_tasks) == MAX_INFLIGHT_COMMANDS
+    assert command_coordinator.last_error == "command_overload"
+
+    release.set()
+    await asyncio.gather(*tuple(command_coordinator._command_tasks))
+    await asyncio.sleep(0)
+    assert command_coordinator._command_tasks == set()
