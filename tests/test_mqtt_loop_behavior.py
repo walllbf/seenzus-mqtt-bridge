@@ -187,7 +187,7 @@ async def test_loop_happy_connect_subscribes_then_presence_snapshot_catalog(monk
 async def test_loop_catalog_keeps_every_entity_attached_to_an_unfamiliar_device(monkeypatch) -> None:
     entity_registry = FakeEntityRegistry()
     entity_registry.add("sensor.reef_water_temperature", device_id="reef-master-x1")
-    entity_registry.add("reef_controller.feeding_motor", device_id="reef-master-x1")
+    entity_registry.add("reef_controller.feeding_motor", device_id="reef-master-x1", name="Aqara T1*")
     device_registry = FakeDeviceRegistry()
     device_registry.add("reef-master-x1", name="ReefMaster X1", model="X1")
     coordinator, fake = _make_coordinator(

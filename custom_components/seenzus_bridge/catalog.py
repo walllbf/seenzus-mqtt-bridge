@@ -148,7 +148,7 @@ def build_device_catalog_payload(
         attached_to_device = device_id is not None and device_entry is not None
         if not attached_to_device and not is_iot_catalog_entity(entity_payload):
             continue
-        if name_has_model_marker(entity_payload.get("name")):
+        if not attached_to_device and name_has_model_marker(entity_payload.get("name")):
             continue
         if attached_to_device:
             if device_id not in devices:
