@@ -265,6 +265,8 @@ async def test_loop_catalog_keeps_standalone_entities_from_official_platforms(mo
         state="off",
         attributes={"friendly_name": "路由器固件"},
     )
+    coordinator.hass.states.set("input_text.guest_note", state="arriving late")
+    coordinator.hass.states.set("input_datetime.dinner", state="2026-08-08 19:00:00")
     coordinator.hass.states.set("automation.good_night", state="on")
     coordinator.hass.states.set("script.feed_fish", state="off")
     _sleeps, real_sleep = _install_recording_sleep(monkeypatch)
@@ -287,6 +289,16 @@ async def test_loop_catalog_keeps_standalone_entities_from_official_platforms(mo
             }
             for device in payload["devices"]
         ] == [
+            {
+                "deviceId": "input_datetime.dinner",
+                "primaryDomain": "input_datetime",
+                "entities": ["input_datetime.dinner"],
+            },
+            {
+                "deviceId": "input_text.guest_note",
+                "primaryDomain": "input_text",
+                "entities": ["input_text.guest_note"],
+            },
             {
                 "deviceId": "update.router_firmware",
                 "primaryDomain": "update",

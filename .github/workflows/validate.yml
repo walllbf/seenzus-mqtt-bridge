@@ -9,19 +9,34 @@ on:
 
 jobs:
   pytest:
-    name: Pytest (publisher contract)
+    name: Pytest (HA Core ${{ matrix.home_assistant }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - home_assistant: "2025.1.4"
+            python: "3.13"
+            install: "homeassistant==2025.1.4 pytest==8.3.4 pytest-asyncio==0.24.0"
+          - home_assistant: "2026.8.0"
+            python: "3.14.2"
+            install: "git+https://github.com/home-assistant/core.git@2026.8.0 pytest==9.0.3 pytest-asyncio==1.4.0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python }}
           cache: pip
-          cache-dependency-path: requirements_test.txt
-      - name: Install test dependencies
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements_test.txt
-      - name: Run publisher and dispatcher contracts
-        run: python -m pytest -q
+          cache-dependency-path: requirements_contract.txt
+      - name: Install exact Core and contract dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_contract.txt
+          python -m pip install "${{ matrix.install }}"
+      - name: Prove the exact Core version and run publisher contracts
+        run: |
+          python -c "from homeassistant.const import __version__; assert __version__ == '${{ matrix.home_assistant }}', __version__"
+          python -m pytest -q
 
   hassfest:
     name: Hassfest

@@ -28,6 +28,8 @@ HELPER_ENTITY_DOMAINS = frozenset({
     "input_boolean",
     "input_number",
     "input_select",
+    "input_text",
+    "input_datetime",
 })
 IOT_DEVICE_DOMAINS = OFFICIAL_ENTITY_DOMAINS | HELPER_ENTITY_DOMAINS
 
