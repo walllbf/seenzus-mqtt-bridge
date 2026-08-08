@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from homeassistant.const import EntityCategory
+from homeassistant.const import EntityCategory, __version__ as HA_VERSION
 
 from seenzus_bridge import BridgeCoordinator
 from seenzus_bridge.bridge_protocol import build_topics
@@ -317,7 +317,7 @@ async def test_publish_device_catalog_groups_entities_under_devices(monkeypatch)
     assert coordinator._mqtt_client.published[0]["retain"] is True
     payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
     assert payload["bridgeId"] == "ha-demo"
-    assert payload["homeAssistantVersion"] == "2025.1.4"
+    assert payload["homeAssistantVersion"] == HA_VERSION
     assert payload["wireVersion"] == "2.1"
     assert payload["isComplete"] is True
     assert payload["deviceCount"] == 1
