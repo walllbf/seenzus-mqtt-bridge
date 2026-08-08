@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from homeassistant.const import EntityCategory
+from homeassistant.const import EntityCategory, __version__ as HA_VERSION
 
 from seenzus_bridge import BridgeCoordinator
 from seenzus_bridge.bridge_protocol import build_topics
@@ -166,7 +166,7 @@ async def test_publish_state_from_event_publishes_regular_entity_state(coordinat
 
 
 @pytest.mark.asyncio
-async def test_publish_state_from_event_ignores_model_marked_entity(coordinator) -> None:
+async def test_publish_state_from_event_ignores_model_marked_standalone_entity(coordinator) -> None:
     coordinator._mqtt_client = AsyncFakeMQTTClient()
     coordinator._topics = build_topics("seenzus/v2", "ha-demo")
 
@@ -179,6 +179,26 @@ async def test_publish_state_from_event_ignores_model_marked_entity(coordinator)
     )
 
     assert coordinator._mqtt_client.published == []
+
+
+@pytest.mark.asyncio
+async def test_publish_state_from_event_keeps_model_marked_entity_attached_to_device(coordinator) -> None:
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    er.async_get(coordinator.hass).add("sensor.aqara_model", device_id="aqara-t1")
+
+    await coordinator._publish_state_from_event(
+        make_state_changed_event(
+            "sensor.aqara_model",
+            state="unknown",
+            attributes={"friendly_name": "Aqara T1*"},
+        )
+    )
+
+    payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
+    assert payload["entityId"] == "sensor.aqara_model"
+    assert payload["state"] == "unknown"
+    assert payload["available"] is True
 
 
 @pytest.mark.asyncio
@@ -231,7 +251,33 @@ async def test_get_states_command_publishes_full_state_snapshot(coordinator) -> 
     payload = json.loads(state_messages[0]["payload"])
     assert payload["entityId"] == "light.living_room"
     assert payload["state"] == "on"
+    assert payload["available"] is True
     assert payload["source"] == "full_snapshot"
+
+
+@pytest.mark.asyncio
+async def test_get_states_distinguishes_unknown_values_from_unavailable_entities(coordinator) -> None:
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    coordinator._command_prefix = coordinator._topics.command_sub[:-2]
+    coordinator.hass.states.set("light.unavailable", state="unavailable")
+    coordinator.hass.states.set("sensor.unknown", state="unknown")
+
+    await coordinator._handle_v2_command(
+        "snapshot-availability",
+        json.dumps({"msgId": "snapshot-availability", "method": "GET", "path": "/api/states"}),
+        coordinator._mqtt_client,
+    )
+
+    payloads = [
+        json.loads(item["payload"])
+        for item in coordinator._mqtt_client.published
+        if "/state/" in item["topic"]
+    ]
+    assert {payload["entityId"]: payload["available"] for payload in payloads} == {
+        "light.unavailable": False,
+        "sensor.unknown": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -271,6 +317,7 @@ async def test_publish_device_catalog_groups_entities_under_devices(monkeypatch)
     assert coordinator._mqtt_client.published[0]["retain"] is True
     payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
     assert payload["bridgeId"] == "ha-demo"
+    assert payload["homeAssistantVersion"] == HA_VERSION
     assert payload["wireVersion"] == "2.1"
     assert payload["isComplete"] is True
     assert payload["deviceCount"] == 1
@@ -472,7 +519,7 @@ async def test_device_catalog_keeps_ha_device_domain_entities(monkeypatch) -> No
 
     payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
     assert payload["deviceCount"] == 2
-    assert payload["entityCount"] == 3
+    assert payload["entityCount"] == 4
     assert payload["devices"][0]["deviceId"] == "device-kitchen"
     assert [entity["entityId"] for entity in payload["devices"][0]["entities"]] == [
         "light.kitchen",
@@ -481,6 +528,7 @@ async def test_device_catalog_keeps_ha_device_domain_entities(monkeypatch) -> No
     assert payload["devices"][1]["deviceId"] == "device-router"
     assert [entity["entityId"] for entity in payload["devices"][1]["entities"]] == [
         "sensor.router_uptime",
+        "update.router_firmware",
     ]
 
 

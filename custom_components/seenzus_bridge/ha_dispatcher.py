@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import service as service_helper
 
 
 @dataclass(slots=True)
@@ -101,6 +102,10 @@ async def dispatch(
 
     if method == "GET" and path == "/api/states":
         return DispatchResult(status=200, data=[s.as_dict() for s in hass.states.async_all()], touched_entities=[])
+
+    if method == "GET" and path == "/api/services":
+        descriptions = await service_helper.async_get_all_descriptions(hass)
+        return DispatchResult(status=200, data=descriptions, touched_entities=[])
 
     state_match = re.fullmatch(r"/api/states/(.+)", path)
     if method == "GET" and state_match:

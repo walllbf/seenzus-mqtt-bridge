@@ -15,6 +15,7 @@ import json
 import pytest
 
 from homeassistant.core import CoreState
+from homeassistant.helpers import service as service_helper
 
 import seenzus_bridge
 from seenzus_bridge import (
@@ -48,11 +49,20 @@ HAPPY_ENTRY_DATA = {
 }
 
 
-def _make_coordinator(monkeypatch, *, data: dict, cycles: list[dict] | None = None):
+def _make_coordinator(
+    monkeypatch,
+    *,
+    data: dict,
+    cycles: list[dict] | None = None,
+    entity_registry: FakeEntityRegistry | None = None,
+    device_registry: FakeDeviceRegistry | None = None,
+):
     hass = FakeHass()
     entry = FakeConfigEntry(data=data)
-    monkeypatch.setattr(er, "async_get", lambda _hass: FakeEntityRegistry())
-    monkeypatch.setattr(dr, "async_get", lambda _hass: FakeDeviceRegistry())
+    entity_registry = entity_registry or FakeEntityRegistry()
+    device_registry = device_registry or FakeDeviceRegistry()
+    monkeypatch.setattr(er, "async_get", lambda _hass: entity_registry)
+    monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
     coordinator = BridgeCoordinator(hass, entry)
     fake_aiomqtt = FakeAiomqttModule(cycles)
     coordinator._aiomqtt = fake_aiomqtt
@@ -174,6 +184,135 @@ async def test_loop_happy_connect_subscribes_then_presence_snapshot_catalog(monk
 
 
 @pytest.mark.asyncio
+async def test_loop_catalog_keeps_every_entity_attached_to_an_unfamiliar_device(monkeypatch) -> None:
+    entity_registry = FakeEntityRegistry()
+    entity_registry.add("sensor.reef_water_temperature", device_id="reef-master-x1")
+    entity_registry.add("reef_controller.feeding_motor", device_id="reef-master-x1", name="Aqara T1*")
+    device_registry = FakeDeviceRegistry()
+    device_registry.add("reef-master-x1", name="ReefMaster X1", model="X1")
+    coordinator, fake = _make_coordinator(
+        monkeypatch,
+        data=dict(HAPPY_ENTRY_DATA),
+        cycles=[{"end": "block"}],
+        entity_registry=entity_registry,
+        device_registry=device_registry,
+    )
+    coordinator.hass.states.set(
+        "sensor.reef_water_temperature",
+        state="25.2",
+        attributes={"device_class": "temperature", "unit_of_measurement": "°C"},
+    )
+    coordinator.hass.states.set("reef_controller.feeding_motor", state="idle")
+    _sleeps, real_sleep = _install_recording_sleep(monkeypatch)
+    coordinator._on_ha_started(None)
+
+    task = asyncio.get_running_loop().create_task(coordinator._mqtt_loop())
+    try:
+        for _ in range(5):
+            await real_sleep(0)
+
+        catalog_message = next(
+            item for item in fake.clients[0].published if item["topic"] == CATALOG_TOPIC
+        )
+        payload = json.loads(catalog_message["payload"])
+        device = payload["devices"][0]
+        assert {
+            "deviceId": device["deviceId"],
+            "name": device["name"],
+            "entityCount": device["entityCount"],
+            "entities": [
+                {
+                    "entityId": entity["entityId"],
+                    "domain": entity["domain"],
+                    "state": entity["state"],
+                    **({"deviceClass": entity["deviceClass"]} if "deviceClass" in entity else {}),
+                    **({"unit": entity["unit"]} if "unit" in entity else {}),
+                }
+                for entity in device["entities"]
+            ],
+        } == {
+            "deviceId": "reef-master-x1",
+            "name": "ReefMaster X1",
+            "entityCount": 2,
+            "entities": [
+                {
+                    "entityId": "sensor.reef_water_temperature",
+                    "domain": "sensor",
+                    "state": "25.2",
+                    "deviceClass": "temperature",
+                    "unit": "°C",
+                },
+                {
+                    "entityId": "reef_controller.feeding_motor",
+                    "domain": "reef_controller",
+                    "state": "idle",
+                },
+            ],
+        }
+    finally:
+        await _shutdown_loop(coordinator, task)
+
+
+@pytest.mark.asyncio
+async def test_loop_catalog_keeps_standalone_entities_from_official_platforms(monkeypatch) -> None:
+    coordinator, fake = _make_coordinator(
+        monkeypatch,
+        data=dict(HAPPY_ENTRY_DATA),
+        cycles=[{"end": "block"}],
+    )
+    coordinator.hass.states.set(
+        "update.router_firmware",
+        state="off",
+        attributes={"friendly_name": "路由器固件"},
+    )
+    coordinator.hass.states.set("input_text.guest_note", state="unknown")
+    coordinator.hass.states.set("input_datetime.dinner", state="2026-08-08 19:00:00")
+    coordinator.hass.states.set("automation.good_night", state="on")
+    coordinator.hass.states.set("script.feed_fish", state="off")
+    _sleeps, real_sleep = _install_recording_sleep(monkeypatch)
+    coordinator._on_ha_started(None)
+
+    task = asyncio.get_running_loop().create_task(coordinator._mqtt_loop())
+    try:
+        for _ in range(5):
+            await real_sleep(0)
+
+        catalog_message = next(
+            item for item in fake.clients[0].published if item["topic"] == CATALOG_TOPIC
+        )
+        payload = json.loads(catalog_message["payload"])
+        assert next(
+            device for device in payload["devices"] if device["deviceId"] == "input_text.guest_note"
+        )["entities"][0]["available"] is True
+        assert [
+            {
+                "deviceId": device["deviceId"],
+                "primaryDomain": device["primaryDomain"],
+                "entities": [entity["entityId"] for entity in device["entities"]],
+            }
+            for device in payload["devices"]
+        ] == [
+            {
+                "deviceId": "input_datetime.dinner",
+                "primaryDomain": "input_datetime",
+                "entities": ["input_datetime.dinner"],
+            },
+            {
+                "deviceId": "input_text.guest_note",
+                "primaryDomain": "input_text",
+                "entities": ["input_text.guest_note"],
+            },
+            {
+                "deviceId": "update.router_firmware",
+                "primaryDomain": "update",
+                "entities": ["update.router_firmware"],
+            },
+        ]
+    finally:
+        await _shutdown_loop(coordinator, task)
+
+
+@pytest.mark.asyncio
 async def test_loop_wss_entry_connects_with_websockets_transport(monkeypatch) -> None:
     # wss entry（issue #14）：连接层给 aiomqtt.Client 附加 websockets transport、
     # 握手路径与 TLS 上下文；裸 TCP entry 不带这三个键（见 happy 测试的
@@ -287,6 +426,51 @@ async def test_loop_defers_startup_snapshot_until_ha_started(monkeypatch) -> Non
         assert CATALOG_TOPIC in topics
         assert coordinator._initial_snapshot_done is True
         assert coordinator.status == "active"
+    finally:
+        await _shutdown_loop(coordinator, task)
+
+
+@pytest.mark.asyncio
+async def test_loop_returns_the_connected_instances_runtime_action_catalog(monkeypatch) -> None:
+    descriptions = {
+        "fan": {
+            "set_percentage": {
+                "target": {"entity": {"domain": "fan", "supported_features": [1]}},
+                "fields": {"percentage": {"selector": {"number": {"min": 0, "max": 100}}}},
+            },
+        },
+    }
+
+    async def fake_descriptions(_hass):
+        return descriptions
+
+    monkeypatch.setattr(service_helper, "async_get_all_descriptions", fake_descriptions)
+    message = FakeMqttMessage(
+        "seenzus/v2/bridge/ha-demo/command/actions-1",
+        json.dumps({"method": "GET", "path": "/api/services"}),
+    )
+    coordinator, fake = _make_coordinator(
+        monkeypatch,
+        data=dict(HAPPY_ENTRY_DATA),
+        cycles=[{"messages": [message], "end": "block"}],
+    )
+    _sleeps, real_sleep = _install_recording_sleep(monkeypatch)
+    coordinator._on_ha_started(None)
+
+    task = asyncio.get_running_loop().create_task(coordinator._mqtt_loop())
+    try:
+        for _ in range(10):
+            await real_sleep(0)
+
+        result_message = next(
+            item for item in fake.clients[0].published if item["topic"].endswith("/result/actions-1")
+        )
+        result = json.loads(result_message["payload"])
+        assert {
+            "success": result["success"],
+            "status": result["status"],
+            "data": result["data"],
+        } == {"success": True, "status": 200, "data": descriptions}
     finally:
         await _shutdown_loop(coordinator, task)
 
