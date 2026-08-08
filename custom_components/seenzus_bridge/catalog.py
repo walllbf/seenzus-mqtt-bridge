@@ -60,7 +60,7 @@ def build_catalog_entity(state: Any, entity_entry: Any, device_entry: Any) -> di
         "name": name,
         "domain": domain,
         "state": state_value,
-        "available": str(state_value).lower() not in {"unavailable", "unknown"},
+        "available": str(state_value).lower() != "unavailable",
         "deviceId": getattr(entity_entry, "device_id", None),
     }
     if area_id:

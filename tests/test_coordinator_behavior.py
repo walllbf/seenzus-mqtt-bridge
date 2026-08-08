@@ -166,7 +166,7 @@ async def test_publish_state_from_event_publishes_regular_entity_state(coordinat
 
 
 @pytest.mark.asyncio
-async def test_publish_state_from_event_ignores_model_marked_entity(coordinator) -> None:
+async def test_publish_state_from_event_ignores_model_marked_standalone_entity(coordinator) -> None:
     coordinator._mqtt_client = AsyncFakeMQTTClient()
     coordinator._topics = build_topics("seenzus/v2", "ha-demo")
 
@@ -179,6 +179,26 @@ async def test_publish_state_from_event_ignores_model_marked_entity(coordinator)
     )
 
     assert coordinator._mqtt_client.published == []
+
+
+@pytest.mark.asyncio
+async def test_publish_state_from_event_keeps_model_marked_entity_attached_to_device(coordinator) -> None:
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    er.async_get(coordinator.hass).add("sensor.aqara_model", device_id="aqara-t1")
+
+    await coordinator._publish_state_from_event(
+        make_state_changed_event(
+            "sensor.aqara_model",
+            state="unknown",
+            attributes={"friendly_name": "Aqara T1*"},
+        )
+    )
+
+    payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
+    assert payload["entityId"] == "sensor.aqara_model"
+    assert payload["state"] == "unknown"
+    assert payload["available"] is True
 
 
 @pytest.mark.asyncio

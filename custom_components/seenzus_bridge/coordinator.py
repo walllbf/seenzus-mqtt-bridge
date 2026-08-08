@@ -283,8 +283,12 @@ class BridgeCoordinator:
         return bool(registry_entry and registry_entry.config_entry_id == self._entry.entry_id)
 
     @callback
-    def _is_model_marked_entity(self, state: Any) -> bool:
-        """True for entities whose friendly name carries a model marker ('*')."""
+    def _is_model_marked_standalone_entity(self, state: Any) -> bool:
+        """Filter marker noise only when the Entity is not attached to a registered HA Device."""
+        entity_id = getattr(state, "entity_id", "")
+        registry_entry = er.async_get(self.hass).async_get(entity_id) if entity_id else None
+        if registry_entry is not None and getattr(registry_entry, "device_id", None):
+            return False
         attributes = getattr(state, "attributes", None) or {}
         return name_has_model_marker(attributes.get("friendly_name"))
 
@@ -682,7 +686,7 @@ class BridgeCoordinator:
             entity_id = getattr(state, "entity_id", "")
             if not entity_id or self._is_own_entity(entity_id):
                 continue
-            if self._is_model_marked_entity(state):
+            if self._is_model_marked_standalone_entity(state):
                 continue
             await self._publish_state_for_entity(
                 client, entity_id, source=source, correlation_id=correlation_id, qos=snapshot_qos
@@ -765,7 +769,7 @@ class BridgeCoordinator:
         state = self.hass.states.get(entity_id)
         if state is None:
             return
-        if self._is_model_marked_entity(state):
+        if self._is_model_marked_standalone_entity(state):
             return
         topic_entity = entity_id.replace("/", "_")
         payload = self._build_state_payload(
@@ -788,7 +792,7 @@ class BridgeCoordinator:
         entity_id = getattr(new_state, "entity_id", None) if new_state is not None else None
         if not entity_id or self._is_own_entity(entity_id):
             return
-        if self._is_model_marked_entity(new_state):
+        if self._is_model_marked_standalone_entity(new_state):
             return
         self._pending_state_events[entity_id] = event
         if self._state_worker_task is None or self._state_worker_task.done():
@@ -813,7 +817,7 @@ class BridgeCoordinator:
             return
         if self._is_own_entity(new_state.entity_id):
             return
-        if self._is_model_marked_entity(new_state):
+        if self._is_model_marked_standalone_entity(new_state):
             return
         payload = self._build_state_payload(
             new_state.entity_id, new_state, source="ha_state_changed"

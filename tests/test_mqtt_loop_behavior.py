@@ -265,7 +265,7 @@ async def test_loop_catalog_keeps_standalone_entities_from_official_platforms(mo
         state="off",
         attributes={"friendly_name": "路由器固件"},
     )
-    coordinator.hass.states.set("input_text.guest_note", state="arriving late")
+    coordinator.hass.states.set("input_text.guest_note", state="unknown")
     coordinator.hass.states.set("input_datetime.dinner", state="2026-08-08 19:00:00")
     coordinator.hass.states.set("automation.good_night", state="on")
     coordinator.hass.states.set("script.feed_fish", state="off")
@@ -281,6 +281,9 @@ async def test_loop_catalog_keeps_standalone_entities_from_official_platforms(mo
             item for item in fake.clients[0].published if item["topic"] == CATALOG_TOPIC
         )
         payload = json.loads(catalog_message["payload"])
+        assert next(
+            device for device in payload["devices"] if device["deviceId"] == "input_text.guest_note"
+        )["entities"][0]["available"] is True
         assert [
             {
                 "deviceId": device["deviceId"],
