@@ -739,7 +739,9 @@ class BridgeCoordinator:
             "entityId": entity_id,
             "state": state_obj.state,
             "attributes": dict(state_obj.attributes),
-            "available": str(state_obj.state).lower() not in {"unavailable", "unknown"},
+            # HA reserves `unavailable` for reachability. `unknown` means the Entity is present but
+            # its current value is unknown (common for stateless buttons), not that it is offline.
+            "available": str(state_obj.state).lower() != "unavailable",
             "ts": utc_now_iso(),
             "source": source,
         }

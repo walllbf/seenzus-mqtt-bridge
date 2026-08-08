@@ -236,7 +236,7 @@ async def test_get_states_command_publishes_full_state_snapshot(coordinator) -> 
 
 
 @pytest.mark.asyncio
-async def test_get_states_marks_unknown_and_unavailable_entities_unavailable(coordinator) -> None:
+async def test_get_states_distinguishes_unknown_values_from_unavailable_entities(coordinator) -> None:
     coordinator._mqtt_client = AsyncFakeMQTTClient()
     coordinator._topics = build_topics("seenzus/v2", "ha-demo")
     coordinator._command_prefix = coordinator._topics.command_sub[:-2]
@@ -256,7 +256,7 @@ async def test_get_states_marks_unknown_and_unavailable_entities_unavailable(coo
     ]
     assert {payload["entityId"]: payload["available"] for payload in payloads} == {
         "light.unavailable": False,
-        "sensor.unknown": False,
+        "sensor.unknown": True,
     }
 
 
