@@ -365,6 +365,15 @@ docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 
 ## 版本变更记录
 
+### v0.2.5 (2026-08-08)
+
+- Catalog 上报真实 Home Assistant Core 版本和运行时 Action Catalog，为 seenzus 的版本化能力门与安全反控提供证据
+- 保留所有绑定 HA Device 的 Entity 及其启动快照、全量快照、状态事件和命令回读；独立 Entity 仍只允许官方 Platform 或明确 Helper
+- `unknown` 表示值未知但 Entity 仍可用，只有 `unavailable` 表示不可达
+- Helper 白名单补齐 `input_text`、`input_datetime`
+- CI 固定验证 HA Core 2025.1.4 / Python 3.13 与 HA Core 2026.8.0 / Python 3.14.2
+- 两个真实 Core 版本下完整测试均为 **190 passed**，Hassfest 与 HACS 校验通过
+
 ### v0.2.4 (2026-07-31)
 
 - MQTT command 处理增加 8 个在飞任务的硬上限，超额消息触发负载保护，不再为每条消息无限创建 task
