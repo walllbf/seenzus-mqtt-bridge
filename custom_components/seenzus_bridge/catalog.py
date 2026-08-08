@@ -12,6 +12,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from homeassistant.const import Platform, __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -19,37 +20,16 @@ from homeassistant.helpers import entity_registry as er
 from .bridge_protocol import CATALOG_WIRE_VERSION
 from .entity_filters import name_has_model_marker
 
-# Membership is load-bearing — shrinking this set drops devices from backend catalogs.
-IOT_DEVICE_DOMAINS = {
-    "alarm_control_panel",
-    "automation",
-    "binary_sensor",
-    "button",
-    "camera",
-    "climate",
-    "cover",
-    "fan",
-    "humidifier",
+# Membership is load-bearing — shrinking it drops standalone official Entities before the
+# backend can classify them. Official membership follows the installed HA release; these Helpers
+# remain explicit because they are useful household entities but are not EntityPlatforms.
+OFFICIAL_ENTITY_DOMAINS = frozenset(platform.value for platform in Platform)
+HELPER_ENTITY_DOMAINS = frozenset({
     "input_boolean",
     "input_number",
     "input_select",
-    "lawn_mower",
-    "light",
-    "lock",
-    "media_player",
-    "number",
-    "remote",
-    "scene",
-    "select",
-    "sensor",
-    "siren",
-    "script",
-    "switch",
-    "text",
-    "vacuum",
-    "valve",
-    "water_heater",
-}
+})
+IOT_DEVICE_DOMAINS = OFFICIAL_ENTITY_DOMAINS | HELPER_ENTITY_DOMAINS
 
 
 def utc_now_iso() -> str:
@@ -163,11 +143,12 @@ def build_device_catalog_payload(
             device_entry = device_registry.async_get(device_id)
 
         entity_payload = build_catalog_entity(state, entity_entry, device_entry)
-        if not is_iot_catalog_entity(entity_payload):
+        attached_to_device = device_id is not None and device_entry is not None
+        if not attached_to_device and not is_iot_catalog_entity(entity_payload):
             continue
         if name_has_model_marker(entity_payload.get("name")):
             continue
-        if device_id and device_entry is not None:
+        if attached_to_device:
             if device_id not in devices:
                 devices[device_id] = build_catalog_device(device_id, device_entry)
             devices[device_id]["entities"].append(entity_payload)
@@ -209,6 +190,7 @@ def build_device_catalog_payload(
     payload: dict[str, Any] = {
         "eventId": str(uuid.uuid4()),
         "bridgeId": bridge_id,
+        "homeAssistantVersion": HA_VERSION,
         "wireVersion": CATALOG_WIRE_VERSION,
         "source": source,
         "ts": utc_now_iso(),

@@ -231,7 +231,33 @@ async def test_get_states_command_publishes_full_state_snapshot(coordinator) -> 
     payload = json.loads(state_messages[0]["payload"])
     assert payload["entityId"] == "light.living_room"
     assert payload["state"] == "on"
+    assert payload["available"] is True
     assert payload["source"] == "full_snapshot"
+
+
+@pytest.mark.asyncio
+async def test_get_states_marks_unknown_and_unavailable_entities_unavailable(coordinator) -> None:
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    coordinator._command_prefix = coordinator._topics.command_sub[:-2]
+    coordinator.hass.states.set("light.unavailable", state="unavailable")
+    coordinator.hass.states.set("sensor.unknown", state="unknown")
+
+    await coordinator._handle_v2_command(
+        "snapshot-availability",
+        json.dumps({"msgId": "snapshot-availability", "method": "GET", "path": "/api/states"}),
+        coordinator._mqtt_client,
+    )
+
+    payloads = [
+        json.loads(item["payload"])
+        for item in coordinator._mqtt_client.published
+        if "/state/" in item["topic"]
+    ]
+    assert {payload["entityId"]: payload["available"] for payload in payloads} == {
+        "light.unavailable": False,
+        "sensor.unknown": False,
+    }
 
 
 @pytest.mark.asyncio
@@ -271,6 +297,7 @@ async def test_publish_device_catalog_groups_entities_under_devices(monkeypatch)
     assert coordinator._mqtt_client.published[0]["retain"] is True
     payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
     assert payload["bridgeId"] == "ha-demo"
+    assert payload["homeAssistantVersion"] == "2025.1.4"
     assert payload["wireVersion"] == "2.1"
     assert payload["isComplete"] is True
     assert payload["deviceCount"] == 1
@@ -472,7 +499,7 @@ async def test_device_catalog_keeps_ha_device_domain_entities(monkeypatch) -> No
 
     payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
     assert payload["deviceCount"] == 2
-    assert payload["entityCount"] == 3
+    assert payload["entityCount"] == 4
     assert payload["devices"][0]["deviceId"] == "device-kitchen"
     assert [entity["entityId"] for entity in payload["devices"][0]["entities"]] == [
         "light.kitchen",
@@ -481,6 +508,7 @@ async def test_device_catalog_keeps_ha_device_domain_entities(monkeypatch) -> No
     assert payload["devices"][1]["deviceId"] == "device-router"
     assert [entity["entityId"] for entity in payload["devices"][1]["entities"]] == [
         "sensor.router_uptime",
+        "update.router_firmware",
     ]
 
 

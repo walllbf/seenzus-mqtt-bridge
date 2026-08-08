@@ -739,6 +739,7 @@ class BridgeCoordinator:
             "entityId": entity_id,
             "state": state_obj.state,
             "attributes": dict(state_obj.attributes),
+            "available": str(state_obj.state).lower() not in {"unavailable", "unknown"},
             "ts": utc_now_iso(),
             "source": source,
         }
