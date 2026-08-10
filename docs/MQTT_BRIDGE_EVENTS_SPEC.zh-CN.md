@@ -334,6 +334,10 @@ seenzus/v2/bridge/ha-demo/catalog
 - `unit`: 可选,HA `unit_of_measurement`(来自 state.attributes,有才发)
 - `icon`: 可选,HA `icon`(来自 state.attributes,有才发)
 - `entityCategory`: 可选,HA entity registry 的 `entity_category`,取值 `"config"` / `"diagnostic"`;普通控制实体(`entity_category=None` 或不在 registry)**省略此键**。后端据它把配置/诊断实体踢出控制面
+- `stableEntityId`: 可选,优先取 HA entity registry 稳定 `id`,缺失时回退 `unique_id`;用于实体改名或 `entityId` 变化后保持长期身份
+- `isMainFeature`: 可选,HA entity naming 开启且无 entity-specific name 时为 `true`;用于识别设备主功能
+- `hidden`: 可选,entity registry 的 `hidden_by` 非空时为 `true`;否则省略
+- `disabled`: 可选,entity registry 的 `disabled_by` 非空时为 `true`;否则省略
 
 ### 5.7 过滤规则
 
