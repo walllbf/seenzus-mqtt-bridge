@@ -365,6 +365,14 @@ docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 
 ## 版本变更记录
 
+### v0.2.6 (2026-08-14)
+
+- MQTT 完整重连成功后清除历史 `Last error`，诊断状态不再保留已经恢复的断线或发布超时
+- 配置重载前的 retained topic 清理改为 best-effort；普通 MQTT 超时只记录汇总告警，仍继续完成集成重载
+- 保留 Home Assistant 的任务取消语义，不把 `CancelledError` 当作普通清理失败吞掉
+- Bridge ID 变化时同时清理旧 `presence` 与旧 `catalog` retained topic
+- 全量测试 **192 passed**，HA Core 双版本、Hassfest 与 HACS 校验通过
+
 ### v0.2.5 (2026-08-08)
 
 - Catalog 上报真实 Home Assistant Core 版本和运行时 Action Catalog，为 seenzus 的版本化能力门与安全反控提供证据
