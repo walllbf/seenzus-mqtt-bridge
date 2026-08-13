@@ -393,6 +393,9 @@ async def test_loop_publishes_startup_snapshot_once_across_reconnect_cycles(monk
     assert json.loads(reconnect_catalog["payload"])["source"] == "reconnect"
     assert coordinator._initial_snapshot_done is True
     assert coordinator._mqtt_client is None
+    # A recovered connection must not keep presenting the previous iterator
+    # disconnect as its current Last error.
+    assert coordinator.last_error is None
     # MqttError retry backoff is 5s (heartbeat sleeps filtered out).
     assert [delay for delay in sleeps if delay in (5, 10)] == [5]
 

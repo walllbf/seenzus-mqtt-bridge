@@ -398,8 +398,25 @@ class BridgeCoordinator:
         if self._mqtt_client is None:
             return
 
-        for topic in topics_to_clear:
-            await self._mqtt_client.publish(topic, "", qos=1, retain=True)
+        results = await asyncio.gather(
+            *(
+                self._mqtt_client.publish(topic, "", qos=1, retain=True)
+                for topic in topics_to_clear
+            ),
+            return_exceptions=True,
+        )
+        cancelled = next(
+            (result for result in results if isinstance(result, asyncio.CancelledError)),
+            None,
+        )
+        if cancelled is not None:
+            raise cancelled
+        failed = sum(isinstance(result, Exception) for result in results)
+        if failed:
+            _LOGGER.warning(
+                "Failed to clear %s retained MQTT topic(s) before reload; continuing",
+                failed,
+            )
 
     async def _mqtt_loop(self) -> None:
         """Retry shell: backoff/cleanup around each _connect_and_serve cycle."""
@@ -507,6 +524,7 @@ class BridgeCoordinator:
 
             self.status = "active"
             self.mqtt_connected = True
+            self.last_error = None
             if self.pairing_mode == PAIRING_MODE_SEAMLESS and self.pairing_status != PAIRING_STATUS_BOUND:
                 self._set_pairing_step("bridge_ready")
                 self.pairing_status = PAIRING_STATUS_BRIDGE_READY
