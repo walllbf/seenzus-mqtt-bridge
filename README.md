@@ -371,7 +371,9 @@ docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 - 配置重载前的 retained topic 清理改为 best-effort；普通 MQTT 超时只记录汇总告警，仍继续完成集成重载
 - 保留 Home Assistant 的任务取消语义，不把 `CancelledError` 当作普通清理失败吞掉
 - Bridge ID 变化时同时清理旧 `presence` 与旧 `catalog` retained topic
-- 全量测试 **192 passed**，HA Core 双版本、Hassfest 与 HACS 校验通过
+- Catalog Entity 增加来源范围内稳定的 `registryId` 与主功能命名证据 `originalName`
+- 可选发布注册表隐藏/禁用状态，旧消费者与没有注册表证据的 Entity 保持兼容
+- 全量测试 **194 passed**，HA Core 双版本、Hassfest 与 HACS 校验通过
 
 ### v0.2.5 (2026-08-08)
 
