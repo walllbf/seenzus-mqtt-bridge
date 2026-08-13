@@ -135,6 +135,11 @@ class FakeEntityRegistry:
         name: str | None = None,
         original_name: str | None = None,
         entity_category=None,
+        registry_id: str | None = None,
+        unique_id: str | None = None,
+        has_entity_name: bool = False,
+        hidden_by=None,
+        disabled_by=None,
     ) -> None:
         self.entities._entries.append(
             SimpleNamespace(
@@ -145,6 +150,11 @@ class FakeEntityRegistry:
                 name=name,
                 original_name=original_name,
                 entity_category=entity_category,
+                id=registry_id,
+                unique_id=unique_id,
+                has_entity_name=has_entity_name,
+                hidden_by=hidden_by,
+                disabled_by=disabled_by,
             )
         )
 

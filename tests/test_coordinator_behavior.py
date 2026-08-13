@@ -410,6 +410,61 @@ async def test_device_catalog_omits_entity_category_for_primary_controls(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_device_catalog_reports_optional_control_profile_evidence(monkeypatch) -> None:
+    hass = FakeHass()
+    entry = FakeConfigEntry(data={"mqtt_host": "broker.example.com"})
+    entity_registry = FakeEntityRegistry()
+    device_registry = FakeDeviceRegistry()
+    entity_registry.add(
+        "switch.living_room",
+        registry_id="registry-entry-1",
+        unique_id="integration-unique-1",
+        has_entity_name=True,
+        hidden_by="user",
+        disabled_by="integration",
+    )
+    monkeypatch.setattr(er, "async_get", lambda _hass: entity_registry)
+    monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
+    coordinator = BridgeCoordinator(hass, entry)
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    hass.states.set("switch.living_room", state="off")
+
+    await coordinator._publish_device_catalog(coordinator._mqtt_client, source="test")
+
+    payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
+    entity = payload["devices"][0]["entities"][0]
+    assert entity["stableEntityId"] == "registry-entry-1"
+    assert entity["isMainFeature"] is True
+    assert entity["hidden"] is True
+    assert entity["disabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_device_catalog_omits_absent_control_profile_evidence(monkeypatch) -> None:
+    hass = FakeHass()
+    entry = FakeConfigEntry(data={"mqtt_host": "broker.example.com"})
+    entity_registry = FakeEntityRegistry()
+    device_registry = FakeDeviceRegistry()
+    entity_registry.add("switch.living_room", name="Living Room")
+    monkeypatch.setattr(er, "async_get", lambda _hass: entity_registry)
+    monkeypatch.setattr(dr, "async_get", lambda _hass: device_registry)
+    coordinator = BridgeCoordinator(hass, entry)
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    hass.states.set("switch.living_room", state="off")
+
+    await coordinator._publish_device_catalog(coordinator._mqtt_client, source="test")
+
+    payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
+    entity = payload["devices"][0]["entities"][0]
+    assert "stableEntityId" not in entity
+    assert "isMainFeature" not in entity
+    assert "hidden" not in entity
+    assert "disabled" not in entity
+
+
+@pytest.mark.asyncio
 async def test_device_catalog_reports_partial_availability(monkeypatch) -> None:
     """A device with some unavailable entities reports counts and stays online."""
     hass = FakeHass()

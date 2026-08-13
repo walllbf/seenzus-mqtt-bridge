@@ -78,6 +78,18 @@ def build_catalog_entity(state: Any, entity_entry: Any, device_entry: Any) -> di
     entity_category = getattr(entity_entry, "entity_category", None)
     if entity_category is not None:
         entity["entityCategory"] = getattr(entity_category, "value", entity_category)
+
+    # Additive registry evidence lets consumers preserve selections across entity-id renames and
+    # distinguish a device's main feature from hidden or disabled technical entities.
+    stable_entity_id = getattr(entity_entry, "id", None) or getattr(entity_entry, "unique_id", None)
+    if stable_entity_id:
+        entity["stableEntityId"] = str(stable_entity_id)
+    if getattr(entity_entry, "has_entity_name", False) and getattr(entity_entry, "name", None) is None:
+        entity["isMainFeature"] = True
+    if getattr(entity_entry, "hidden_by", None) is not None:
+        entity["hidden"] = True
+    if getattr(entity_entry, "disabled_by", None) is not None:
+        entity["disabled"] = True
     return entity
 
 
