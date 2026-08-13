@@ -59,7 +59,7 @@ def build_topics(topic_root: str, bridge_id: str) -> BridgeTopics:
 
 def retained_topics_for_bridge(topics: BridgeTopics) -> list[str]:
     """Return the retained topics currently used by one bridge."""
-    return [topics.presence_topic]
+    return [topics.presence_topic, topics.catalog_topic]
 
 
 def retained_topics_to_clear_on_reload(
