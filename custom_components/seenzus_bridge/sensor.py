@@ -110,6 +110,7 @@ class BridgeStatusSensor(_BridgeBaseSensor):
             "raw_status":       c.status,
             "last_request":     c.last_req.isoformat() if c.last_req else None,
             "last_error":       c.last_error,
+            "last_cleanup_diagnostic": c.last_cleanup_diagnostic,
             "mqtt_transport":   transport_scheme,
             "mqtt_ws_path":     transport_ws_path,
             "topic_root":       conf.get(CONF_TOPIC_ROOT, DEFAULT_TOPIC_ROOT),

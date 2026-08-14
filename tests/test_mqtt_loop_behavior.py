@@ -122,7 +122,8 @@ async def test_loop_missing_host_marks_error_and_waits_for_external_auth(monkeyp
     sleeps, _real_sleep = _install_recording_sleep(monkeypatch, cancel_on=10)
 
     task = asyncio.get_running_loop().create_task(coordinator._mqtt_loop())
-    await asyncio.wait_for(task, timeout=5)
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=5)
 
     assert coordinator.status == "error"
     assert coordinator.mqtt_connected is False
@@ -368,7 +369,8 @@ async def test_loop_publishes_startup_snapshot_once_across_reconnect_cycles(monk
     coordinator._on_ha_started(None)
 
     task = asyncio.get_running_loop().create_task(coordinator._mqtt_loop())
-    await asyncio.wait_for(task, timeout=5)
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=5)
 
     assert len(fake.clients) == 2
     first_cycle, second_cycle = fake.clients

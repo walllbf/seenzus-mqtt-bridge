@@ -16,6 +16,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_STATE_CHANGED
 from homeassistant.core import CoreState, Event, HomeAssistant, callback
@@ -82,6 +83,8 @@ _LOGGER = logging.getLogger(__name__)
 
 PRESENCE_HEARTBEAT_INTERVAL_SECONDS = 30
 MAX_INFLIGHT_COMMANDS = 8
+SHUTDOWN_CLEANUP_TIMEOUT_SECONDS = 3.0
+RELOAD_CLEANUP_TIMEOUT_SECONDS = 10.0
 
 
 _TLS_CONTEXT_CACHE = None
@@ -157,6 +160,9 @@ class BridgeCoordinator:
         self.err_count = 0
         self.last_req: datetime | None = None
         self.last_error: str | None = None
+        self.last_cleanup_diagnostic: str | None = None
+        self._cleanup_stage: str | None = None
+        self._reload_cleanup_deadline: float | None = None
         self.result_count = 0
         self.state_push_count = 0
         self.pairing_mode = PAIRING_MODE_MANUAL
@@ -245,11 +251,23 @@ class BridgeCoordinator:
         self.status = "error"
         self.mqtt_connected = False
         self.last_error = message
+        lowered = message.lower()
+        if "not authorized" not in lowered and "code:135" not in lowered:
+            return
         if self._resolve_pairing_mode() == PAIRING_MODE_SEAMLESS:
-            lowered = message.lower()
-            if "not authorized" in lowered or "code:135" in lowered:
-                self.pairing_status = PAIRING_STATUS_MQTT_AUTH_FAILED
-                self.pairing_last_error = message
+            self.pairing_status = PAIRING_STATUS_MQTT_AUTH_FAILED
+            self.pairing_last_error = message
+        if self.hass.state not in {
+            CoreState.stopping,
+            CoreState.final_write,
+            CoreState.stopped,
+        }:
+            persistent_notification.async_create(
+                self.hass,
+                "MQTT authentication failed. Check or renew the seenzus pairing credentials.",
+                title="seenzus MQTT Bridge authentication failed",
+                notification_id=f"seenzus_bridge_mqtt_auth_{self._entry.entry_id}",
+            )
 
     def _dispatch_policy(self) -> DispatchPolicy:
         conf = self._conf()
@@ -319,7 +337,13 @@ class BridgeCoordinator:
                 EVENT_HOMEASSISTANT_STARTED, self._on_ha_started
             )
 
-        self._task = self.hass.async_create_task(self._mqtt_loop())
+        self._task = self._entry.async_create_background_task(
+            self.hass,
+            self._mqtt_loop(),
+            "seenzus MQTT runtime",
+        )
+        if self._task.done():
+            self._task.result()
 
     @callback
     def _on_ha_started(self, _event: Event) -> None:
@@ -334,14 +358,68 @@ class BridgeCoordinator:
             self._state_unsub = self.hass.bus.async_listen(EVENT_STATE_CHANGED, self._on_state_changed)
 
     async def async_stop(self) -> None:
+        """Stop the runtime without allowing external I/O to delay HA."""
+        self._unsubscribe_runtime_listeners()
+        shutting_down = self.hass.state in {
+            CoreState.stopping,
+            CoreState.final_write,
+            CoreState.stopped,
+        }
+        if shutting_down:
+            timeout = SHUTDOWN_CLEANUP_TIMEOUT_SECONDS
+            context = "shutdown"
+        elif self._reload_cleanup_deadline is not None:
+            timeout = max(
+                0.0,
+                self._reload_cleanup_deadline - asyncio.get_running_loop().time(),
+            )
+            context = "manual reload"
+        else:
+            timeout = RELOAD_CLEANUP_TIMEOUT_SECONDS
+            context = "manual unload"
+
+        completed = await self._run_bounded_cleanup(
+            self._async_graceful_stop(),
+            timeout=timeout,
+            stage="runtime cleanup",
+            context=context,
+        )
+        if not completed:
+            self._cancel_runtime_tasks()
+
+        self._task = None
+        self._state_worker_task = None
+        self._presence_heartbeat_task = None
+        self._command_tasks.clear()
+        self._pending_state_events.clear()
+        self._mqtt_client = None
+        self._skip_offline_presence = False
+        self._reload_cleanup_deadline = None
+        self.status = "stopped"
+        self.mqtt_connected = False
+        _LOGGER.info("seenzus Bridge stopped")
+        self._fire()
+
+    def _unsubscribe_runtime_listeners(self) -> None:
         if self._ha_started_unsub is not None:
             self._ha_started_unsub()
             self._ha_started_unsub = None
-
         if self._state_unsub is not None:
             self._state_unsub()
             self._state_unsub = None
 
+    def _cancel_runtime_tasks(self) -> None:
+        for task in (
+            self._task,
+            self._state_worker_task,
+            self._presence_heartbeat_task,
+            *self._command_tasks,
+        ):
+            if task is not None and not task.done():
+                task.cancel()
+
+    async def _async_graceful_stop(self) -> None:
+        self._cleanup_stage = "offline presence"
         if (
             self._mqtt_client is not None
             and self._topics is not None
@@ -349,41 +427,74 @@ class BridgeCoordinator:
         ):
             await self._publish_presence("offline")
 
-        if self._task and not self._task.done():
-            self._task.cancel()
+        self._cancel_runtime_tasks()
+        task_groups = (
+            ("command cancellation", tuple(self._command_tasks)),
+            ("state task cancellation", (self._state_worker_task,)),
+            ("MQTT disconnect", (self._task,)),
+            ("heartbeat cancellation", (self._presence_heartbeat_task,)),
+        )
+        for stage, candidates in task_groups:
+            self._cleanup_stage = stage
+            tasks = tuple(task for task in candidates if task is not None)
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+        self._cleanup_stage = None
+
+    async def _run_bounded_cleanup(
+        self,
+        operation,
+        *,
+        timeout: float,
+        stage: str,
+        context: str,
+    ) -> bool:
+        """Run cleanup with a hard caller-facing deadline.
+
+        This short-lived wrapper is deliberately not config-entry-owned: an
+        external operation that suppresses cancellation must not trigger HA's
+        additional config-entry task wait after our 3s/10s budget expires.
+        All runtime work remains owned by the entry.
+        """
+        started = asyncio.get_running_loop().time()
+        task = asyncio.ensure_future(operation)
+        if isinstance(task, asyncio.Task):
+            task.set_name(f"seenzus {stage}")
+        try:
+            done, _pending = await asyncio.wait({task}, timeout=timeout)
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+
+        if task in done:
+            await task
+            return True
+
+        task.cancel()
+
+        def _consume_cleanup_result(done_task: asyncio.Future) -> None:
             try:
-                await self._task
+                done_task.exception()
             except asyncio.CancelledError:
                 pass
 
-        if self._state_worker_task and not self._state_worker_task.done():
-            self._state_worker_task.cancel()
-            try:
-                await self._state_worker_task
-            except asyncio.CancelledError:
-                pass
-
-        command_tasks = tuple(self._command_tasks)
-        for task in command_tasks:
-            if not task.done():
-                task.cancel()
-        if command_tasks:
-            await asyncio.gather(*command_tasks, return_exceptions=True)
-        self._command_tasks.clear()
-
-        await self._stop_presence_heartbeat()
-
-        self._task = None
-        self._state_worker_task = None
-        self._pending_state_events.clear()
-        self._mqtt_client = None
-        self._skip_offline_presence = False
-        self.status = "stopped"
-        self.mqtt_connected = False
-        _LOGGER.info("seenzus Bridge stopped")
+        task.add_done_callback(_consume_cleanup_result)
+        elapsed = asyncio.get_running_loop().time() - started
+        timed_out_stage = self._cleanup_stage or stage
+        self.last_cleanup_diagnostic = (
+            f"{timed_out_stage} timed out after {elapsed:.2f}s "
+            f"(limit={timeout:.2f}s, context={context})"
+        )
+        self.last_error = self.last_cleanup_diagnostic
+        _LOGGER.warning(self.last_cleanup_diagnostic)
         self._fire()
+        return False
 
     async def async_prepare_for_reload(self) -> None:
+        loop = asyncio.get_running_loop()
+        self._reload_cleanup_deadline = (
+            loop.time() + RELOAD_CLEANUP_TIMEOUT_SECONDS
+        )
         if self._topics is None:
             return
 
@@ -398,13 +509,22 @@ class BridgeCoordinator:
         if self._mqtt_client is None:
             return
 
-        results = await asyncio.gather(
+        cleanup = asyncio.gather(
             *(
                 self._mqtt_client.publish(topic, "", qos=1, retain=True)
                 for topic in topics_to_clear
             ),
             return_exceptions=True,
         )
+        completed = await self._run_bounded_cleanup(
+            cleanup,
+            timeout=max(0.0, self._reload_cleanup_deadline - loop.time()),
+            stage="retained MQTT cleanup",
+            context="manual reload",
+        )
+        if not completed:
+            return
+        results = cleanup.result()
         cancelled = next(
             (result for result in results if isinstance(result, asyncio.CancelledError)),
             None,
@@ -440,13 +560,13 @@ class BridgeCoordinator:
                 _LOGGER.error("MQTT disconnected: %s, retry in 5s", err)
                 await asyncio.sleep(5)
             except asyncio.CancelledError:
-                break
+                raise
             except Exception as err:  # noqa: BLE001
                 await self._stop_presence_heartbeat()
                 self._mark_mqtt_error(str(err))
                 self._fire()
-                _LOGGER.exception("MQTT loop error: %s, retry in 10s", err)
-                await asyncio.sleep(10)
+                _LOGGER.exception("Fatal MQTT runtime error: %s", err)
+                raise
             finally:
                 await self._stop_presence_heartbeat()
                 self._mqtt_client = None
@@ -555,7 +675,11 @@ class BridgeCoordinator:
                 topic,
             )
             return False
-        task = self.hass.async_create_task(self._handle_message(topic, raw, client))
+        task = self._entry.async_create_task(
+            self.hass,
+            self._handle_message(topic, raw, client),
+            "seenzus command handler",
+        )
         self._command_tasks.add(task)
         task.add_done_callback(self._command_tasks.discard)
         return True
@@ -814,7 +938,11 @@ class BridgeCoordinator:
             return
         self._pending_state_events[entity_id] = event
         if self._state_worker_task is None or self._state_worker_task.done():
-            self._state_worker_task = self.hass.async_create_task(self._state_worker())
+            self._state_worker_task = self._entry.async_create_task(
+                self.hass,
+                self._state_worker(),
+                "seenzus state publisher",
+            )
 
     async def _state_worker(self) -> None:
         while self._pending_state_events:
@@ -894,7 +1022,11 @@ class BridgeCoordinator:
     def _start_presence_heartbeat(self) -> None:
         if self._presence_heartbeat_task is not None and not self._presence_heartbeat_task.done():
             return
-        self._presence_heartbeat_task = self.hass.async_create_task(self._presence_heartbeat())
+        self._presence_heartbeat_task = self._entry.async_create_background_task(
+            self.hass,
+            self._presence_heartbeat(),
+            "seenzus presence heartbeat",
+        )
 
     async def _stop_presence_heartbeat(self) -> None:
         if self._presence_heartbeat_task is None or self._presence_heartbeat_task.done():

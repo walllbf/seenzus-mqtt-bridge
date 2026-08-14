@@ -6,9 +6,8 @@ from __future__ import annotations
 # `PRESENCE_HEARTBEAT_INTERVAL_SECONDS` from the package root and monkeypatch
 # `seenzusaimqttbridge.asyncio.sleep`. Keep these module-level names stable.
 import asyncio  # noqa: F401
-import logging
 
-from homeassistant.config_entries import ConfigEntry, ConfigEntryNotReady
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr  # noqa: F401
 from homeassistant.helpers import entity_registry as er  # noqa: F401
@@ -19,8 +18,6 @@ from .coordinator import (  # noqa: F401
     PRESENCE_HEARTBEAT_INTERVAL_SECONDS,
     BridgeCoordinator,
 )
-
-_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor"]
 
@@ -33,18 +30,18 @@ async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    hass.data.setdefault(DOMAIN, {})
+    """Set up without converting programming or dependency failures into retries."""
     coordinator = BridgeCoordinator(hass, entry)
-    hass.data[DOMAIN][entry.entry_id] = coordinator
+    await coordinator.async_start()
+
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
-
     try:
-        await coordinator.async_start()
-    except Exception as err:  # noqa: BLE001
-        _LOGGER.exception("seenzus Bridge failed to start: %s", err)
-        raise ConfigEntryNotReady(f"start_failed:{err}") from err
-
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except BaseException:
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+        await coordinator.async_stop()
+        raise
     return True
 
 

@@ -84,6 +84,7 @@ def test_status_sensor_pins_identity_attributes_and_device_info() -> None:
         "raw_status": "active",
         "last_request": None,
         "last_error": None,
+        "last_cleanup_diagnostic": None,
         "mqtt_transport": "mqtt",
         "mqtt_ws_path": None,
         "topic_root": "seenzus/v2",
