@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
+from types import MappingProxyType
 
 import pytest
 
 from homeassistant.components import persistent_notification
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CoreState, HomeAssistant
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 import seenzus_bridge
 from seenzus_bridge import BridgeCoordinator
@@ -20,10 +22,33 @@ from tests.helpers import (
 )
 
 
+def _make_core_config_entry() -> ConfigEntry:
+    """Create a real Core ConfigEntry across the supported HA test matrix."""
+    values = {
+        "created_at": None,
+        "data": {},
+        "disabled_by": None,
+        "discovery_keys": MappingProxyType({}),
+        "domain": "seenzus_bridge",
+        "entry_id": "01kpcrmg59ph",
+        "minor_version": 1,
+        "modified_at": None,
+        "options": {},
+        "pref_disable_new_entities": None,
+        "pref_disable_polling": None,
+        "source": "user",
+        "title": "seenzus MQTT Bridge",
+        "unique_id": None,
+        "version": 1,
+    }
+    parameters = inspect.signature(ConfigEntry).parameters
+    return ConfigEntry(**{key: value for key, value in values.items() if key in parameters})
+
+
 @pytest.mark.asyncio
 async def test_real_ha_task_wait_ignores_mqtt_and_heartbeat_background_loops(tmp_path) -> None:
     hass = HomeAssistant(str(tmp_path))
-    entry = MockConfigEntry(domain="seenzus_bridge", data={})
+    entry = _make_core_config_entry()
     coordinator = BridgeCoordinator(hass, entry)
     coordinator._aiomqtt = FakeAiomqttModule()
 
