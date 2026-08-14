@@ -37,6 +37,7 @@ def _make_core_config_entry() -> ConfigEntry:
         "pref_disable_new_entities": None,
         "pref_disable_polling": None,
         "source": "user",
+        "subentries_data": MappingProxyType({}),
         "title": "seenzus MQTT Bridge",
         "unique_id": None,
         "version": 1,
