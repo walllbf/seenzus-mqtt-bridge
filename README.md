@@ -135,9 +135,12 @@ Payload:
   "body": {
     "entity_id": "light.living_room",
     "brightness": 180
-  }
+  },
+  "operationKey": "opaque-server-operation-key"
 }
 ```
+
+`operationKey` is optional for backward compatibility. When present, the bridge persists an operation fingerprint and result in Home Assistant `.storage`. A completed retry is replayed without calling Home Assistant again. If the bridge restarted after dispatch but before completion was persisted, the operation remains `control_outcome_unknown` and is not automatically dispatched again.
 
 ### result 示例
 

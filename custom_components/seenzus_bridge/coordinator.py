@@ -8,6 +8,7 @@ periodic heartbeat.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
 import json
 import logging
@@ -78,6 +79,7 @@ from .const import (
 )
 from .entity_filters import looks_like_internal_bridge_entity_id, name_has_model_marker
 from .ha_dispatcher import DispatchPolicy, dispatch
+from .operation_store import PersistentOperationStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -199,6 +201,7 @@ class BridgeCoordinator:
         self._state_worker_task: asyncio.Task | None = None
         self._presence_heartbeat_task: asyncio.Task | None = None
         self._command_tasks: set[asyncio.Task] = set()
+        self._operation_store = PersistentOperationStore(hass, entry.entry_id)
 
     def register_update_listener(self, cb: Callable[[], None]) -> None:
         self._listeners.append(cb)
@@ -732,6 +735,12 @@ class BridgeCoordinator:
         body = req.get("body")
         body = body if isinstance(body, dict) else None
         effective_msg_id = str(req.get("msgId", req.get("correlationId", msg_id))) or msg_id
+        operation_key = req.get("operationKey")
+        operation_key = operation_key.strip() if isinstance(operation_key, str) else None
+        fingerprint = hashlib.sha256(json.dumps(
+            {"method": method.upper(), "path": path, "body": body},
+            sort_keys=True, separators=(",", ":"),
+        ).encode()).hexdigest() if operation_key else None
 
         self.req_count += 1
         self.last_req = datetime.now(timezone.utc)
@@ -764,14 +773,34 @@ class BridgeCoordinator:
                 )
                 return
 
+            if operation_key and fingerprint:
+                claim_status, replay = await self._operation_store.claim(operation_key, fingerprint)
+                if claim_status == "completed" and replay is not None:
+                    await self._publish_result(client, effective_msg_id, **replay)
+                    return
+                if claim_status == "conflict":
+                    await self._publish_result(client, effective_msg_id, success=False, status=409, error="idempotency_conflict")
+                    return
+                if claim_status == "pending":
+                    await self._publish_result(client, effective_msg_id, success=False, status=409, error="request_in_progress")
+                    return
+                if claim_status == "unknown":
+                    await self._publish_result(client, effective_msg_id, success=False, status=409, error="control_outcome_unknown")
+                    return
+                if not await self._operation_store.mark_dispatched(operation_key, fingerprint):
+                    await self._publish_result(client, effective_msg_id, success=False, status=409, error="control_outcome_unknown")
+                    return
             result = await dispatch(self.hass, method, path, body, self._dispatch_policy())
-            await self._publish_result(
-                client,
-                effective_msg_id,
-                success=result.status < 400,
-                status=result.status,
-                data=result.data,
-            )
+            result_payload = {
+                "success": result.status < 400,
+                "status": result.status,
+                "data": result.data,
+            }
+            if operation_key and fingerprint:
+                if not await self._operation_store.complete(operation_key, fingerprint, result_payload):
+                    await self._publish_result(client, effective_msg_id, success=False, status=409, error="control_outcome_unknown")
+                    return
+            await self._publish_result(client, effective_msg_id, **result_payload)
             if method.upper() == "GET" and path.rstrip("/") == "/api/states":
                 await self._publish_all_states(client, source="full_snapshot", correlation_id=effective_msg_id)
             else:

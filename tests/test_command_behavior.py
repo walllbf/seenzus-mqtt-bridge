@@ -7,6 +7,7 @@ import pytest
 
 from seenzus_bridge import BridgeCoordinator, er
 from seenzus_bridge.coordinator import MAX_INFLIGHT_COMMANDS
+from seenzus_bridge.operation_store import PersistentOperationStore
 from seenzus_bridge.bridge_protocol import build_topics
 from tests.helpers import AsyncFakeMQTTClient, FakeConfigEntry, FakeEntityRegistry, FakeHass
 
@@ -22,11 +23,89 @@ def command_coordinator(monkeypatch):
     return coordinator
 
 
+class _MemoryOperationStore:
+    def __init__(self) -> None:
+        self.rows = {}
+
+    async def claim(self, key, fingerprint):
+        row = self.rows.get(key)
+        if row is None:
+            self.rows[key] = {"fingerprint": fingerprint, "status": "claimed", "result": None}
+            return "claimed", None
+        if row["fingerprint"] != fingerprint:
+            return "conflict", None
+        if row["status"] == "completed":
+            return "completed", row["result"]
+        if row["status"] == "dispatched":
+            return "unknown", None
+        return "pending", None
+
+    async def mark_dispatched(self, key, fingerprint):
+        row = self.rows.get(key)
+        if not row or row["fingerprint"] != fingerprint or row["status"] != "claimed":
+            return False
+        row["status"] = "dispatched"
+        return True
+
+    async def complete(self, key, fingerprint, result):
+        row = self.rows.get(key)
+        if not row or row["fingerprint"] != fingerprint or row["status"] != "dispatched":
+            return False
+        row.update(status="completed", result=result)
+        return True
+
+
 class _FailingPublishClient(AsyncFakeMQTTClient):
     """Client whose publish always raises (broker gone mid-flight)."""
 
     async def publish(self, topic: str, payload: str, *, qos: int, retain: bool = False) -> None:
         raise RuntimeError("broker gone")
+
+
+@pytest.mark.asyncio
+async def test_operation_key_replays_without_calling_home_assistant_twice(command_coordinator) -> None:
+    client = AsyncFakeMQTTClient()
+    command_coordinator._operation_store = _MemoryOperationStore()
+    raw = json.dumps({"msgId": "msg-first", "operationKey": "opaque-op-a", "method": "POST", "path": "/api/services/light/turn_on", "body": {"entity_id": "light.demo"}})
+    await command_coordinator._handle_v2_command("msg-first", raw, client)
+    retry = json.dumps({"msgId": "msg-retry", "operationKey": "opaque-op-a", "method": "POST", "path": "/api/services/light/turn_on", "body": {"entity_id": "light.demo"}})
+    await command_coordinator._handle_v2_command("msg-retry", retry, client)
+    assert len(command_coordinator.hass.services.calls) == 1
+    replay = json.loads([item for item in client.published if item["topic"].endswith("/msg-retry")][0]["payload"])
+    assert replay["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_dispatched_operation_is_frozen_as_unknown_after_restart(command_coordinator) -> None:
+    client = AsyncFakeMQTTClient()
+    store = _MemoryOperationStore()
+    store.rows["opaque-op-a"] = {"fingerprint": "wrong", "status": "dispatched", "result": None}
+    command_coordinator._operation_store = store
+    raw = json.dumps({"msgId": "msg-retry", "operationKey": "opaque-op-a", "method": "POST", "path": "/api/services/light/turn_on", "body": {"entity_id": "light.demo"}})
+    import hashlib
+    canonical = json.dumps({"method": "POST", "path": "/api/services/light/turn_on", "body": {"entity_id": "light.demo"}}, sort_keys=True, separators=(",", ":"))
+    store.rows["opaque-op-a"]["fingerprint"] = hashlib.sha256(canonical.encode()).hexdigest()
+    await command_coordinator._handle_v2_command("msg-retry", raw, client)
+    assert command_coordinator.hass.services.calls == []
+    result = json.loads(client.published[0]["payload"])
+    assert result["error"] == "control_outcome_unknown"
+
+
+@pytest.mark.asyncio
+async def test_persistent_operation_store_replays_after_store_reconstruction() -> None:
+    class Storage:
+        payload = None
+        async def async_load(self):
+            return self.payload
+        async def async_save(self, value):
+            self.payload = value
+    storage = Storage()
+    first = PersistentOperationStore(object(), "entry", storage)
+    assert await first.claim("opaque-op", "fingerprint") == ("claimed", None)
+    assert await first.mark_dispatched("opaque-op", "fingerprint") is True
+    assert await first.complete("opaque-op", "fingerprint", {"success": True, "status": 200}) is True
+    second = PersistentOperationStore(object(), "entry", storage)
+    assert await second.claim("opaque-op", "fingerprint") == ("completed", {"success": True, "status": 200})
 
 
 @pytest.mark.asyncio
