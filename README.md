@@ -142,6 +142,20 @@ Payload:
 
 `operationKey` is optional for backward compatibility. When present, the bridge persists an operation fingerprint and result in Home Assistant `.storage`. A completed retry is replayed without calling Home Assistant again. A pre-dispatch claim can be safely recovered after restart; if the bridge restarted after dispatch but before completion was persisted, the operation remains `control_outcome_unknown` and is not automatically dispatched again. Completed and unknown operation keys are retained as durable tombstones so a delayed retry cannot trigger Home Assistant a second time. If a persisted row cannot be parsed safely, its key is frozen as unknown rather than treated as a new operation.
 
+### Bridge 能力声明
+
+新版 Bridge 会在 retained `presence` payload 中声明：
+
+```json
+{
+  "capabilities": {
+    "persistentOperationIdempotency": true
+  }
+}
+```
+
+该字段是向后兼容的新增字段。旧版客户端会忽略它；服务端未收到该声明时，会保留普通控制能力，但不会把 Bridge 当作支持跨重启持久幂等的 Bridge。
+
 ### result 示例
 
 Topic:
