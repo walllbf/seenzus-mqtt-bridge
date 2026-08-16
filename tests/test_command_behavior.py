@@ -36,6 +36,14 @@ class _MemoryStorage:
         self.payload = value
 
 
+class _FailOnceStorage(_MemoryStorage):
+    async def async_save(self, value):
+        self.payload = value
+        if not hasattr(self, "failed"):
+            self.failed = True
+            raise RuntimeError("simulated storage acknowledgement failure")
+
+
 def _persistent_store(storage=None):
     storage = storage or _MemoryStorage()
     return PersistentOperationStore(object(), "entry", storage), storage
@@ -97,6 +105,14 @@ async def test_pre_dispatch_claim_is_recovered_after_store_reconstruction() -> N
     restarted, _ = _persistent_store(storage)
     assert await restarted.claim("opaque-op", "fingerprint") == ("claimed", None)
     assert await restarted.mark_dispatched("opaque-op", "fingerprint") is True
+
+
+@pytest.mark.asyncio
+async def test_failed_claim_save_does_not_leave_local_claim_stuck() -> None:
+    store, _ = _persistent_store(_FailOnceStorage())
+    with pytest.raises(RuntimeError, match="storage acknowledgement failure"):
+        await store.claim("opaque-op", "fingerprint")
+    assert await store.claim("opaque-op", "fingerprint") == ("claimed", None)
 
 
 @pytest.mark.asyncio

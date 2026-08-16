@@ -97,7 +97,14 @@ class PersistentOperationStore:
             if row is None:
                 rows[key] = OperationRecord(fingerprint, "claimed", updated_at=datetime.now(timezone.utc).isoformat())
                 self._owned_claims.add(key)
-                await self._save()
+                try:
+                    await self._save()
+                except Exception:
+                    # The write may have reached disk even if it raised. Forget
+                    # local ownership so the next attempt safely treats a
+                    # persisted pre-dispatch claim as recoverable.
+                    self._owned_claims.discard(key)
+                    raise
                 return "claimed", None
             if row.fingerprint != fingerprint:
                 return "conflict", None
@@ -110,7 +117,11 @@ class PersistentOperationStore:
                 # reached mark_dispatched, so it is safe to take over.
                 self._owned_claims.add(key)
                 row.updated_at = datetime.now(timezone.utc).isoformat()
-                await self._save()
+                try:
+                    await self._save()
+                except Exception:
+                    self._owned_claims.discard(key)
+                    raise
                 return "claimed", None
             return "pending", None
 
