@@ -123,26 +123,30 @@ async def test_operation_store_rejects_fingerprint_conflict() -> None:
 
 
 @pytest.mark.asyncio
-async def test_operation_store_skips_malformed_rows() -> None:
+async def test_operation_store_freezes_malformed_rows_as_unknown() -> None:
     storage = _MemoryStorage({
         "missing-status": {"fingerprint": "fingerprint"},
         "bad-result": {"fingerprint": "fingerprint", "status": "completed", "result": "invalid"},
     })
     store, _ = _persistent_store(storage)
+    assert await store.claim("missing-status", "fingerprint") == ("unknown", None)
+    assert await store.claim("bad-result", "fingerprint") == ("unknown", None)
     assert await store.claim("new-key", "fingerprint") == ("claimed", None)
-    assert set(storage.payload) == {"new-key"}
+    assert storage.payload["missing-status"]["status"] == "unknown"
+    assert storage.payload["bad-result"]["status"] == "unknown"
 
 
 @pytest.mark.asyncio
-async def test_operation_store_prunes_expired_completed_rows_but_keeps_unknown() -> None:
-    old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+async def test_completed_operation_remains_a_tombstone_after_retention_window() -> None:
+    old = (datetime.now(timezone.utc) - timedelta(days=365)).isoformat()
     storage = _MemoryStorage({
         "old-completed": {"fingerprint": "a", "status": "completed", "result": {"success": True}, "updated_at": old},
         "old-unknown": {"fingerprint": "b", "status": "dispatched", "result": None, "updated_at": old},
     })
     store, _ = _persistent_store(storage)
-    assert await store.claim("new-key", "fingerprint") == ("claimed", None)
-    assert set(storage.payload) == {"old-unknown", "new-key"}
+    assert await store.claim("old-completed", "a") == ("completed", {"success": True})
+    assert await store.claim("old-unknown", "b") == ("unknown", None)
+    assert set(storage.payload) == {"old-completed", "old-unknown"}
 
 
 @pytest.mark.asyncio

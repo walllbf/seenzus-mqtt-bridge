@@ -3,18 +3,16 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 
-OPERATION_STATUSES = {"claimed", "dispatched", "completed"}
-COMPLETED_RETENTION = timedelta(days=30)
-MAX_COMPLETED_RECORDS = 1000
+OPERATION_STATUSES = {"claimed", "dispatched", "completed", "unknown"}
 
 
 @dataclass
 class OperationRecord:
-    fingerprint: str
+    fingerprint: str | None
     status: str
     result: dict[str, Any] | None = None
     updated_at: str | None = None
@@ -27,7 +25,7 @@ class OperationStore(Protocol):
 
 
 class PersistentOperationStore:
-    """HA .storage-backed ledger; dispatched rows are never reclaimed automatically."""
+    """HA .storage-backed ledger; operation keys are retained as durable tombstones."""
 
     def __init__(self, hass: Any, entry_id: str, storage: Any = None) -> None:
         self._hass = hass
@@ -48,46 +46,31 @@ class PersistentOperationStore:
             raw = await self._store.async_load() or {}
             rows: dict[str, OperationRecord] = {}
             for key, value in raw.items():
-                if not isinstance(key, str) or not isinstance(value, dict):
+                if not isinstance(key, str):
+                    continue
+                if not isinstance(value, dict):
+                    rows[key] = OperationRecord(None, "unknown")
                     continue
                 fingerprint = value.get("fingerprint")
                 status = value.get("status")
-                if not isinstance(fingerprint, str) or status not in OPERATION_STATUSES:
-                    continue
                 result = value.get("result")
-                if result is not None and not isinstance(result, dict):
-                    continue
                 updated_at = value.get("updated_at")
+                if (
+                    not isinstance(fingerprint, str)
+                    or status not in OPERATION_STATUSES - {"unknown"}
+                    or (result is not None and not isinstance(result, dict))
+                ):
+                    # An unparseable persisted key may have crossed the device
+                    # boundary. Preserve it as unknown rather than redispatch.
+                    rows[key] = OperationRecord(None, "unknown")
+                    continue
                 rows[key] = OperationRecord(fingerprint, status, result, updated_at if isinstance(updated_at, str) else None)
             self._rows = rows
-            self._prune_completed(datetime.now(timezone.utc))
         return self._rows
-
-    def _prune_completed(self, now: datetime) -> None:
-        rows = self._rows or {}
-        completed = []
-        for key, row in rows.items():
-            if row.status != "completed":
-                continue
-            try:
-                age = now - datetime.fromisoformat(row.updated_at) if row.updated_at else timedelta.max
-            except (TypeError, ValueError):
-                age = timedelta.max
-            completed.append((key, age, row.updated_at or ""))
-        for key, age, _ in completed:
-            if age > COMPLETED_RETENTION:
-                rows.pop(key, None)
-        remaining = sorted(
-            ((key, row.updated_at or "") for key, row in rows.items() if row.status == "completed"),
-            key=lambda item: item[1], reverse=True,
-        )
-        for key, _ in remaining[MAX_COMPLETED_RECORDS:]:
-            rows.pop(key, None)
 
     async def _save(self) -> None:
         if self._store is None:
             raise RuntimeError("operation store was not initialized")
-        self._prune_completed(datetime.now(timezone.utc))
         await self._store.async_save({key: vars(value) for key, value in (self._rows or {}).items()})
 
     async def claim(self, key: str, fingerprint: str) -> tuple[str, dict[str, Any] | None]:
@@ -106,6 +89,8 @@ class PersistentOperationStore:
                     self._owned_claims.discard(key)
                     raise
                 return "claimed", None
+            if row.status == "unknown":
+                return "unknown", None
             if row.fingerprint != fingerprint:
                 return "conflict", None
             if row.status == "completed":
