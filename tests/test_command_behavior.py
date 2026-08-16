@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -23,36 +25,25 @@ def command_coordinator(monkeypatch):
     return coordinator
 
 
-class _MemoryOperationStore:
-    def __init__(self) -> None:
-        self.rows = {}
+class _MemoryStorage:
+    def __init__(self, payload=None) -> None:
+        self.payload = payload
 
-    async def claim(self, key, fingerprint):
-        row = self.rows.get(key)
-        if row is None:
-            self.rows[key] = {"fingerprint": fingerprint, "status": "claimed", "result": None}
-            return "claimed", None
-        if row["fingerprint"] != fingerprint:
-            return "conflict", None
-        if row["status"] == "completed":
-            return "completed", row["result"]
-        if row["status"] == "dispatched":
-            return "unknown", None
-        return "pending", None
+    async def async_load(self):
+        return self.payload
 
-    async def mark_dispatched(self, key, fingerprint):
-        row = self.rows.get(key)
-        if not row or row["fingerprint"] != fingerprint or row["status"] != "claimed":
-            return False
-        row["status"] = "dispatched"
-        return True
+    async def async_save(self, value):
+        self.payload = value
 
-    async def complete(self, key, fingerprint, result):
-        row = self.rows.get(key)
-        if not row or row["fingerprint"] != fingerprint or row["status"] != "dispatched":
-            return False
-        row.update(status="completed", result=result)
-        return True
+
+def _persistent_store(storage=None):
+    storage = storage or _MemoryStorage()
+    return PersistentOperationStore(object(), "entry", storage), storage
+
+
+def _operation_fingerprint(method, path, body):
+    canonical = json.dumps({"method": method.upper(), "path": path, "body": body}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 class _FailingPublishClient(AsyncFakeMQTTClient):
@@ -65,7 +56,7 @@ class _FailingPublishClient(AsyncFakeMQTTClient):
 @pytest.mark.asyncio
 async def test_operation_key_replays_without_calling_home_assistant_twice(command_coordinator) -> None:
     client = AsyncFakeMQTTClient()
-    command_coordinator._operation_store = _MemoryOperationStore()
+    command_coordinator._operation_store, _ = _persistent_store()
     raw = json.dumps({"msgId": "msg-first", "operationKey": "opaque-op-a", "method": "POST", "path": "/api/services/light/turn_on", "body": {"entity_id": "light.demo"}})
     await command_coordinator._handle_v2_command("msg-first", raw, client)
     retry = json.dumps({"msgId": "msg-retry", "operationKey": "opaque-op-a", "method": "POST", "path": "/api/services/light/turn_on", "body": {"entity_id": "light.demo"}})
@@ -78,13 +69,10 @@ async def test_operation_key_replays_without_calling_home_assistant_twice(comman
 @pytest.mark.asyncio
 async def test_dispatched_operation_is_frozen_as_unknown_after_restart(command_coordinator) -> None:
     client = AsyncFakeMQTTClient()
-    store = _MemoryOperationStore()
-    store.rows["opaque-op-a"] = {"fingerprint": "wrong", "status": "dispatched", "result": None}
-    command_coordinator._operation_store = store
+    fingerprint = _operation_fingerprint("POST", "/api/services/light/turn_on", {"entity_id": "light.demo"})
+    storage = _MemoryStorage({"opaque-op-a": {"fingerprint": fingerprint, "status": "dispatched", "result": None}})
+    command_coordinator._operation_store, _ = _persistent_store(storage)
     raw = json.dumps({"msgId": "msg-retry", "operationKey": "opaque-op-a", "method": "POST", "path": "/api/services/light/turn_on", "body": {"entity_id": "light.demo"}})
-    import hashlib
-    canonical = json.dumps({"method": "POST", "path": "/api/services/light/turn_on", "body": {"entity_id": "light.demo"}}, sort_keys=True, separators=(",", ":"))
-    store.rows["opaque-op-a"]["fingerprint"] = hashlib.sha256(canonical.encode()).hexdigest()
     await command_coordinator._handle_v2_command("msg-retry", raw, client)
     assert command_coordinator.hass.services.calls == []
     result = json.loads(client.published[0]["payload"])
@@ -93,19 +81,64 @@ async def test_dispatched_operation_is_frozen_as_unknown_after_restart(command_c
 
 @pytest.mark.asyncio
 async def test_persistent_operation_store_replays_after_store_reconstruction() -> None:
-    class Storage:
-        payload = None
-        async def async_load(self):
-            return self.payload
-        async def async_save(self, value):
-            self.payload = value
-    storage = Storage()
-    first = PersistentOperationStore(object(), "entry", storage)
+    first, storage = _persistent_store()
     assert await first.claim("opaque-op", "fingerprint") == ("claimed", None)
     assert await first.mark_dispatched("opaque-op", "fingerprint") is True
     assert await first.complete("opaque-op", "fingerprint", {"success": True, "status": 200}) is True
-    second = PersistentOperationStore(object(), "entry", storage)
+    second, _ = _persistent_store(storage)
     assert await second.claim("opaque-op", "fingerprint") == ("completed", {"success": True, "status": 200})
+
+
+@pytest.mark.asyncio
+async def test_pre_dispatch_claim_is_recovered_after_store_reconstruction() -> None:
+    first, storage = _persistent_store()
+    assert await first.claim("opaque-op", "fingerprint") == ("claimed", None)
+    assert await first.claim("opaque-op", "fingerprint") == ("pending", None)
+    restarted, _ = _persistent_store(storage)
+    assert await restarted.claim("opaque-op", "fingerprint") == ("claimed", None)
+    assert await restarted.mark_dispatched("opaque-op", "fingerprint") is True
+
+
+@pytest.mark.asyncio
+async def test_operation_store_rejects_fingerprint_conflict() -> None:
+    store, _ = _persistent_store()
+    assert await store.claim("opaque-op", "fingerprint-a") == ("claimed", None)
+    assert await store.claim("opaque-op", "fingerprint-b") == ("conflict", None)
+
+
+@pytest.mark.asyncio
+async def test_operation_store_skips_malformed_rows() -> None:
+    storage = _MemoryStorage({
+        "missing-status": {"fingerprint": "fingerprint"},
+        "bad-result": {"fingerprint": "fingerprint", "status": "completed", "result": "invalid"},
+    })
+    store, _ = _persistent_store(storage)
+    assert await store.claim("new-key", "fingerprint") == ("claimed", None)
+    assert set(storage.payload) == {"new-key"}
+
+
+@pytest.mark.asyncio
+async def test_operation_store_prunes_expired_completed_rows_but_keeps_unknown() -> None:
+    old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    storage = _MemoryStorage({
+        "old-completed": {"fingerprint": "a", "status": "completed", "result": {"success": True}, "updated_at": old},
+        "old-unknown": {"fingerprint": "b", "status": "dispatched", "result": None, "updated_at": old},
+    })
+    store, _ = _persistent_store(storage)
+    assert await store.claim("new-key", "fingerprint") == ("claimed", None)
+    assert set(storage.payload) == {"old-unknown", "new-key"}
+
+
+@pytest.mark.asyncio
+async def test_concurrent_same_key_dispatches_home_assistant_once(command_coordinator) -> None:
+    client = AsyncFakeMQTTClient()
+    command_coordinator._operation_store, _ = _persistent_store()
+    raw = json.dumps({"operationKey": "opaque-op-a", "method": "POST", "path": "/api/services/light/turn_on", "body": {"entity_id": "light.demo"}})
+    await asyncio.gather(
+        command_coordinator._handle_v2_command("msg-first", raw, client),
+        command_coordinator._handle_v2_command("msg-retry", raw, client),
+    )
+    assert len(command_coordinator.hass.services.calls) == 1
 
 
 @pytest.mark.asyncio
