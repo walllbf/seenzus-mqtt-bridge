@@ -1035,6 +1035,7 @@ class BridgeCoordinator:
             "errorCount": self.err_count,
             "lastError": self.last_error,
             "version": BRIDGE_VERSION,
+            "capabilities": {"persistentOperationIdempotency": True},
         }
         if transport_ws_path is not None:
             payload["wsPath"] = transport_ws_path
