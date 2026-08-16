@@ -382,6 +382,16 @@ docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 
 ## 版本变更记录
 
+### v0.2.7 (2026-08-16)
+
+- MQTT 控制命令支持可选 `operationKey`，使用 Home Assistant `.storage` 持久化操作领取、下发与完成状态
+- 已完成操作可安全重放原结果；指纹冲突、损坏记录及下发后结果未知均 fail closed，持久 tombstone 防止延迟重试再次触发设备
+- retained `presence` 声明 `capabilities.persistentOperationIdempotency=true`，让服务端仅在 Bridge 明确支持时启用跨重启幂等控制
+- 修复 MQTT 任务阻塞 Home Assistant 配置项加载、重载和卸载生命周期的问题
+- 品牌 Logo 全套更新：同步替换 HACS 与组件内 256 / 512 像素透明底图标及源 SVG
+- 不携带 `operationKey` 的旧版控制请求保持原有行为，旧版客户端会忽略新增 presence 能力字段
+- 全量测试 **214 passed**，HA Core 双版本、Hassfest 与 HACS 校验通过
+
 ### v0.2.6 (2026-08-14)
 
 - MQTT 完整重连成功后清除历史 `Last error`，诊断状态不再保留已经恢复的断线或发布超时
