@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from homeassistant import data_entry_flow as data_entry_flow_module
+from homeassistant.data_entry_flow import FlowResultType, UnknownFlow
 
 if not hasattr(data_entry_flow_module, "section"):
     def _section(schema, _config):
@@ -41,6 +42,7 @@ from seenzus_bridge.const import (
     CONF_TOPIC_ROOT,
 )
 from seenzus_bridge.quick_pair import (
+    MAX_FLOW_RESUME_STEPS,
     QUICK_PAIR_APP_RETURN_PATH,
     QUICK_PAIR_CALLBACK_PAYLOAD_LIMIT,
     SeenzusAppReturnView,
@@ -940,6 +942,173 @@ async def test_quick_pair_callback_view_returns_202_when_flow_resume_fails(monke
         "state": state,
         "code": "auth-code",
     }
+
+
+@pytest.mark.parametrize("app_value", [None, "0", "false"])
+@pytest.mark.asyncio
+async def test_quick_pair_callback_view_without_app_flag_keeps_single_configure(
+    monkeypatch, app_value
+) -> None:
+    """浏览器路径(无 app 标记)行为一字不变:只 resume 一次。
+
+    首次 configure 停在 EXTERNAL_STEP_DONE、剩余推进交给常驻 HA 前端标签页
+    ——这是 issue #43 修复后刻意保留的网页版语义。
+    """
+    hass = FakeHass()
+    state = {"flow_id": "flow-1", "pairing_state": "pairing-state"}
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair._decode_jwt",
+        lambda _hass, _token: state,
+    )
+    hass.config_entries.flow.configure_results = [
+        {"type": FlowResultType.EXTERNAL_STEP_DONE, "step_id": "seamless_authorize"}
+    ]
+    query = {"state": "jwt-state", "code": "auth-code"}
+    if app_value is not None:
+        query["app"] = app_value
+    request = SimpleNamespace(app={"hass": hass}, query=query)
+
+    response = await SavanAIQuickPairCallbackView().get(request)
+
+    assert response.status == 200
+    assert len(hass.config_entries.flow.configure_calls) == 1
+    assert "window.close()" in response.text
+
+
+@pytest.mark.asyncio
+async def test_quick_pair_callback_view_with_app_flag_drives_flow_to_create_entry(
+    monkeypatch,
+) -> None:
+    """App 内嵌 WebView(?app=1)没有常驻前端页面,回调 view 自己把 flow 推到终态。"""
+    hass = FakeHass()
+    state = {"flow_id": "flow-1", "pairing_state": "pairing-state"}
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair._decode_jwt",
+        lambda _hass, _token: state,
+    )
+    hass.config_entries.flow.configure_results = [
+        {"type": FlowResultType.EXTERNAL_STEP_DONE, "step_id": "seamless_authorize"},
+        {"type": FlowResultType.CREATE_ENTRY, "title": "seenzus Bridge"},
+    ]
+    request = SimpleNamespace(
+        app={"hass": hass},
+        query={"state": "jwt-state", "code": "auth-code", "app": "1"},
+    )
+
+    response = await SavanAIQuickPairCallbackView().get(request)
+
+    assert response.status == 200
+    assert len(hass.config_entries.flow.configure_calls) == 2
+    # 关不掉的 WebView 里 300ms 后跳回集成页,不再停在白屏。
+    assert "window.close()" in response.text
+    assert "location.replace('/config/integrations')" in response.text
+
+
+@pytest.mark.asyncio
+async def test_quick_pair_callback_view_with_app_flag_stops_at_form(monkeypatch) -> None:
+    """FORM 是合法终点(code exchange 失败重显表单),不能再推。"""
+    hass = FakeHass()
+    state = {"flow_id": "flow-1", "pairing_state": "pairing-state"}
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair._decode_jwt",
+        lambda _hass, _token: state,
+    )
+    hass.config_entries.flow.configure_results = [
+        {"type": FlowResultType.EXTERNAL_STEP_DONE, "step_id": "seamless_authorize"},
+        {"type": FlowResultType.FORM, "step_id": "seamless", "errors": {"base": "quick_pair_code_exchange_failed"}},
+    ]
+    request = SimpleNamespace(
+        app={"hass": hass},
+        query={"state": "jwt-state", "code": "auth-code", "app": "1"},
+    )
+
+    response = await SavanAIQuickPairCallbackView().get(request)
+
+    assert response.status == 200
+    assert len(hass.config_entries.flow.configure_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_quick_pair_callback_view_with_app_flag_caps_resume_steps(monkeypatch) -> None:
+    """永远停在 EXTERNAL_STEP_DONE 的病态 flow:推进带上限,防死循环。"""
+    hass = FakeHass()
+    state = {"flow_id": "flow-1", "pairing_state": "pairing-state"}
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair._decode_jwt",
+        lambda _hass, _token: state,
+    )
+    hass.config_entries.flow.configure_results = [
+        {"type": FlowResultType.EXTERNAL_STEP_DONE} for _ in range(MAX_FLOW_RESUME_STEPS * 4)
+    ]
+    request = SimpleNamespace(
+        app={"hass": hass},
+        query={"state": "jwt-state", "code": "auth-code", "app": "1"},
+    )
+
+    response = await SavanAIQuickPairCallbackView().get(request)
+
+    assert response.status == 200
+    # 首次 configure + 至多 MAX_FLOW_RESUME_STEPS 次推进。
+    assert len(hass.config_entries.flow.configure_calls) == 1 + MAX_FLOW_RESUME_STEPS
+
+
+@pytest.mark.asyncio
+async def test_quick_pair_callback_view_treats_unknown_flow_as_success(monkeypatch) -> None:
+    """前端抢先把 flow 跑完并移除 → UnknownFlow,视为成功而非报错。"""
+    hass = FakeHass()
+    state = {"flow_id": "flow-1", "pairing_state": "pairing-state"}
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair._decode_jwt",
+        lambda _hass, _token: state,
+    )
+    calls: list[dict] = []
+
+    async def _configure(*, flow_id: str, user_input: dict):
+        calls.append({"flow_id": flow_id, "user_input": user_input})
+        if len(calls) == 1:
+            return {"type": FlowResultType.EXTERNAL_STEP_DONE}
+        raise UnknownFlow()
+
+    hass.config_entries.flow.async_configure = _configure
+    request = SimpleNamespace(
+        app={"hass": hass},
+        query={"state": "jwt-state", "code": "auth-code", "app": "1"},
+    )
+
+    response = await SavanAIQuickPairCallbackView().get(request)
+
+    assert response.status == 200
+    assert "window.close()" in response.text
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_quick_pair_callback_view_with_app_flag_drives_options_flow(monkeypatch) -> None:
+    """Options flow(FLOW_MANAGER_OPTIONS)走同一条推进路径,一并覆盖。"""
+    hass = FakeHass()
+    state = {
+        "flow_id": "options-flow-1",
+        "flow_manager": FLOW_MANAGER_OPTIONS,
+        "pairing_state": "pairing-state",
+    }
+    monkeypatch.setattr(
+        "seenzus_bridge.quick_pair._decode_jwt",
+        lambda _hass, _token: state,
+    )
+    hass.config_entries.options.configure_results = [
+        {"type": FlowResultType.EXTERNAL_STEP_DONE, "step_id": "seamless_authorize"},
+        {"type": FlowResultType.CREATE_ENTRY, "title": "seenzus Bridge"},
+    ]
+    request = SimpleNamespace(
+        app={"hass": hass},
+        query={"state": "jwt-state", "code": "auth-code", "app": "1"},
+    )
+
+    response = await SavanAIQuickPairCallbackView().get(request)
+
+    assert response.status == 200
+    assert len(hass.config_entries.options.configure_calls) == 2
+    assert hass.config_entries.flow.configure_calls == []
 
 
 @pytest.mark.asyncio

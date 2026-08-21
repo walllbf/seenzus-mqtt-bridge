@@ -17,6 +17,7 @@ from aiohttp import web
 
 from homeassistant.components import http, persistent_notification
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType, UnknownFlow
 
 # NOTE: _encode_jwt/_decode_jwt 是 Home Assistant 的私有 helper（带下划线，
 # 无稳定 API 保证）。替换为自建 JWT 实现风险更高（需要密钥管理与轮换），因此
@@ -44,6 +45,10 @@ QUICK_PAIR_APP_RETURN_VIEW_REGISTERED = "quick_pair_app_return_view_registered"
 APP_RETURN_URL_ALLOW_SCHEMES = {"http", "https", "seenzus"}
 FLOW_MANAGER_CONFIG = "config"
 FLOW_MANAGER_OPTIONS = "options"
+# App 内嵌 WebView 场景没有常驻 HA 前端页面——回调 view 必须自己把 flow 从
+# EXTERNAL_STEP_DONE 推到终态(CREATE_ENTRY / ABORT / FORM)。带上限防病态
+# flow 死循环;正常路径只需 1 次推进(external_done → seamless_finish)。
+MAX_FLOW_RESUME_STEPS = 4
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -88,15 +93,20 @@ class SeenzusQuickPairCallbackView(http.HomeAssistantView):
         flow_manager_obj = hass.config_entries.flow
         if flow_manager == FLOW_MANAGER_OPTIONS:
             flow_manager_obj = hass.config_entries.options
+        app_resume = _app_resume_requested(request)
         try:
             configure = flow_manager_obj.async_configure
-            try:
-                await configure(flow_id=flow_id, user_input=None)
-            except TypeError:
-                try:
-                    await configure(flow_id)
-                except TypeError:
-                    await configure()
+            result = await _call_flow_configure(configure, flow_id)
+            if app_resume:
+                result = await _drive_flow_to_terminal_state(configure, flow_id, result)
+        except UnknownFlow:
+            # 前端可能抢先把 flow 跑完并移除——视为成功(集成已创建),
+            # 而不是把报错页/白页甩给用户。
+            _LOGGER.info(
+                "Quick pair %s flow %s already finished elsewhere before callback resume",
+                flow_manager,
+                flow_id,
+            )
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning(
                 "Quick pair callback stored but failed to resume %s flow %s: %s",
@@ -114,10 +124,65 @@ class SeenzusQuickPairCallbackView(http.HomeAssistantView):
             flow_manager,
             flow_id,
         )
+        # window.close() 只对脚本打开的窗口生效;App 内嵌 WebView / 手动新开
+        # 标签页里关不掉,300ms 后跳回集成页,不再停在白屏。网页版弹窗在超时
+        # 触发前就已被 close 关掉,行为不变。
         return web.Response(
             headers={"content-type": "text/html"},
-            text="<script>window.close()</script>",
+            text=(
+                "<script>window.close();setTimeout(function(){"
+                "location.replace('/config/integrations')},300)</script>"
+            ),
         )
+
+
+def _app_resume_requested(request: web.Request) -> bool:
+    """?app=1 标记:仅 App 内嵌 WebView 的配对会话由 Seenzus 服务端附加。
+
+    只有明确没有前端在盯着的接入方才启用服务端推进;浏览器路径保持单次
+    configure(剩余推进交给常驻 HA 前端标签页),网页版行为一字不变。
+    """
+    value = str(request.query.get("app") or "").strip().lower()
+    return value not in ("", "0", "false")
+
+
+async def _call_flow_configure(configure, flow_id: str) -> Any:
+    """async_configure 统一调用口,保留测试 fake 兼容的 TypeError 回退链。"""
+    try:
+        return await configure(flow_id=flow_id, user_input=None)
+    except TypeError:
+        try:
+            return await configure(flow_id)
+        except TypeError:
+            return await configure()
+
+
+async def _drive_flow_to_terminal_state(configure, flow_id: str, result: Any) -> Any:
+    """App 场景:把 flow 从 EXTERNAL_STEP_DONE 推到终态。
+
+    HA 的 async_configure 只对 SHOW_PROGRESS_DONE 自动续跑;external step
+    之后停在 EXTERNAL_STEP_DONE,等的是常驻前端页面再发一次 configure
+    (data_entry_flow_progressed 事件驱动)。App WebView 里没有那个页面,
+    所以服务端自己推到 CREATE_ENTRY / ABORT / FORM。FORM 是 code exchange
+    失败重显表单的合法终点,不能再推。
+    """
+    steps = 0
+    while (
+        isinstance(result, dict)
+        and result.get("type") == FlowResultType.EXTERNAL_STEP_DONE
+        and steps < MAX_FLOW_RESUME_STEPS
+    ):
+        steps += 1
+        result = await _call_flow_configure(configure, flow_id)
+    if steps:
+        final_type = result.get("type") if isinstance(result, dict) else type(result).__name__
+        _LOGGER.info(
+            "Quick pair app callback resumed flow %s %d more step(s), final type=%s",
+            flow_id,
+            steps,
+            final_type,
+        )
+    return result
 
 
 # 向后兼容别名：品牌重命名时类名由 SavanAI* 改为 Seenzus*，但 config_flow.py
