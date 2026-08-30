@@ -156,15 +156,19 @@
 | `test_publish_result_failure_counts_error_once_and_does_not_raise` | result 发布失败只记一次错误、不抛 |
 | `test_last_req_is_timezone_aware_after_command` | 命令后 last_req 带时区 |
 
-## `tests/test_mqtt_loop_behavior.py` — MQTT 连接生命周期（6）
+## `tests/test_mqtt_loop_behavior.py` — MQTT 连接生命周期（10）
 
 | 测试 | 验证行为 |
 |---|---|
 | `test_loop_missing_host_marks_error_and_waits_for_external_auth` | 缺 host 时置错误并等外部授权 |
-| `test_loop_happy_connect_subscribes_then_presence_snapshot_catalog` | 连上后订阅 → presence → 快照 → catalog（裸 TCP 无传输参数） |
+| `test_loop_happy_connect_subscribes_then_presence_catalog_and_snapshot` | 连上后订阅 → presence → catalog → 后台快照（裸 TCP 无传输参数） |
+| `test_loop_catalog_keeps_every_entity_attached_to_an_unfamiliar_device` | 未知设备类型仍保留其全部挂载实体 |
+| `test_loop_catalog_keeps_standalone_entities_from_official_platforms` | 官方平台的独立实体仍进入 catalog |
 | `test_loop_wss_entry_connects_with_websockets_transport` | wss entry 以 websockets transport + TLS 连接 |
 | `test_loop_publishes_startup_snapshot_once_across_reconnect_cycles` | 重连周期内启动快照只发一次 |
+| `test_interrupted_startup_snapshot_does_not_block_ready_commands_or_replay` | 大快照阻塞/中断时 catalog、ready、命令仍可用，重连不从头重放 |
 | `test_loop_defers_startup_snapshot_until_ha_started` | 启动快照等 HA started 后再发 |
+| `test_loop_returns_the_connected_instances_runtime_action_catalog` | 已连接实例返回真实运行时动作目录 |
 | `test_loop_routes_command_message_to_published_result` | 命令消息路由到 result |
 
 ## `tests/test_runtime_flags.py` — 运行时开关 / presence 心跳（5）

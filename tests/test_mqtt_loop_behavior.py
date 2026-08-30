@@ -136,7 +136,7 @@ async def test_loop_missing_host_marks_error_and_waits_for_external_auth(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_loop_happy_connect_subscribes_then_presence_snapshot_catalog(monkeypatch) -> None:
+async def test_loop_happy_connect_subscribes_then_presence_catalog_and_snapshot(monkeypatch) -> None:
     coordinator, fake = _make_coordinator(
         monkeypatch, data=dict(HAPPY_ENTRY_DATA), cycles=[{"end": "block"}]
     )
@@ -177,6 +177,13 @@ async def test_loop_happy_connect_subscribes_then_presence_snapshot_catalog(monk
         assert catalogs[0]["retain"] is True
         assert catalogs[0]["qos"] == 0
         assert json.loads(catalogs[0]["payload"])["source"] == "startup_snapshot"
+
+        # Retained topology is the readiness contract and must win the race
+        # against the best-effort full state flood.
+        topics = [item["topic"] for item in client.published]
+        assert topics.index(CATALOG_TOPIC) < topics.index(
+            "seenzus/v2/bridge/ha-demo/state/light.living_room"
+        )
 
         assert coordinator.status == "active"
         assert coordinator.mqtt_connected is True
@@ -376,8 +383,8 @@ async def test_loop_publishes_startup_snapshot_once_across_reconnect_cycles(monk
     first_cycle, second_cycle = fake.clients
     assert [item["topic"] for item in first_cycle.published] == [
         PRESENCE_TOPIC,
-        "seenzus/v2/bridge/ha-demo/state/light.living_room",
         CATALOG_TOPIC,
+        "seenzus/v2/bridge/ha-demo/state/light.living_room",
     ]
     # Reconnect re-asserts presence AND the retained catalog (durable topology truth —
     # self-heals an empty broker after a restart), but NOT the full state snapshot
@@ -393,13 +400,80 @@ async def test_loop_publishes_startup_snapshot_once_across_reconnect_cycles(monk
     assert reconnect_catalog["retain"] is True
     assert reconnect_catalog["qos"] == 1
     assert json.loads(reconnect_catalog["payload"])["source"] == "reconnect"
-    assert coordinator._initial_snapshot_done is True
+    assert coordinator._initial_snapshot_attempted is True
     assert coordinator._mqtt_client is None
     # A recovered connection must not keep presenting the previous iterator
     # disconnect as its current Last error.
     assert coordinator.last_error is None
     # MqttError retry backoff is 5s (heartbeat sleeps filtered out).
     assert [delay for delay in sleeps if delay in (5, 10)] == [5]
+
+
+@pytest.mark.asyncio
+async def test_interrupted_startup_snapshot_does_not_block_ready_commands_or_replay(monkeypatch) -> None:
+    disconnect = asyncio.Event()
+
+    async def disconnect_after_snapshot_starts():
+        await disconnect.wait()
+        return FakeMqttError("[code:7] connection lost during snapshot")
+
+    command = FakeMqttMessage(
+        "seenzus/v2/bridge/ha-demo/command/catalog-during-snapshot",
+        json.dumps({"method": "GET", "path": "/api/seenzus/device-catalog"}),
+    )
+    coordinator, fake = _make_coordinator(
+        monkeypatch,
+        data=dict(HAPPY_ENTRY_DATA),
+        cycles=[
+            {"messages": [command], "end": disconnect_after_snapshot_starts},
+            {"end": "block"},
+        ],
+    )
+    coordinator._on_ha_started(None)
+    snapshot_started = asyncio.Event()
+    snapshot_calls = 0
+
+    async def blocked_snapshot(_client, *, source: str, correlation_id=None) -> None:
+        nonlocal snapshot_calls
+        assert source == "startup_snapshot"
+        snapshot_calls += 1
+        snapshot_started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(coordinator, "_publish_all_states", blocked_snapshot)
+    _sleeps, real_sleep = _install_recording_sleep(monkeypatch)
+
+    task = asyncio.get_running_loop().create_task(coordinator._mqtt_loop())
+    try:
+        await asyncio.wait_for(snapshot_started.wait(), timeout=5)
+        for _ in range(20):
+            await real_sleep(0)
+            if any("/result/catalog-during-snapshot" in item["topic"] for item in fake.clients[0].published):
+                break
+
+        # A large Home Assistant can take minutes to publish its full state snapshot.
+        # Catalog ingestion, readiness and command handling must not wait behind it.
+        first_client = fake.clients[0]
+        assert CATALOG_TOPIC in [item["topic"] for item in first_client.published]
+        assert any(
+            "/result/catalog-during-snapshot" in item["topic"]
+            for item in first_client.published
+        )
+        assert coordinator.status == "active"
+        assert coordinator.mqtt_connected is True
+
+        # Interrupt the snapshot's connection, let the retry shell reconnect,
+        # and prove the at-most-once guard prevents a from-zero replay.
+        disconnect.set()
+        for _ in range(40):
+            await real_sleep(0)
+            if len(fake.clients) == 2 and coordinator.mqtt_connected:
+                break
+        assert len(fake.clients) == 2
+        assert CATALOG_TOPIC in [item["topic"] for item in fake.clients[1].published]
+        assert snapshot_calls == 1
+    finally:
+        await _shutdown_loop(coordinator, task)
 
 
 @pytest.mark.asyncio
@@ -420,7 +494,7 @@ async def test_loop_defers_startup_snapshot_until_ha_started(monkeypatch) -> Non
         assert client.subscriptions == [{"topic": COMMAND_SUB, "qos": 1}]
         # Connected and announced, but no snapshot before HA has started.
         assert [item["topic"] for item in client.published] == [PRESENCE_TOPIC]
-        assert coordinator._initial_snapshot_done is False
+        assert coordinator._initial_snapshot_attempted is False
 
         coordinator._on_ha_started(None)
         for _ in range(10):
@@ -429,7 +503,7 @@ async def test_loop_defers_startup_snapshot_until_ha_started(monkeypatch) -> Non
         topics = [item["topic"] for item in client.published]
         assert "seenzus/v2/bridge/ha-demo/state/light.living_room" in topics
         assert CATALOG_TOPIC in topics
-        assert coordinator._initial_snapshot_done is True
+        assert coordinator._initial_snapshot_attempted is True
         assert coordinator.status == "active"
     finally:
         await _shutdown_loop(coordinator, task)
