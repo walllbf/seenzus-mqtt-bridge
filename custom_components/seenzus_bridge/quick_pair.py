@@ -52,6 +52,10 @@ MAX_FLOW_RESUME_STEPS = 4
 _LOGGER = logging.getLogger(__name__)
 
 
+class FlowResumeLimitExceeded(RuntimeError):
+    """Raised when an App callback cannot drive a flow to a terminal state."""
+
+
 class SeenzusQuickPairCallbackView(http.HomeAssistantView):
     """Receive quick-pair authorization callbacks for config and options flows."""
 
@@ -99,6 +103,20 @@ class SeenzusQuickPairCallbackView(http.HomeAssistantView):
             result = await _call_flow_configure(configure, flow_id)
             if app_resume:
                 result = await _drive_flow_to_terminal_state(configure, flow_id, result)
+        except FlowResumeLimitExceeded as err:
+            _LOGGER.error(
+                "Quick pair callback could not finish %s flow %s: %s",
+                flow_manager,
+                flow_id,
+                err,
+            )
+            return web.Response(
+                text=(
+                    "Authorization received, but Home Assistant setup did not complete. "
+                    "Please return to Home Assistant and retry."
+                ),
+                status=500,
+            )
         except UnknownFlow:
             # 前端可能抢先把 flow 跑完并移除——视为成功(集成已创建),
             # 而不是把报错页/白页甩给用户。
@@ -142,8 +160,8 @@ def _app_resume_requested(request: web.Request) -> bool:
     只有明确没有前端在盯着的接入方才启用服务端推进;浏览器路径保持单次
     configure(剩余推进交给常驻 HA 前端标签页),网页版行为一字不变。
     """
-    value = str(request.query.get("app") or "").strip().lower()
-    return value not in ("", "0", "false")
+    value = str(request.query.get("app") or "").strip()
+    return value == "1"
 
 
 async def _call_flow_configure(configure, flow_id: str) -> Any:
@@ -174,6 +192,13 @@ async def _drive_flow_to_terminal_state(configure, flow_id: str, result: Any) ->
     ):
         steps += 1
         result = await _call_flow_configure(configure, flow_id)
+    if (
+        isinstance(result, dict)
+        and result.get("type") == FlowResultType.EXTERNAL_STEP_DONE
+    ):
+        raise FlowResumeLimitExceeded(
+            f"flow remained in EXTERNAL_STEP_DONE after {MAX_FLOW_RESUME_STEPS} resume steps"
+        )
     if steps:
         final_type = result.get("type") if isinstance(result, dict) else type(result).__name__
         _LOGGER.info(

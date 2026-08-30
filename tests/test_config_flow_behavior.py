@@ -950,7 +950,7 @@ async def test_quick_pair_callback_view_returns_202_when_flow_resume_fails(monke
     }
 
 
-@pytest.mark.parametrize("app_value", [None, "0", "false"])
+@pytest.mark.parametrize("app_value", [None, "0", "false", "true", "desktop"])
 @pytest.mark.asyncio
 async def test_quick_pair_callback_view_without_app_flag_keeps_single_configure(
     monkeypatch, app_value
@@ -1018,7 +1018,8 @@ async def test_quick_pair_callback_view_with_app_flag_caps_resume_steps(monkeypa
 
     response = await SavanAIQuickPairCallbackView().get(request)
 
-    assert response.status == 200
+    assert response.status == 500
+    assert "setup did not complete" in response.text
     # 首次 configure + 至多 MAX_FLOW_RESUME_STEPS 次推进。
     assert len(hass.config_entries.flow.configure_calls) == 1 + MAX_FLOW_RESUME_STEPS
 
