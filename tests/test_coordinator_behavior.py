@@ -131,6 +131,7 @@ async def test_state_publish_failure_counts_one_error_with_state_publish_failed_
             raise RuntimeError("broker gone")
 
     coordinator._mqtt_client = _FailingPublishClient()
+    coordinator.mqtt_connected = True
     coordinator._topics = build_topics("seenzus/v2", "ha-demo")
     event = make_state_changed_event("light.demo", state="on")
     coordinator._pending_state_events["light.demo"] = event

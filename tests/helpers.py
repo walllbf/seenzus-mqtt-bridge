@@ -275,6 +275,7 @@ class _FakeMessageStream:
     After the scripted messages are exhausted, `end` decides how the cycle ends:
     - "block": park forever (test must cancel the loop task; pytest-timeout backstop)
     - "stop": end the async-for normally
+    - an async callable: await it, then apply the returned end behavior
     - an exception instance or class: raise it out of the iterator
     """
 
@@ -289,6 +290,9 @@ class _FakeMessageStream:
         if self._messages:
             return self._messages.pop(0)
         end = self._end
+        if callable(end) and not (isinstance(end, type) and issubclass(end, BaseException)):
+            self._end = await end()
+            return await self.__anext__()
         if end == "block":
             await asyncio.Event().wait()
             raise StopAsyncIteration

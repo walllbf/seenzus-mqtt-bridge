@@ -15,6 +15,7 @@ import seenzus_bridge
 from seenzus_bridge import BridgeCoordinator
 from seenzus_bridge.bridge_protocol import build_topics
 from tests.helpers import (
+    AsyncFakeMQTTClient,
     FakeAiomqttModule,
     FakeConfigEntry,
     FakeHass,
@@ -121,6 +122,14 @@ async def test_finite_runtime_work_is_owned_as_config_entry_foreground_work(monk
     monkeypatch.setattr(coordinator, "_is_model_marked_standalone_entity", lambda _state: False)
     coordinator._schedule_message("unsupported/topic", "{}", object())
     coordinator._on_state_changed(make_state_changed_event("light.demo"))
+    await asyncio.sleep(0)
+
+    # State changes may arrive while MQTT is still bootstrapping. They stay
+    # coalesced and do not race the retained catalog/presence handshake.
+    assert entry.foreground_task_names == ["seenzus command handler"]
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator.mqtt_connected = True
+    coordinator._start_state_worker_if_ready()
     await asyncio.sleep(0)
 
     assert entry.foreground_task_names == [

@@ -196,7 +196,8 @@ class BridgeCoordinator:
         self._command_prefix = ""
         self._skip_offline_presence = False
         self._ha_started_event = asyncio.Event()
-        self._initial_snapshot_done = False
+        self._initial_snapshot_attempted = False
+        self._initial_snapshot_task: asyncio.Task | None = None
         self._pending_state_events: dict[str, Event] = {}
         self._state_worker_task: asyncio.Task | None = None
         self._presence_heartbeat_task: asyncio.Task | None = None
@@ -391,6 +392,7 @@ class BridgeCoordinator:
             self._cancel_runtime_tasks()
 
         self._task = None
+        self._initial_snapshot_task = None
         self._state_worker_task = None
         self._presence_heartbeat_task = None
         self._command_tasks.clear()
@@ -414,6 +416,7 @@ class BridgeCoordinator:
     def _cancel_runtime_tasks(self) -> None:
         for task in (
             self._task,
+            self._initial_snapshot_task,
             self._state_worker_task,
             self._presence_heartbeat_task,
             *self._command_tasks,
@@ -433,6 +436,7 @@ class BridgeCoordinator:
         self._cancel_runtime_tasks()
         task_groups = (
             ("command cancellation", tuple(self._command_tasks)),
+            ("initial snapshot cancellation", (self._initial_snapshot_task,)),
             ("state task cancellation", (self._state_worker_task,)),
             ("MQTT disconnect", (self._task,)),
             ("heartbeat cancellation", (self._presence_heartbeat_task,)),
@@ -572,10 +576,11 @@ class BridgeCoordinator:
                 raise
             finally:
                 await self._stop_presence_heartbeat()
+                await self._stop_initial_snapshot()
                 self._mqtt_client = None
 
     async def _connect_and_serve(self, aiomqtt: Any, client_id: str) -> bool:
-        """Resolve config, connect, announce, snapshot once, pump messages.
+        """Resolve config, connect, announce, become ready, pump messages.
 
         Returns False when the MQTT host is not configured yet so the retry
         shell can back off; connection errors propagate to the shell.
@@ -613,38 +618,34 @@ class BridgeCoordinator:
             identifier=client_id,
             **_transport_connect_kwargs(conf),
         ) as client:
-            self._mqtt_client = client
-
             if self._topics is None:
                 self._topics = self._resolve_topics()
                 self._command_prefix = self._topics.command_sub[:-2]
 
             await client.subscribe(self._topics.command_sub, qos=1)
 
-            await self._publish_presence("online")
-            self._start_presence_heartbeat()
+            # Do not expose this client to the live state worker until the
+            # connection contract below (presence + retained catalog) is ready.
+            # Otherwise a large pending-state backlog can race bootstrap and
+            # starve or disconnect it before the catalog exists.
+            await self._publish_presence("online", client=client)
             # Catalog + state snapshot both need HA fully started (entity registry
             # populated); defer on the started event (no sleep-poll).
             await self._ha_started_event.wait()
-            # Full STATE snapshot: once per coordinator lifetime. State is a non-retained
-            # on-change stream, so re-flooding it on every reconnect would risk a publish
-            # storm on a flaky link (the loop reconnects every few seconds) — live values
-            # recover via change events instead.
-            if not self._initial_snapshot_done:
-                await self._publish_all_states(client, source="startup_snapshot")
-                self._initial_snapshot_done = True
-                catalog_source = "startup_snapshot"
-            else:
-                catalog_source = "reconnect"
             # Device CATALOG: re-assert on EVERY (re)connect, mirroring presence. The
             # catalog is the durable topology truth every consumer depends on, yet the
             # broker's retained store can be wiped on broker restart — publishing it once
             # per lifetime left the backend with an empty catalog after any broker bounce
             # (live reads + control all dead) until a full plugin reload. Announcing it on
-            # each connect lets consumers self-heal at reconnect time.
+            # each connect lets consumers self-heal at reconnect time. It MUST precede the
+            # best-effort full state snapshot: a large HA can spend minutes in that loop,
+            # and a disconnect used to restart it from zero forever without ever publishing
+            # the catalog.
+            catalog_source = "startup_snapshot" if not self._initial_snapshot_attempted else "reconnect"
             await self._publish_device_catalog(client, source=catalog_source)
             await self._try_pairing()
 
+            self._mqtt_client = client
             self.status = "active"
             self.mqtt_connected = True
             self.last_error = None
@@ -653,6 +654,9 @@ class BridgeCoordinator:
                 self.pairing_status = PAIRING_STATUS_BRIDGE_READY
                 self.pairing_last_error = None
             self._fire()
+            self._start_presence_heartbeat()
+            self._start_state_worker_if_ready()
+            self._start_initial_snapshot(client)
             _LOGGER.info(
                 "MQTT connected %s:%s, v2 command topic: %s",
                 host,
@@ -666,6 +670,42 @@ class BridgeCoordinator:
                 self._schedule_message(topic, raw, client)
 
         return True
+
+    def _start_initial_snapshot(self, client: Any) -> None:
+        """Launch the full state snapshot once without blocking bridge readiness.
+
+        Catalog entities already carry current state, and live state events keep flowing,
+        so this snapshot is a best-effort compatibility stream. Mark the attempt before
+        launching it: if the link drops halfway through, reconnect must not restart a
+        thousand-message flood from zero and livelock before the command pump.
+        """
+        if self._initial_snapshot_attempted:
+            return
+        self._initial_snapshot_attempted = True
+        self._initial_snapshot_task = self._entry.async_create_task(
+            self.hass,
+            self._run_initial_snapshot(client),
+            "seenzus initial state snapshot",
+        )
+
+    async def _run_initial_snapshot(self, client: Any) -> None:
+        try:
+            await self._publish_all_states(client, source="startup_snapshot")
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001
+            # The catalog is already retained and live changes remain authoritative.
+            # A snapshot transport failure must not tear down an otherwise usable bridge.
+            _LOGGER.warning("Initial HA state snapshot interrupted; continuing with live events: %s", err)
+
+    async def _stop_initial_snapshot(self) -> None:
+        task = self._initial_snapshot_task
+        self._initial_snapshot_task = None
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     def _schedule_message(self, topic: str, raw: str, client: Any) -> bool:
         if len(self._command_tasks) >= MAX_INFLIGHT_COMMANDS:
@@ -876,11 +916,10 @@ class BridgeCoordinator:
     async def _publish_catalog_payload(self, client: Any, payload: dict[str, Any], *, source: str) -> None:
         if self._topics is None:
             return
-        catalog_qos = 0 if source == "startup_snapshot" else 1
         await client.publish(
             self._topics.catalog_topic,
             json.dumps(payload, default=str),
-            qos=catalog_qos,
+            qos=0 if source == "startup_snapshot" else 1,
             retain=True,
         )
         _LOGGER.info(
@@ -966,6 +1005,12 @@ class BridgeCoordinator:
         if self._is_model_marked_standalone_entity(new_state):
             return
         self._pending_state_events[entity_id] = event
+        self._start_state_worker_if_ready()
+
+    def _start_state_worker_if_ready(self) -> None:
+        """Drain coalesced state changes only after bootstrap made the client ready."""
+        if not self._pending_state_events or self._mqtt_client is None or not self.mqtt_connected:
+            return
         if self._state_worker_task is None or self._state_worker_task.done():
             self._state_worker_task = self._entry.async_create_task(
                 self.hass,
@@ -975,6 +1020,8 @@ class BridgeCoordinator:
 
     async def _state_worker(self) -> None:
         while self._pending_state_events:
+            if self._mqtt_client is None or not self.mqtt_connected:
+                return
             entity_id, event = next(iter(self._pending_state_events.items()))
             self._pending_state_events.pop(entity_id, None)
             try:
@@ -1011,8 +1058,9 @@ class BridgeCoordinator:
             self.last_error = f"state_publish_failed:{err}"
             self._fire()
 
-    async def _publish_presence(self, status: str) -> None:
-        if self._mqtt_client is None or self._topics is None:
+    async def _publish_presence(self, status: str, *, client: Any | None = None) -> None:
+        publish_client = client or self._mqtt_client
+        if publish_client is None or self._topics is None:
             return
         self._sync_source_metadata()
         transport_scheme, transport_ws_path = self.resolve_transport()
@@ -1040,7 +1088,7 @@ class BridgeCoordinator:
         if transport_ws_path is not None:
             payload["wsPath"] = transport_ws_path
         try:
-            await self._mqtt_client.publish(
+            await publish_client.publish(
                 self._topics.presence_topic,
                 json.dumps(payload, default=str),
                 qos=1,
