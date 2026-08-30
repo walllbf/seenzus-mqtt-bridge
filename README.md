@@ -382,6 +382,17 @@ docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 
 ## 版本变更记录
 
+### v0.2.8 (2026-08-30)
+
+- MQTT 启动顺序调整为先发布保留设备目录并进入 ready / command pump，再在后台执行最佳努力的全量状态快照；大型 HA 实例的初始快照被中断时，重连不再从零重放并阻塞设备上线（#45 / #46）
+- Quick Pair 回调读到 Seenzus App 会话标记（`?app=1`，由服务端在授权会话来自 App 内嵌 WebView 时附加）后，由插件服务端自己把 config flow 从 `EXTERNAL_STEP_DONE` 推进到终态（`create_entry` / `abort` / 表单），App 内壳全程配对不再依赖常驻 HA 前端标签页，集成条目可靠建立
+- 推进步数带上限（`MAX_FLOW_RESUME_STEPS=4`）防死循环，耗尽上限仍未到终态时明确报错；`UnknownFlow` 视为成功，兼容前端标签页抢先完成配对的竞态
+- 浏览器路径（无 `app` 标记）保持单次 configure，网页版行为不变；回调页 `window.close()` 无效时 300ms 兜底跳转集成页，不再白屏
+- 测试 fake 的 `async_configure` 升级为可脚本化结果队列，能跑出真实 HA 的两步推进语义（本 bug 即由旧 fake 恒返 None 漏过）
+- 配套文档补充插件回调 view 两条路径的行为说明（`docs/quick-pair-flow.zh-CN.md` §5.1）
+- 生产真机验收：App 内壳全程与桌面浏览器两条路径均验证通过（#43）
+- 全量测试 **225 passed**，HA Core 双版本、Hassfest 与 HACS 校验经 CI 通过
+
 ### v0.2.7 (2026-08-16)
 
 - MQTT 控制命令支持可选 `operationKey`，使用 Home Assistant `.storage` 持久化操作领取、下发与完成状态

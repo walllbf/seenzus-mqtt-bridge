@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import Any
 
 from homeassistant.core import CoreState
 
@@ -89,24 +90,34 @@ class FakeServices:
         )
 
 
+class FakeFlowManager:
+    """async_configure stub with HA-realistic result semantics.
+
+    Issue #43 的教训：旧 fake 只记录调用并返回 None，跑不出真实 HA 的「首次
+    configure 停在 EXTERNAL_STEP_DONE、必须再推一次才到终态」语义，bug 就是
+    这样漏过去的。现在每次调用从 configure_results 弹出一个脚本化 result
+    （带 type 的 dict 或异常对象）；队列空时返回 None，保持旧行为——推进
+    循环立即停止，等价于 flow 已到终态。
+    """
+
+    def __init__(self) -> None:
+        self.configure_calls: list[dict] = []
+        self.configure_results: list[Any] = []
+
+    async def async_configure(self, *, flow_id: str, user_input: dict):
+        self.configure_calls.append(
+            {"flow_id": flow_id, "user_input": dict(user_input) if user_input is not None else None}
+        )
+        if self.configure_results:
+            return self.configure_results.pop(0)
+        return None
+
+
 class FakeConfigEntries:
     def __init__(self) -> None:
         self.reload_calls: list[str] = []
-        self.flow = SimpleNamespace(configure_calls=[])
-        self.options = SimpleNamespace(configure_calls=[])
-
-        async def _configure_flow(*, flow_id: str, user_input: dict):
-            self.flow.configure_calls.append(
-                {"flow_id": flow_id, "user_input": dict(user_input) if user_input is not None else None}
-            )
-
-        async def _configure_options(*, flow_id: str, user_input: dict):
-            self.options.configure_calls.append(
-                {"flow_id": flow_id, "user_input": dict(user_input) if user_input is not None else None}
-            )
-
-        self.flow.async_configure = _configure_flow
-        self.options.async_configure = _configure_options
+        self.flow = FakeFlowManager()
+        self.options = FakeFlowManager()
 
     async def async_reload(self, _entry_id: str) -> None:
         self.reload_calls.append(_entry_id)

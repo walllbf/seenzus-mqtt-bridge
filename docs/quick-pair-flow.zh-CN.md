@@ -278,6 +278,25 @@ GET /integrations/ha/web-pairing/session/{sessionId}/authorize
 }
 ```
 
+### 5.1 插件回调 view（Quick Pair 模式）
+
+Quick Pair 模式下 `redirect_uri` 指向插件自己的回调端点：
+
+```text
+GET /api/seenzus_bridge/quick_pair/callback?code=<callback_code>&state=<callback_state>
+```
+
+view 校验 `state` JWT 后走 exchange、拿 MQTT 配置，再推进本集成自己的 config flow（`async_configure`）。随后按 `app` 标记分两条路（v0.2.8 起）：
+
+- **浏览器路径（无标记）**：只调一次 `async_configure`，flow 停在 `EXTERNAL_STEP_DONE`，余下推进由发起 flow 的那个 HA 前端标签页完成——与历史行为一致。返回的 HTML 页 `window.close()` 关闭自己（授权页是 HA 前端弹窗开的），关不掉时 300ms 后兜底跳转 `/config/integrations`，不再停在白页。
+- **App 路径（`?app=1`）**：Seenzus 后端在授权会话来自 App 内嵌 WebView 时给回调 URL 附加该标记，其他 `app` 值不启用服务端推进。view 读到后由服务端自己把 flow 从 `EXTERNAL_STEP_DONE` 推到终态（`create_entry` / `abort` / 表单），步数上限 `MAX_FLOW_RESUME_STEPS=4` 防死循环；耗尽上限仍未到终态时返回明确失败，`UnknownFlow` 则视为成功（前端可能抢先跑完并移除 flow）。App 内壳没有常驻 HA 标签页，这是集成条目能建出来的唯一通路。验证日志（INFO 级）：
+
+  ```text
+  Quick pair app callback resumed flow <flow_id> N more step(s), final type=create_entry
+  ```
+
+两路后续的配置项创建与 MQTT 连接见第 8 节；App 路径的返回入口是成功页上的「返回 seenzus 应用」链接与持久化通知（成功建项时发出）。
+
 ---
 
 ## 6. HA external callback 收尾
