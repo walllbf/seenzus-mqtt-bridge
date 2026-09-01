@@ -15,6 +15,7 @@ import logging
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
+from itertools import islice
 from typing import Any
 
 from homeassistant.components import persistent_notification
@@ -85,6 +86,18 @@ _LOGGER = logging.getLogger(__name__)
 
 PRESENCE_HEARTBEAT_INTERVAL_SECONDS = 30
 MAX_INFLIGHT_COMMANDS = 8
+# 全量快照按批让出事件循环。快照走 QoS 0，publish 不等 PUBACK，因此没有任何
+# 天然背压：一次性把上千条塞进 paho 的发送队列，就是一次巨大的 socket 突发写，
+# 正是打断 TLS 链路（尤其经 Cloudflare 的 wss）的那种流量形状。原来每 50 条
+# `await asyncio.sleep(0)` 只是让出一次调度，不构成背压。
+SNAPSHOT_BATCH_SIZE = 50
+SNAPSHOT_BATCH_PAUSE_SECONDS = 0.05
+# 断线期间 HA 状态照常变化，_pending_state_events 按 entity 合并但不设上限时会
+# 无限增长；重连后 _state_worker 把整包以 QoS 1 回放，反过来打死刚建立的连接，
+# 形成「断线 → 积压更大 → 再断线」的自维持循环。超出上限丢最旧的一条——按
+# entity 合并后，只有每个 entity 的最新状态有价值。
+MAX_PENDING_STATE_EVENTS = 2000
+PENDING_DROP_LOG_INTERVAL = 500
 SHUTDOWN_CLEANUP_TIMEOUT_SECONDS = 3.0
 RELOAD_CLEANUP_TIMEOUT_SECONDS = 10.0
 
@@ -199,6 +212,10 @@ class BridgeCoordinator:
         self._initial_snapshot_attempted = False
         self._initial_snapshot_task: asyncio.Task | None = None
         self._pending_state_events: dict[str, Event] = {}
+        self._dropped_state_events = 0
+        self._next_drop_log_at = 1
+        # 唯一的 MQTT 写入闸门，见 _publish。
+        self._publish_lock = asyncio.Lock()
         self._state_worker_task: asyncio.Task | None = None
         self._presence_heartbeat_task: asyncio.Task | None = None
         self._command_tasks: set[asyncio.Task] = set()
@@ -518,7 +535,7 @@ class BridgeCoordinator:
 
         cleanup = asyncio.gather(
             *(
-                self._mqtt_client.publish(topic, "", qos=1, retain=True)
+                self._publish(self._mqtt_client, topic, "", qos=1, retain=True)
                 for topic in topics_to_clear
             ),
             return_exceptions=True,
@@ -852,6 +869,33 @@ class BridgeCoordinator:
             _LOGGER.exception("[%s] Command handling error: %s", effective_msg_id, err)
             await self._publish_result(client, effective_msg_id, success=False, status=500, error=str(err))
 
+    async def _publish(
+        self,
+        client: Any,
+        topic: str,
+        payload: str,
+        *,
+        qos: int,
+        retain: bool = False,
+    ) -> None:
+        """唯一的 MQTT 写入路径：所有 publish 必须经这把锁串行化。
+
+        paho 只有一个 socket，且 aiomqtt 不接管 paho 的网络线程，所以
+        ``client.publish()`` 会在调用方的协程栈上直接写 socket。多个协程并发
+        进入这条路径会破坏 TLS 的 SSL_WANT_WRITE 重试契约（重试必须用同一个
+        buffer），链路当场以 ``[SSL: BAD_LENGTH]`` 崩掉，随后所有在途 publish
+        变成 ``[code:4] client is not connected`` / ``Operation timed out``。
+
+        并发写入方有四路，都是独立 task，缺一把锁就一定会撞上：
+        ``_run_initial_snapshot``、``_state_worker``、``_presence_heartbeat``、
+        以及最多 MAX_INFLIGHT_COMMANDS 个 ``_handle_message``。
+
+        锁跨越 QoS 1 的 PUBACK 等待，但这不额外损失吞吐：上述每一路本来就是
+        顺序 await 单条发布，锁只是把「路与路之间」也排成队。
+        """
+        async with self._publish_lock:
+            await client.publish(topic, payload, qos=qos, retain=retain)
+
     async def _publish_result(self, client: Any, msg_id: str, *, success: bool, status: int, data: Any = None, error: str | None = None) -> None:
         if self._topics is None:
             return
@@ -868,7 +912,8 @@ class BridgeCoordinator:
             payload["data"] = data
 
         try:
-            await client.publish(
+            await self._publish(
+                client,
                 f"{self._topics.result_prefix}/{msg_id}",
                 json.dumps(payload, default=str),
                 qos=1,
@@ -903,8 +948,8 @@ class BridgeCoordinator:
                 client, entity_id, source=source, correlation_id=correlation_id, qos=snapshot_qos
             )
             published += 1
-            if published % 50 == 0:
-                await asyncio.sleep(0)
+            if published % SNAPSHOT_BATCH_SIZE == 0:
+                await asyncio.sleep(SNAPSHOT_BATCH_PAUSE_SECONDS)
         _LOGGER.info("Published full HA state snapshot: %s entities", published)
 
     async def _publish_device_catalog(self, client: Any, *, source: str, correlation_id: str | None = None) -> None:
@@ -916,7 +961,8 @@ class BridgeCoordinator:
     async def _publish_catalog_payload(self, client: Any, payload: dict[str, Any], *, source: str) -> None:
         if self._topics is None:
             return
-        await client.publish(
+        await self._publish(
+            client,
             self._topics.catalog_topic,
             json.dumps(payload, default=str),
             qos=0 if source == "startup_snapshot" else 1,
@@ -985,7 +1031,8 @@ class BridgeCoordinator:
         payload = self._build_state_payload(
             entity_id, state, source=source, correlation_id=correlation_id
         )
-        await client.publish(
+        await self._publish(
+            client,
             f"{self._topics.state_prefix}/{topic_entity}",
             json.dumps(payload, default=str),
             qos=qos,
@@ -1005,7 +1052,33 @@ class BridgeCoordinator:
         if self._is_model_marked_standalone_entity(new_state):
             return
         self._pending_state_events[entity_id] = event
+        self._trim_pending_state_events()
         self._start_state_worker_if_ready()
+
+    def _trim_pending_state_events(self) -> None:
+        """把合并后的积压压在 MAX_PENDING_STATE_EVENTS 以内，超出丢最旧的。
+
+        _on_state_changed 不管连没连着都入列，而 _state_worker 只在连上时排空。
+        真机上一次断线的 5 秒内（大量实体持续抖动）就能攒出几千条，重连瞬间以
+        QoS 1 全量回放，把刚建立的链路再次打死。丢弃是有意的：这里只保留每个
+        entity 的最新状态，快照与 catalog 才是补齐真值的路径。
+        """
+        overflow = len(self._pending_state_events) - MAX_PENDING_STATE_EVENTS
+        if overflow <= 0:
+            return
+        # islice 而不是 list(...)[:overflow]：越界后每次状态变化都会走这里，
+        # overflow 几乎恒为 1，不该为此复制整份 key 列表。
+        for stale_entity_id in list(islice(self._pending_state_events, overflow)):
+            del self._pending_state_events[stale_entity_id]
+        self._dropped_state_events += overflow
+        if self._dropped_state_events >= self._next_drop_log_at:
+            self._next_drop_log_at = self._dropped_state_events + PENDING_DROP_LOG_INTERVAL
+            _LOGGER.warning(
+                "State backlog exceeded %s coalesced entries while the MQTT link was "
+                "unhealthy; dropped %s oldest event(s) so far",
+                MAX_PENDING_STATE_EVENTS,
+                self._dropped_state_events,
+            )
 
     def _start_state_worker_if_ready(self) -> None:
         """Drain coalesced state changes only after bootstrap made the client ready."""
@@ -1046,7 +1119,8 @@ class BridgeCoordinator:
         )
         topic_entity = new_state.entity_id.replace("/", "_")
         try:
-            await self._mqtt_client.publish(
+            await self._publish(
+                self._mqtt_client,
                 f"{self._topics.state_prefix}/{topic_entity}",
                 json.dumps(payload, default=str),
                 qos=1,
@@ -1088,7 +1162,8 @@ class BridgeCoordinator:
         if transport_ws_path is not None:
             payload["wsPath"] = transport_ws_path
         try:
-            await publish_client.publish(
+            await self._publish(
+                publish_client,
                 self._topics.presence_topic,
                 json.dumps(payload, default=str),
                 qos=1,
