@@ -86,16 +86,14 @@ _LOGGER = logging.getLogger(__name__)
 
 PRESENCE_HEARTBEAT_INTERVAL_SECONDS = 30
 MAX_INFLIGHT_COMMANDS = 8
-# 全量快照按批让出事件循环。快照走 QoS 0，publish 不等 PUBACK，因此没有任何
-# 天然背压：一次性把上千条塞进 paho 的发送队列，就是一次巨大的 socket 突发写，
-# 正是打断 TLS 链路（尤其经 Cloudflare 的 wss）的那种流量形状。原来每 50 条
-# `await asyncio.sleep(0)` 只是让出一次调度，不构成背压。
+# 全量快照分批发布并短暂让出事件循环，避免短时间内把上千条 QoS 0 消息压进
+# paho 队列，也给心跳、命令和连接维护任务稳定的调度机会。
 SNAPSHOT_BATCH_SIZE = 50
 SNAPSHOT_BATCH_PAUSE_SECONDS = 0.05
 # 断线期间 HA 状态照常变化，_pending_state_events 按 entity 合并但不设上限时会
-# 无限增长；重连后 _state_worker 把整包以 QoS 1 回放，反过来打死刚建立的连接，
-# 形成「断线 → 积压更大 → 再断线」的自维持循环。超出上限丢最旧的一条——按
-# entity 合并后，只有每个 entity 的最新状态有价值。
+# 无限增长；重连后 _state_worker 若整包以 QoS 1 回放，会长期占用带宽和在途
+# 窗口，拖慢刚恢复的连接。超出上限丢最旧的一条——按 entity 合并后，只有每个
+# entity 的最新状态有价值。
 MAX_PENDING_STATE_EVENTS = 2000
 PENDING_DROP_LOG_INTERVAL = 500
 SHUTDOWN_CLEANUP_TIMEOUT_SECONDS = 3.0
@@ -214,8 +212,6 @@ class BridgeCoordinator:
         self._pending_state_events: dict[str, Event] = {}
         self._dropped_state_events = 0
         self._next_drop_log_at = 1
-        # 唯一的 MQTT 写入闸门，见 _publish。
-        self._publish_lock = asyncio.Lock()
         self._state_worker_task: asyncio.Task | None = None
         self._presence_heartbeat_task: asyncio.Task | None = None
         self._command_tasks: set[asyncio.Task] = set()
@@ -878,23 +874,16 @@ class BridgeCoordinator:
         qos: int,
         retain: bool = False,
     ) -> None:
-        """唯一的 MQTT 写入路径：所有 publish 必须经这把锁串行化。
+        """Publish through aiomqtt while preserving its in-flight window.
 
-        paho 只有一个 socket，且 aiomqtt 不接管 paho 的网络线程，所以
-        ``client.publish()`` 会在调用方的协程栈上直接写 socket。多个协程并发
-        进入这条路径会破坏 TLS 的 SSL_WANT_WRITE 重试契约（重试必须用同一个
-        buffer），链路当场以 ``[SSL: BAD_LENGTH]`` 崩掉，随后所有在途 publish
-        变成 ``[code:4] client is not connected`` / ``Operation timed out``。
-
-        并发写入方有四路，都是独立 task，缺一把锁就一定会撞上：
-        ``_run_initial_snapshot``、``_state_worker``、``_presence_heartbeat``、
-        以及最多 MAX_INFLIGHT_COMMANDS 个 ``_handle_message``。
-
-        锁跨越 QoS 1 的 PUBACK 等待，但这不额外损失吞吐：上述每一路本来就是
-        顺序 await 单条发布，锁只是把「路与路之间」也排成队。
+        aiomqtt hands each message to paho synchronously before waiting for its
+        acknowledgement.  With paho's external-loop integration, socket writes
+        are driven by one registered writer callback, so serializing this entire
+        await would only serialize PUBACK waits and introduce head-of-line
+        blocking.  Burst control belongs at the producers (snapshot batching and
+        the bounded, coalescing state backlog), not around this acknowledgement.
         """
-        async with self._publish_lock:
-            await client.publish(topic, payload, qos=qos, retain=retain)
+        await client.publish(topic, payload, qos=qos, retain=retain)
 
     async def _publish_result(self, client: Any, msg_id: str, *, success: bool, status: int, data: Any = None, error: str | None = None) -> None:
         if self._topics is None:
@@ -1051,6 +1040,10 @@ class BridgeCoordinator:
             return
         if self._is_model_marked_standalone_entity(new_state):
             return
+        # Re-inserting an existing key does not update dict insertion order.
+        # Move it to the end so trimming really discards the least recently
+        # updated entity and retains this entity's newest event.
+        self._pending_state_events.pop(entity_id, None)
         self._pending_state_events[entity_id] = event
         self._trim_pending_state_events()
         self._start_state_worker_if_ready()

@@ -734,13 +734,12 @@ def test_transport_kwargs_mqtts_sets_tls_only() -> None:
 
 
 @pytest.mark.asyncio
-async def test_concurrent_publishers_never_overlap_on_the_socket(coordinator) -> None:
-    """所有 publish 必须串行落到同一个 paho socket 上。
+async def test_concurrent_publishers_do_not_serialize_ack_waits(coordinator) -> None:
+    """Independent publishers may wait for acknowledgements concurrently.
 
-    aiomqtt 不接管 paho 的网络线程，client.publish() 在调用方协程栈上直接写
-    socket；两路并发写会破坏 TLS 的 SSL_WANT_WRITE 重试契约，链路当场以
-    ``[SSL: BAD_LENGTH]`` 崩掉。这里同时驱动 state / presence / result 三条
-    独立路径，验证它们在锁外排队而不是叠在一起。
+    aiomqtt/paho serialize the actual external-loop socket writer themselves.
+    The coordinator must not wrap the full publish await in a global lock because
+    that reduces paho's in-flight window to one and creates head-of-line blocking.
     """
 
     class _ConcurrencyProbeClient(AsyncFakeMQTTClient):
@@ -752,7 +751,7 @@ async def test_concurrent_publishers_never_overlap_on_the_socket(coordinator) ->
         async def publish(self, topic: str, payload: str, *, qos: int, retain: bool = False) -> None:
             self.inflight += 1
             self.max_inflight = max(self.max_inflight, self.inflight)
-            # 模拟等待 PUBACK 的挂起点：没有锁时其余协程会在此处插进来。
+            # Model the acknowledgement wait after paho has queued the packet.
             await asyncio.sleep(0)
             self.inflight -= 1
             await super().publish(topic, payload, qos=qos, retain=retain)
@@ -773,7 +772,7 @@ async def test_concurrent_publishers_never_overlap_on_the_socket(coordinator) ->
         coordinator._publish_result(client, "msg-1", success=True, status=200),
     )
 
-    assert client.max_inflight == 1
+    assert client.max_inflight == 8
     assert len(client.published) == 8
 
 
@@ -790,3 +789,21 @@ def test_pending_state_backlog_is_capped_dropping_oldest(coordinator, monkeypatc
         "light.demo_5",
     ]
     assert coordinator._dropped_state_events == 3
+
+
+def test_pending_state_backlog_keeps_recent_update_for_existing_entity(
+    coordinator, monkeypatch
+) -> None:
+    """Updating an existing entity makes it the newest eviction candidate."""
+    monkeypatch.setattr(coordinator_module, "MAX_PENDING_STATE_EVENTS", 3)
+
+    coordinator._on_state_changed(make_state_changed_event("light.a", state="old"))
+    coordinator._on_state_changed(make_state_changed_event("light.b"))
+    coordinator._on_state_changed(make_state_changed_event("light.c"))
+    coordinator._on_state_changed(make_state_changed_event("light.a", state="latest"))
+    coordinator._on_state_changed(make_state_changed_event("light.d"))
+
+    assert list(coordinator._pending_state_events) == ["light.c", "light.a", "light.d"]
+    retained = coordinator._pending_state_events["light.a"]
+    assert retained.data["new_state"].state == "latest"
+    assert coordinator._dropped_state_events == 1
