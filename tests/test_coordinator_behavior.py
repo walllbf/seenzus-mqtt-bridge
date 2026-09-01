@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from homeassistant.const import EntityCategory, __version__ as HA_VERSION
 
 from seenzus_bridge import BridgeCoordinator
+from seenzus_bridge import coordinator as coordinator_module
 from seenzus_bridge.bridge_protocol import build_topics
 from seenzus_bridge import dr
 from seenzus_bridge import er
@@ -729,3 +731,79 @@ def test_transport_kwargs_mqtts_sets_tls_only() -> None:
     # TLS 上下文模块级缓存：抖动重连时不得每个周期重建（回退路径会在事件
     # 循环里同步重载系统 CA 库）。
     assert _transport_connect_kwargs({"mqtt_scheme": "wss"})["tls_context"] is kwargs["tls_context"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_publishers_do_not_serialize_ack_waits(coordinator) -> None:
+    """Independent publishers may wait for acknowledgements concurrently.
+
+    aiomqtt/paho serialize the actual external-loop socket writer themselves.
+    The coordinator must not wrap the full publish await in a global lock because
+    that reduces paho's in-flight window to one and creates head-of-line blocking.
+    """
+
+    class _ConcurrencyProbeClient(AsyncFakeMQTTClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.inflight = 0
+            self.max_inflight = 0
+
+        async def publish(self, topic: str, payload: str, *, qos: int, retain: bool = False) -> None:
+            self.inflight += 1
+            self.max_inflight = max(self.max_inflight, self.inflight)
+            # Model the acknowledgement wait after paho has queued the packet.
+            await asyncio.sleep(0)
+            self.inflight -= 1
+            await super().publish(topic, payload, qos=qos, retain=retain)
+
+    client = _ConcurrencyProbeClient()
+    coordinator._mqtt_client = client
+    coordinator.mqtt_connected = True
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+
+    await asyncio.gather(
+        *(
+            coordinator._publish_state_from_event(
+                make_state_changed_event(f"light.demo_{index}")
+            )
+            for index in range(6)
+        ),
+        coordinator._publish_presence("online"),
+        coordinator._publish_result(client, "msg-1", success=True, status=200),
+    )
+
+    assert client.max_inflight == 8
+    assert len(client.published) == 8
+
+
+def test_pending_state_backlog_is_capped_dropping_oldest(coordinator, monkeypatch) -> None:
+    """断线期间的积压必须有上限，否则重连后整包回放会再次打死链路。"""
+    monkeypatch.setattr(coordinator_module, "MAX_PENDING_STATE_EVENTS", 3)
+
+    for index in range(6):
+        coordinator._on_state_changed(make_state_changed_event(f"light.demo_{index}"))
+
+    assert list(coordinator._pending_state_events) == [
+        "light.demo_3",
+        "light.demo_4",
+        "light.demo_5",
+    ]
+    assert coordinator._dropped_state_events == 3
+
+
+def test_pending_state_backlog_keeps_recent_update_for_existing_entity(
+    coordinator, monkeypatch
+) -> None:
+    """Updating an existing entity makes it the newest eviction candidate."""
+    monkeypatch.setattr(coordinator_module, "MAX_PENDING_STATE_EVENTS", 3)
+
+    coordinator._on_state_changed(make_state_changed_event("light.a", state="old"))
+    coordinator._on_state_changed(make_state_changed_event("light.b"))
+    coordinator._on_state_changed(make_state_changed_event("light.c"))
+    coordinator._on_state_changed(make_state_changed_event("light.a", state="latest"))
+    coordinator._on_state_changed(make_state_changed_event("light.d"))
+
+    assert list(coordinator._pending_state_events) == ["light.c", "light.a", "light.d"]
+    retained = coordinator._pending_state_events["light.a"]
+    assert retained.data["new_state"].state == "latest"
+    assert coordinator._dropped_state_events == 1
