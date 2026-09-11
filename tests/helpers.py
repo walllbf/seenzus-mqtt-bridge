@@ -118,6 +118,10 @@ class FakeConfigEntries:
         self.reload_calls: list[str] = []
         self.flow = FakeFlowManager()
         self.options = FakeFlowManager()
+        self.entries: dict[str, Any] = {}
+
+    def async_get_entry(self, entry_id: str):
+        return self.entries.get(entry_id)
 
     async def async_reload(self, _entry_id: str) -> None:
         self.reload_calls.append(_entry_id)
