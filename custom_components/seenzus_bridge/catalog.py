@@ -144,6 +144,20 @@ def build_device_catalog_payload(
     device_registry = dr.async_get(hass)
     devices: dict[str, dict[str, Any]] = {}
     standalone: list[dict[str, Any]] = []
+    groups_by_device: dict[str, dict[str, dict[str, str]]] = {}
+    config_entries: dict[str, dict[str, str] | None] = {}
+
+    def config_entry_group(entry_id: str | None) -> dict[str, str] | None:
+        if not entry_id:
+            return None
+        if entry_id not in config_entries:
+            entry = hass.config_entries.async_get_entry(entry_id)
+            # Only public registry labels cross the wire. Never serialize entry.data/options.
+            config_entries[entry_id] = (
+                {"id": entry_id, "title": entry.title, "domain": entry.domain}
+                if entry is not None else None
+            )
+        return config_entries[entry_id]
 
     for state in hass.states.async_all():
         entity_id = getattr(state, "entity_id", "")
@@ -175,8 +189,16 @@ def build_device_catalog_payload(
             )
             standalone.append(standalone_device)
 
+        native_id = device_id if attached_to_device else entity_id
+        group = config_entry_group(getattr(entity_entry, "config_entry_id", None))
+        if group:
+            groups_by_device.setdefault(native_id, {})[group["id"]] = group
+
     catalog = list(devices.values()) + standalone
     for device in catalog:
+        groups = groups_by_device.get(device["deviceId"], {})
+        # Additive to wire 2.1: [] is authoritative; old publishers omit the field.
+        device["configEntries"] = [groups[key] for key in sorted(groups)]
         entities = device["entities"]
         device["entityCount"] = len(entities)
         device["availableEntityCount"] = sum(
