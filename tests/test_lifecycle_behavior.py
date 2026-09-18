@@ -118,7 +118,7 @@ async def test_finite_runtime_work_is_owned_as_config_entry_foreground_work(monk
     coordinator = BridgeCoordinator(hass, entry)
     coordinator._topics = build_topics("seenzus/v2", "ha-demo")
 
-    monkeypatch.setattr(coordinator, "_is_own_entity", lambda _entity_id: False)
+    monkeypatch.setattr(coordinator, "_is_excluded_entity", lambda _entity_id: False)
     monkeypatch.setattr(coordinator, "_is_model_marked_standalone_entity", lambda _state: False)
     coordinator._schedule_message("unsupported/topic", "{}", object())
     coordinator._on_state_changed(make_state_changed_event("light.demo"))

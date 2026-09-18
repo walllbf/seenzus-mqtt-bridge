@@ -27,6 +27,8 @@ class PairingCallbackResult:
 
     ok: bool
     session_id: str
+    world_id: str | None = None
+    world_name: str | None = None
     bridge_id: str | None = None
     source_id: str | None = None
     source_type: str | None = None

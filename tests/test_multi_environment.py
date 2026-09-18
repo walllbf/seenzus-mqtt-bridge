@@ -1,0 +1,226 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from seenzus_bridge import async_migrate_entry
+from seenzus_bridge.config_flow import SavanAIBridgeConfigFlow, SavanAIBridgeOptionsFlow
+from seenzus_bridge.environments import ENVIRONMENTS, entry_environment
+from tests.helpers import FakeHass, FakeConfigEntry
+from tests.test_device_access import home
+
+
+def flow_for(hass, world="world-a"):
+    flow = SavanAIBridgeConfigFlow()
+    flow.hass = hass
+    flow.context = {"source": "user"}
+    flow._quick_pair_api_base = ENVIRONMENTS["cn"][1]
+    flow._quick_pair_session_id = "wps_test"
+    flow._quick_pair_page_url = "https://app.seenzus.cn/pair"
+    flow._quick_pair_exchange_result = SimpleNamespace(ok=True, session_id="wps_test", world_id=world,
+        world_name=world, source_id=f"source-{world}", confirmed_at=None, mqtt={"host": "mqtt.test", "password": "rotated"})
+    flow.async_create_entry = lambda **kwargs: {"type": "created", **kwargs}
+    flow.async_abort = lambda **kwargs: {"type": "abort", **kwargs}
+    return flow
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("world", ["world-a", "world-b"])
+async def test_same_environment_cannot_add_a_second_entry_even_for_another_world(world):
+    hass = FakeHass()
+    original = FakeConfigEntry(data={"environment": "cn", "pairing_api_base": ENVIRONMENTS["cn"][1],
+        "world_id": "world-a", "source_id": "source-world-a", "mqtt_password": "keep-secret", "device_scope": "selected", "allowed_device_ids": ["city"]})
+    hass.config_entries.entries.append(original)
+    second = flow_for(hass, world)
+    second._scope = {"device_scope": "all"}
+    assert (await second.async_step_seamless_finish())["reason"] == "environment_already_configured"
+    assert original.data["mqtt_password"] == "keep-secret"
+    assert original.data["device_scope"] == "selected"
+    assert original.data["allowed_device_ids"] == ["city"]
+    assert len(hass.config_entries.entries) == 1
+
+
+@pytest.mark.asyncio
+async def test_four_environment_slots_and_all_custom_urls_share_one_dev_slot():
+    hass = FakeHass()
+    for environment, api in [(key, value[1]) for key, value in ENVIRONMENTS.items()] + [("custom", "http://dev-one.local/api")]:
+        flow = flow_for(hass)
+        flow._quick_pair_api_base = api
+        result = await flow.async_step_seamless_finish()
+        assert result["type"] == "created" and flow.context["unique_id"] == environment
+        hass.config_entries.entries.append(FakeConfigEntry(entry_id=environment, data=result["data"]))
+    assert (await flow_for(hass).async_step_user())["reason"] == "all_environments_configured"
+    another_dev = flow_for(hass, "another-world")
+    another_dev._quick_pair_api_base = "http://dev-two.local/different-api"
+    assert (await another_dev.async_step_seamless_finish())["reason"] == "environment_already_configured"
+    assert len(hass.config_entries.entries) == 4
+
+
+@pytest.mark.asyncio
+async def test_duplicate_is_blocked_before_session_and_callback_exchange(monkeypatch):
+    hass = FakeHass()
+    hass.config_entries.entries.append(FakeConfigEntry(data={"environment": "cn", "world_id": "world-a"}))
+    create, exchange = AsyncMock(), AsyncMock()
+    monkeypatch.setattr("seenzus_bridge.config_flow.create_web_pairing_session", create)
+    monkeypatch.setattr("seenzus_bridge.config_flow.exchange_web_pairing_callback_code", exchange)
+    explicit = flow_for(hass)
+    explicit._selected_environment = "cn"
+    assert (await explicit.async_step_seamless({}))["reason"] == "environment_already_configured"
+    automatic = flow_for(hass)
+    automatic._quick_pair_api_base = None
+    automatic._quick_pair_callback_state = "nonce"
+    automatic._quick_pair_callback_state_token = "signed-state"
+    result = await automatic.async_step_seamless_authorize({"state": {"pairing_state": "nonce"},
+        "environment": "cn", "session_id": "wps_test", "code": "unused"})
+    assert result["reason"] == "environment_already_configured"
+    create.assert_not_awaited()
+    exchange.assert_not_awaited()
+
+
+def test_legacy_endpoint_aliases_and_manual_entries_have_one_stable_environment_slot():
+    assert entry_environment({"pairing_api_base": "https://APP.SEENZUS.CN:443/api/savant"}) == "cn"
+    assert entry_environment({"pairing_api_base": "http://dev-one.local/api"}) == "custom"
+    assert entry_environment({"pairing_api_base": "http://dev-two.local/api"}) == "custom"
+    assert entry_environment({"pairing_mode": "manual"}) == "custom"
+
+
+@pytest.mark.asyncio
+async def test_ordinary_choices_are_production_but_uat_app_can_pair_without_developer_file(monkeypatch):
+    flow = flow_for(FakeHass())
+    for environment in ("cn", "global"):
+        flow.hass.config_entries.entries.append(FakeConfigEntry(entry_id=environment, data={"environment": environment}))
+    monkeypatch.setattr("seenzus_bridge.config_flow.resolve_dev_pairing_api_base", AsyncMock(return_value=None))
+    assert set(await flow._environment_choices()) == {"auto", "cn", "global"}
+    assert (await flow.async_step_environment({"environment": "uat"}))["reason"] == "invalid_environment"
+    flow._quick_pair_api_base = None
+    flow._quick_pair_callback_state = "nonce"
+    flow._quick_pair_callback_state_token = "signed-state"
+    flow.async_external_step_done = lambda **kwargs: kwargs
+    exchange = AsyncMock(return_value=flow._quick_pair_exchange_result)
+    monkeypatch.setattr("seenzus_bridge.config_flow.exchange_web_pairing_callback_code", exchange)
+    await flow.async_step_seamless_authorize({"state": {"pairing_state": "nonce"},
+        "environment": "uat", "session_id": "wps_test", "code": "uat-code"})
+    assert exchange.call_args.kwargs["api_base"] == ENVIRONMENTS["uat"][1]
+    result = await flow.async_step_seamless_finish()
+    assert result["type"] == "created" and result["data"]["environment"] == "uat"
+    assert set(await flow._environment_choices()) == {"auto", "cn", "global"}
+
+
+@pytest.mark.asyncio
+async def test_manual_setup_requires_environment_and_cannot_bypass_slot_limit(monkeypatch):
+    flow = flow_for(FakeHass())
+    flow.async_show_form = lambda **kwargs: kwargs
+    monkeypatch.setattr("seenzus_bridge.config_flow.resolve_dev_pairing_api_base", AsyncMock(return_value=None))
+    assert (await flow.async_step_user({"pairing_mode": "manual"}))["step_id"] == "environment"
+    assert (await flow.async_step_environment({"environment": "cn"}))["step_id"] == "scope"
+    assert (await flow.async_step_scope({"device_scope": "all"}))["step_id"] == "manual"
+    data = {"mqtt_settings": {"mqtt_host": "broker.test"}}
+    result = await flow.async_step_manual(data)
+    assert result["data"]["environment"] == "cn" and flow.context["unique_id"] == "cn"
+    flow.hass.config_entries.entries.append(FakeConfigEntry(data=result["data"]))
+    second = flow_for(flow.hass)
+    second._selected_environment = "cn"
+    assert (await second.async_step_manual(data))["reason"] == "environment_already_configured"
+
+
+@pytest.mark.asyncio
+async def test_repair_keeps_environment_and_world_despite_developer_preset(monkeypatch):
+    hass = FakeHass()
+    entry = FakeConfigEntry(data={"pairing_api_base": ENVIRONMENTS["cn"][1], "world_id": "world-a", "source_id": "source-a",
+        "device_scope": "selected", "allowed_device_ids": ["city"]})
+    hass.config_entries.entries.append(entry)
+    flow = SavanAIBridgeOptionsFlow(entry)
+    flow.hass = hass
+    monkeypatch.setattr("seenzus_bridge.config_flow._resolve_ha_instance_id", AsyncMock(return_value="ha-install"))
+    monkeypatch.setattr("seenzus_bridge.config_flow._build_quick_pair_callback_context", lambda *a: ("http://ha.local/api/seenzus_bridge/quick_pair/callback", "nonce", "signed-state"))
+    preset = AsyncMock(side_effect=AssertionError("existing entries must not read a new developer preset"))
+    monkeypatch.setattr("seenzus_bridge.config_flow.resolve_dev_pairing_api_base", preset)
+    create = AsyncMock(return_value=SimpleNamespace(ok=True, pairing_page_url="https://app.seenzus.cn/pair", session_id="wps_test"))
+    monkeypatch.setattr("seenzus_bridge.config_flow.create_web_pairing_session", create)
+    flow.async_external_step = lambda **kwargs: kwargs
+    await flow.async_step_seamless({})
+    assert create.call_args.kwargs["api_base"] == ENVIRONMENTS["cn"][1]
+    assert create.call_args.kwargs["expected_world_id"] == "world-a"
+    preset.assert_not_awaited()
+    flow.async_create_entry = lambda **kwargs: kwargs
+    result = flow._entry_data_or_reshow(flow_for(hass)._quick_pair_exchange_result)
+    assert result["data"]["device_scope"] == "selected" and result["data"]["allowed_device_ids"] == ["city"]
+    assert result["data"]["mqtt_password"] == "rotated" and entry.unique_id == "cn"
+
+
+@pytest.mark.asyncio
+async def test_auto_callback_cannot_choose_arbitrary_server(monkeypatch):
+    flow = flow_for(FakeHass())
+    flow._quick_pair_api_base = None
+    flow._quick_pair_session_id = None
+    flow._quick_pair_callback_state = "nonce"
+    flow._quick_pair_callback_state_token = "signed-state"
+    flow.async_external_step_done = lambda **kwargs: kwargs
+    exchange = AsyncMock()
+    monkeypatch.setattr("seenzus_bridge.config_flow.exchange_web_pairing_callback_code", exchange)
+    await flow.async_step_seamless_authorize({"state": {"pairing_state": "nonce"}, "code": "code",
+        "environment": "https://attacker.example", "session_id": "wps_bad"})
+    exchange.assert_not_awaited()
+    assert flow._quick_pair_finish_error == "quick_pair_code_exchange_failed"
+
+
+@pytest.mark.asyncio
+async def test_missing_context_requests_environment_instead_of_defaulting(monkeypatch):
+    flow = flow_for(FakeHass())
+    flow._quick_pair_api_base = None
+    flow._quick_pair_finish_error = "environment_required"
+    monkeypatch.setattr("seenzus_bridge.config_flow.resolve_dev_pairing_api_base", AsyncMock(return_value=None))
+    flow.async_show_form = lambda **kwargs: kwargs
+    result = await flow.async_step_seamless_finish()
+    assert result["step_id"] == "environment"
+    assert flow._quick_pair_api_base is None
+
+
+@pytest.mark.asyncio
+async def test_migration_keeps_existing_endpoint_credentials_and_whole_ha_grant():
+    hass = FakeHass()
+    entry = FakeConfigEntry(data={"pairing_api_base": ENVIRONMENTS["uat"][1], "mqtt_password": "old-secret"})
+    entry.version = 1
+    assert await async_migrate_entry(hass, entry)
+    assert entry.version == 2 and entry.data["environment"] == "uat"
+    assert entry.unique_id == "uat"
+    assert entry.data["mqtt_password"] == "old-secret" and entry.data["device_scope"] == "all"
+
+
+@pytest.mark.asyncio
+async def test_area_expansion_is_a_snapshot_and_scope_options_preserve_binding(home):
+    hass, entities, devices, entry, _ = home
+    entry.data.update({"mqtt_password": "keep-secret", "world_id": "world-a", "environment": "cn"})
+    flow = SavanAIBridgeOptionsFlow(entry)
+    flow.hass = hass
+    flow.async_show_form = lambda **kwargs: kwargs
+    flow.async_create_entry = lambda **kwargs: kwargs
+    assert (await flow.async_step_init({"action": "devices"}))["step_id"] == "scope"
+    await flow.async_step_scope({"device_scope": "selected"})
+    assert (await flow.async_step_devices({"areas": ["downtown"]}))["step_id"] == "entities"
+    result = await flow.async_step_entities({"entities": ["input_boolean.helper"]})
+    assert result["data"]["allowed_device_ids"] == ["city"]
+    assert result["data"]["allowed_entity_registry_ids"] == ["stable-input_boolean.helper"]
+    assert result["data"]["mqtt_password"] == "keep-secret" and result["data"]["world_id"] == "world-a"
+    devices.add("new-city", area_id="downtown")
+    assert result["data"]["allowed_device_ids"] == ["city"]
+    await flow.async_step_devices({})
+    empty = await flow.async_step_entities({})
+    assert empty["data"]["device_scope"] == "selected"
+    assert empty["data"]["allowed_device_ids"] == empty["data"]["allowed_entity_registry_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_pending_pairing_serializes_entries_but_cancelled_flow_releases_slot(monkeypatch):
+    hass = FakeHass()
+    first, second = flow_for(hass), flow_for(hass, "world-b")
+    first.flow_id, second.flow_id = "first-flow", "second-flow"
+    assert first._claim_pairing_slot()
+    monkeypatch.setattr(hass.config_entries.flow, "async_progress", lambda: [{"flow_id": first.flow_id}])
+    second._reshow_seamless_form = lambda reason: {"error": reason}
+    create = AsyncMock()
+    monkeypatch.setattr("seenzus_bridge.config_flow.create_web_pairing_session", create)
+    assert await second.async_step_seamless({}) == {"error": "pairing_in_progress"}
+    create.assert_not_awaited()
+    monkeypatch.setattr(hass.config_entries.flow, "async_progress", lambda: [])
+    assert second._claim_pairing_slot()

@@ -273,6 +273,9 @@ async def create_web_pairing_session(
     redirect_uri: str | None = None,
     state: str | None = None,
     ha_instance_id: str | None = None,
+    protocol_version: int | None = None,
+    expected_world_id: str | None = None,
+    expected_source_id: str | None = None,
     timeout_seconds: int = 10,
 ) -> PairingSessionCreateResult:
     """Create a web-based pairing session and return the page URL.
@@ -295,6 +298,12 @@ async def create_web_pairing_session(
     }
     if ha_instance_id:
         body["haInstanceId"] = ha_instance_id
+    if protocol_version is not None:
+        body["protocolVersion"] = protocol_version
+    if expected_world_id:
+        body["expectedWorldId"] = expected_world_id
+    if expected_source_id:
+        body["expectedSourceId"] = expected_source_id
 
     outcome = await _call_pairing_api(
         "POST",
@@ -426,6 +435,8 @@ async def exchange_web_pairing_callback_code(
         source_id=str(payload.get("sourceId", "")) or None,
         source_type=str(payload.get("sourceType", "")) or None,
         source_name=str(payload.get("sourceName", "")) or None,
+        world_id=str(payload.get("worldId", "")) or None,
+        world_name=str(payload.get("worldName", "")) or None,
         config_source=str(payload.get("configSource", "")) or None,
         confirmed_at=str(payload.get("confirmedAt", "")) or None,
         app_return_url=_read_app_return_url(payload),

@@ -10,6 +10,7 @@ from html import escape as _html_escape
 import json
 import logging
 import secrets
+import time
 from typing import Any
 from urllib.parse import quote, urlsplit
 
@@ -34,6 +35,7 @@ from .const import DOMAIN, PRODUCT_NAME, QUICK_PAIR_LAST_DIAGNOSTIC
 QUICK_PAIR_CALLBACK_PATH = "/api/seenzus_bridge/quick_pair/callback"
 QUICK_PAIR_CALLBACK_VIEW_REGISTERED = "quick_pair_callback_view_registered"
 QUICK_PAIR_CALLBACK_PAYLOADS = "quick_pair_callback_payloads"
+QUICK_PAIR_COMPLETED_STATES = "quick_pair_completed_states"
 # payload 信箱只在 flow 恢复时被 pop——若浏览器回跳后 flow 永远没恢复，
 # 条目会永久滞留。设上限并「先逐最旧、再插入」，保证刚存入的 payload 必然幸存。
 QUICK_PAIR_CALLBACK_PAYLOAD_LIMIT = 16
@@ -76,6 +78,9 @@ class SeenzusQuickPairCallbackView(http.HomeAssistantView):
             return web.Response(text="Invalid state parameter", status=400)
 
         user_input: dict[str, Any] = {"state": state}
+        for key in ("environment", "session_id"):
+            if key in request.query:
+                user_input[key] = request.query[key]
         if "code" in request.query:
             user_input["code"] = request.query["code"]
         elif "error" in request.query:
@@ -87,12 +92,15 @@ class SeenzusQuickPairCallbackView(http.HomeAssistantView):
         flow_manager = str(state.get("flow_manager", FLOW_MANAGER_CONFIG)).strip()
         if not flow_id:
             return web.Response(text="Missing flow id", status=400)
+        if flow_manager not in (FLOW_MANAGER_CONFIG, FLOW_MANAGER_OPTIONS):
+            return web.Response(text="Invalid flow manager", status=400)
 
         callback_state = str(state.get("pairing_state", "")).strip()
         if not callback_state:
             return web.Response(text="Missing pairing state", status=400)
 
-        _store_quick_pair_callback_payload(hass, callback_state, user_input)
+        if not _quick_pair_was_completed(hass, callback_state):
+            _store_quick_pair_callback_payload(hass, callback_state, user_input)
 
         flow_manager_obj = hass.config_entries.flow
         if flow_manager == FLOW_MANAGER_OPTIONS:
@@ -118,8 +126,11 @@ class SeenzusQuickPairCallbackView(http.HomeAssistantView):
                 status=500,
             )
         except UnknownFlow:
-            # 前端可能抢先把 flow 跑完并移除——视为成功(集成已创建),
-            # 而不是把报错页/白页甩给用户。
+            _pop_quick_pair_callback_payload(hass, callback_state)
+            # Only a confirmed local completion can make a repeated callback a
+            # success. Cancelled/expired flows must never report a new binding.
+            if not _quick_pair_was_completed(hass, callback_state):
+                return web.Response(text="This pairing flow has expired or was cancelled. Please start again in Home Assistant.", status=410)
             _LOGGER.info(
                 "Quick pair %s flow %s already finished elsewhere before callback resume",
                 flow_manager,
@@ -240,6 +251,7 @@ class SeenzusAppReturnView(http.HomeAssistantView):
             _LOGGER.warning("App return link rejected invalid token")
             return web.Response(text="Invalid token parameter", status=400)
 
+        scope_id = str(payload.get("notification_scope", ""))
         target = str(payload.get("app_return_url", "") or "").strip()
         scheme = urlsplit(target).scheme.lower()
         if scheme not in APP_RETURN_URL_ALLOW_SCHEMES:
@@ -248,7 +260,7 @@ class SeenzusAppReturnView(http.HomeAssistantView):
         # 点击即视为「已返回应用」，先关掉配对完成通知再跳转；dismiss 幂等，
         # 重复点击（如从历史记录）仍可正常跳转。
         try:
-            persistent_notification.async_dismiss(hass, _NOTIFY_APP_RETURN_ID)
+            persistent_notification.async_dismiss(hass, _scoped(_NOTIFY_APP_RETURN_ID, scope_id))
         except Exception:  # noqa: BLE001
             _LOGGER.debug("dismissing app return notification failed", exc_info=True)
 
@@ -302,7 +314,7 @@ def _ensure_quick_pair_app_return_view(hass: HomeAssistant) -> None:
     )
 
 
-def _build_app_return_transit_url(hass: HomeAssistant, app_return_url: str) -> str | None:
+def _build_app_return_transit_url(hass: HomeAssistant, app_return_url: str, scope_id: str = "") -> str | None:
     """Relative transit URL for the notification link (dismiss + redirect).
 
     相对路径（不用 get_url 拼绝对地址）：链接随用户当前访问 HA 的 base 解析，
@@ -311,11 +323,24 @@ def _build_app_return_transit_url(hass: HomeAssistant, app_return_url: str) -> s
     """
     try:
         _ensure_quick_pair_app_return_view(hass)
-        token = _encode_jwt(hass, {"app_return_url": app_return_url})
+        token = _encode_jwt(hass, {"app_return_url": app_return_url, "notification_scope": scope_id})
         return f"{QUICK_PAIR_APP_RETURN_PATH}?token={quote(token, safe='')}"
     except Exception:  # noqa: BLE001
         _LOGGER.debug("building app return transit link failed", exc_info=True)
         return None
+
+
+def _quick_pair_was_completed(hass: HomeAssistant, state: str) -> bool:
+    return state in hass.data.get(DOMAIN, {}).get(QUICK_PAIR_COMPLETED_STATES, {})
+
+
+def _mark_quick_pair_completed(hass: HomeAssistant, state: str | None) -> None:
+    if not state:
+        return
+    completed = hass.data.setdefault(DOMAIN, {}).setdefault(QUICK_PAIR_COMPLETED_STATES, {})
+    while len(completed) >= QUICK_PAIR_CALLBACK_PAYLOAD_LIMIT:
+        completed.pop(next(iter(completed)))
+    completed[state] = True
 
 
 def _quick_pair_callback_payloads(hass: HomeAssistant) -> dict[str, dict[str, Any]]:
@@ -371,6 +396,8 @@ def _build_quick_pair_callback_context(
             "flow_manager": flow_manager,
             "redirect_uri": redirect_uri,
             "pairing_state": callback_state,
+            "pairing_started_at": int(time.time() * 1000),
+            "exp": int(time.time()) + 15 * 60,
         },
     )
     return redirect_uri, callback_state, callback_state_token
@@ -387,12 +414,16 @@ def _format_quick_pair_diagnostic(diagnostic: dict[str, str]) -> str:
     return " | ".join(parts)
 
 
-# 单实例集成：两条通知各用一个固定 id，后一次配对覆盖前一次（不堆叠）。
+def _scoped(key: str, scope_id: str) -> str:
+    return f"{key}.{scope_id}" if scope_id else key
+
+
+# Notifications and diagnostics are scoped to the entry or pending flow.
 _NOTIFY_DIAGNOSTIC_ID = "seenzus_bridge_quick_pair_diagnostic"
 _NOTIFY_APP_RETURN_ID = "seenzus_bridge_app_return"
 
 
-def _record_quick_pair_diagnostic(hass: HomeAssistant, reason: str, diagnostic: dict[str, str]) -> None:
+def _record_quick_pair_diagnostic(hass: HomeAssistant, reason: str, diagnostic: dict[str, str], scope_id: str = "") -> None:
     if not diagnostic:
         return
     formatted = _format_quick_pair_diagnostic(diagnostic)
@@ -401,7 +432,7 @@ def _record_quick_pair_diagnostic(hass: HomeAssistant, reason: str, diagnostic: 
     # 读取——日志会滚走、通知会被忽略，传感器是唯一持久的 UI 面。成功路径
     # （_notify_app_return / _clear_quick_pair_notifications）负责清除。
     try:
-        hass.data.setdefault(DOMAIN, {})[QUICK_PAIR_LAST_DIAGNOSTIC] = f"{reason} | {formatted}"
+        hass.data.setdefault(DOMAIN, {})[_scoped(QUICK_PAIR_LAST_DIAGNOSTIC, scope_id)] = f"{reason} | {formatted}"
     except Exception:  # noqa: BLE001
         pass
     # 直接调 persistent_notification 组件 API（已废弃的
@@ -413,13 +444,13 @@ def _record_quick_pair_diagnostic(hass: HomeAssistant, reason: str, diagnostic: 
             hass,
             f"快速配对失败：{reason}\n\n{formatted}",
             title="seenzus Bridge 快速配对诊断",
-            notification_id=_NOTIFY_DIAGNOSTIC_ID,
+            notification_id=_scoped(_NOTIFY_DIAGNOSTIC_ID, scope_id),
         )
     except Exception:  # noqa: BLE001
         pass
 
 
-def _notify_app_return(hass: HomeAssistant, app_return_url: str) -> None:
+def _notify_app_return(hass: HomeAssistant, app_return_url: str, scope_id: str = "") -> None:
     """Surface the backend's 'return to seenzus app' link as a persistent notification.
 
     The create-entry success page already carries this link on the first-time
@@ -440,7 +471,7 @@ def _notify_app_return(hass: HomeAssistant, app_return_url: str) -> None:
     diagnostic helper for FakeHass / restricted environments; we log at debug so a
     real production failure is still traceable instead of fully silent.
     """
-    transit_url = _build_app_return_transit_url(hass, app_return_url)
+    transit_url = _build_app_return_transit_url(hass, app_return_url, scope_id)
     link_url = transit_url or app_return_url
     # 必须用带 target 的内联 HTML 锚点，不能用 markdown [x](url) 语法：前端对
     # 「同源 + 无 target」的 <a> 会拦截成 SPA pushState 路由（frontend
@@ -457,19 +488,19 @@ def _notify_app_return(hass: HomeAssistant, app_return_url: str) -> None:
         message += f"\n\n若链接无法点击，请手动打开：`{app_return_url}`"
     try:
         # 配对成功即过期：清掉传感器上挂着的上一次失败诊断。
-        hass.data.setdefault(DOMAIN, {}).pop(QUICK_PAIR_LAST_DIAGNOSTIC, None)
-        persistent_notification.async_dismiss(hass, _NOTIFY_DIAGNOSTIC_ID)
+        hass.data.setdefault(DOMAIN, {}).pop(_scoped(QUICK_PAIR_LAST_DIAGNOSTIC, scope_id), None)
+        persistent_notification.async_dismiss(hass, _scoped(_NOTIFY_DIAGNOSTIC_ID, scope_id))
         persistent_notification.async_create(
             hass,
             message,
             title="seenzus Bridge 配对完成",
-            notification_id=_NOTIFY_APP_RETURN_ID,
+            notification_id=_scoped(_NOTIFY_APP_RETURN_ID, scope_id),
         )
     except Exception:  # noqa: BLE001
         _LOGGER.debug("app return notification failed", exc_info=True)
 
 
-def _clear_quick_pair_notifications(hass: HomeAssistant) -> None:
+def _clear_quick_pair_notifications(hass: HomeAssistant, scope_id: str = "") -> None:
     """Clear pairing notifications on a success that carries no return link.
 
     A re-pair via a manual / no-URL path still succeeds but must not leave the
@@ -478,8 +509,8 @@ def _clear_quick_pair_notifications(hass: HomeAssistant) -> None:
     diagnostic. Same defensive try/except + debug log as ``_notify_app_return``.
     """
     try:
-        hass.data.setdefault(DOMAIN, {}).pop(QUICK_PAIR_LAST_DIAGNOSTIC, None)
-        persistent_notification.async_dismiss(hass, _NOTIFY_APP_RETURN_ID)
-        persistent_notification.async_dismiss(hass, _NOTIFY_DIAGNOSTIC_ID)
+        hass.data.setdefault(DOMAIN, {}).pop(_scoped(QUICK_PAIR_LAST_DIAGNOSTIC, scope_id), None)
+        persistent_notification.async_dismiss(hass, _scoped(_NOTIFY_APP_RETURN_ID, scope_id))
+        persistent_notification.async_dismiss(hass, _scoped(_NOTIFY_DIAGNOSTIC_ID, scope_id))
     except Exception:  # noqa: BLE001
         _LOGGER.debug("clearing quick-pair notifications failed", exc_info=True)

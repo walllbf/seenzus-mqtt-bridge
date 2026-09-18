@@ -2,16 +2,16 @@
   "config": {
     "step": {
       "user": {
-        "title": "配置 seenzus MQTT Bridge",
-        "description": "先选择配对模式，再进入对应的配置表单。",
+        "title": "选择配对方式",
+        "description": "从 Seenzus 应用发起时，使用默认快速配对即可沿用应用环境，下一步设置设备授权范围。无法自动识别时会请你选择环境；也可主动选择环境后配对，开发服务器请使用此入口。",
         "data": {
-          "pairing_mode": "配对模式"
+          "pairing_mode": "配对方式"
         },
         "sections": {}
       },
       "seamless": {
         "title": "快速配对",
-        "description": "集成会连接 seenzus API 创建网页配对会话并跳转到外部 seenzus 页面完成授权。直接点「提交」即可，无需填写任何内容。",
+        "description": "继续配对，完成后自动保存。重新配对保留此条目的环境、世界和设备范围。",
         "data": {},
         "sections": {}
       },
@@ -43,6 +43,36 @@
             }
           }
         }
+      },
+      "environment": {
+        "title": "选择配对环境",
+        "description": "请选择此条目连接的环境，每个环境最多一个条目。UAT 和 Dev Server 入口由开发配置启用。",
+        "data": {
+          "environment": "环境"
+        }
+      },
+      "scope": {
+        "title": "设备授权范围",
+        "description": "全部设备包含以后新增的设备。选择指定设备后，先选择设备，再单独选择独立实体。",
+        "data": {
+          "device_scope": "设备授权范围"
+        }
+      },
+      "devices": {
+        "title": "选择设备",
+        "description": "选择要授权的整台设备，将包含这些设备下的实体。也可按区域批量加入当前设备，以后新增设备不会自动加入。下一步单独选择未归属设备的实体；只授权独立实体时，本页可留空。",
+        "data": {
+          "areas": "按区域批量加入设备",
+          "allowed_device_ids": "设备"
+        }
+      },
+      "entities": {
+        "title": "选择独立实体（可选）",
+        "description": "这里只列出未归属任何设备的已注册实体，例如独立的辅助开关。上一步设备所包含的实体无需重复选择。没有可选项或不需要补充时，可直接提交；两页均留空表示不授权任何设备或实体。",
+        "data": {
+          "areas": "按区域批量加入独立实体",
+          "entities": "独立实体"
+        }
       }
     },
     "create_entry": {
@@ -59,26 +89,35 @@
       "quick_pair_callback_state_mismatch": "回跳状态校验失败，请重新发起快速配对",
       "quick_pair_code_exchange_failed": "回跳成功但兑换桥接配置失败，请检查后端服务状态",
       "quick_pair_callback_timeout": "未收到回跳确认，请确认外部页面已完成授权并返回 Home Assistant",
-      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
+      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起",
+      "world_identity_missing": "无法确认世界身份，请先升级 Seenzus 服务端；旧条目缺少数据源身份时请先移除原条目，再重新接入。",
+      "world_mismatch": "重新配对只能连接原来的世界。同一环境只能有一个条目；更换世界请先移除原条目，再重新接入。",
+      "ha_identity_unavailable": "无法获取此 HA 的安装标识，请稍后重试。",
+      "stable_entity_required": "请只选择有稳定注册标识、且未关联设备的独立实体。有关联设备时请选择对应设备。",
+      "pairing_in_progress": "另一个条目正在配对。请完成或取消该配对后重试。"
     },
     "abort": {
-      "already_configured": "seenzus MQTT Bridge 已经配置过了，只允许添加一个实例",
-      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
+      "already_configured": "此环境已有条目，请管理已有条目。",
+      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起",
+      "invalid_environment": "环境无效，请重新选择。",
+      "pairing_in_progress": "已有配对正在进行，请先完成或取消。",
+      "environment_already_configured": "此环境已有条目。请进入原条目的配置进行管理或重新配对；同一环境不能重复添加，即使选择另一个世界。",
+      "all_environments_configured": "四种环境均已有条目，无法继续添加。请管理已有条目。"
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "修改 seenzus MQTT Bridge 配置",
-        "description": "先选择配对模式，再进入对应的配置表单。保存后自动重载集成立即生效。",
+        "description": "修改设备授权，或在原环境和世界中重新配对。保存后自动重载。",
         "data": {
-          "pairing_mode": "配对模式"
+          "action": "设置项"
         },
         "sections": {}
       },
       "seamless": {
         "title": "快速配对",
-        "description": "重新发起外部 seenzus 快速配对，直接点「提交」即可，无需填写任何内容。保存后会使用 seenzus API 创建网页配对会话，授权成功后浏览器会直接回跳到 Home Assistant 并自动刷新 MQTT 桥接配置。",
+        "description": "继续配对，完成后自动保存。重新配对保留此条目的环境、世界和设备范围。",
         "data": {},
         "sections": {}
       },
@@ -110,6 +149,36 @@
             }
           }
         }
+      },
+      "environment": {
+        "title": "选择配对环境",
+        "description": "请选择此条目连接的环境，每个环境最多一个条目。UAT 和 Dev Server 入口由开发配置启用。",
+        "data": {
+          "environment": "环境"
+        }
+      },
+      "scope": {
+        "title": "设备授权范围",
+        "description": "全部设备包含以后新增的设备。选择指定设备后，先选择设备，再单独选择独立实体。",
+        "data": {
+          "device_scope": "设备授权范围"
+        }
+      },
+      "devices": {
+        "title": "选择设备",
+        "description": "选择要授权的整台设备，将包含这些设备下的实体。也可按区域批量加入当前设备，以后新增设备不会自动加入。下一步单独选择未归属设备的实体；只授权独立实体时，本页可留空。",
+        "data": {
+          "areas": "按区域批量加入设备",
+          "allowed_device_ids": "设备"
+        }
+      },
+      "entities": {
+        "title": "选择独立实体（可选）",
+        "description": "这里只列出未归属任何设备的已注册实体，例如独立的辅助开关。上一步设备所包含的实体无需重复选择。没有可选项或不需要补充时，可直接提交；两页均留空表示不授权任何设备或实体。",
+        "data": {
+          "areas": "按区域批量加入独立实体",
+          "entities": "独立实体"
+        }
       }
     },
     "create_entry": {
@@ -126,10 +195,19 @@
       "quick_pair_callback_state_mismatch": "回跳状态校验失败，请重新发起快速配对",
       "quick_pair_code_exchange_failed": "回跳成功但兑换桥接配置失败，请检查后端服务状态",
       "quick_pair_callback_timeout": "未收到回跳确认，请确认外部页面已完成授权并返回 Home Assistant",
-      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
+      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起",
+      "world_identity_missing": "无法确认世界身份，请先升级 Seenzus 服务端；旧条目缺少数据源身份时请先移除原条目，再重新接入。",
+      "world_mismatch": "重新配对只能连接原来的世界。同一环境只能有一个条目；更换世界请先移除原条目，再重新接入。",
+      "ha_identity_unavailable": "无法获取此 HA 的安装标识，请稍后重试。",
+      "stable_entity_required": "请只选择有稳定注册标识、且未关联设备的独立实体。有关联设备时请选择对应设备。",
+      "pairing_in_progress": "另一个条目正在配对。请完成或取消该配对后重试。"
     },
     "abort": {
-      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
+      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起",
+      "invalid_environment": "环境无效，请重新选择。",
+      "pairing_in_progress": "已有配对正在进行，请先完成或取消。",
+      "environment_already_configured": "此环境已有条目。请进入原条目的配置进行管理或重新配对；同一环境不能重复添加，即使选择另一个世界。",
+      "all_environments_configured": "四种环境均已有条目，无法继续添加。请管理已有条目。"
     }
   }
 }

@@ -14,12 +14,29 @@ from homeassistant.helpers import entity_registry as er  # noqa: F401
 
 from .catalog import IOT_DEVICE_DOMAINS  # noqa: F401
 from .const import BRIDGE_VERSION, DOMAIN  # noqa: F401
+from .const import CONF_PAIRING_API_BASE, DEFAULT_PAIRING_API_BASE
+from .environments import CONF_ENVIRONMENT, entry_environment
+from .device_access import CONF_SCOPE
 from .coordinator import (  # noqa: F401
     PRESENCE_HEARTBEAT_INTERVAL_SECONDS,
     BridgeCoordinator,
 )
 
 PLATFORMS = ["sensor"]
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Preserve the existing connection and whole-HA grant; learn World identity on re-pair."""
+    if entry.version > 2:
+        return False
+    if entry.version == 1:
+        data = {**entry.data}
+        config = {**data, **entry.options}
+        data.setdefault(CONF_PAIRING_API_BASE, config.get(CONF_PAIRING_API_BASE, DEFAULT_PAIRING_API_BASE))
+        data.setdefault(CONF_ENVIRONMENT, entry_environment(config))
+        data.setdefault(CONF_SCOPE, "all")
+        hass.config_entries.async_update_entry(entry, data=data, version=2, unique_id=data[CONF_ENVIRONMENT])
+    return True
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

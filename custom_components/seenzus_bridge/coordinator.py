@@ -32,6 +32,7 @@ from .bridge_protocol import (
 )
 from .catalog import build_device_catalog_payload, utc_now_iso
 from .const import (
+    DOMAIN,
     BRIDGE_VERSION,
     CONFIG_SOURCE_MANUAL,
     CONFIG_SOURCE_WEB_PAIR,
@@ -81,6 +82,7 @@ from .const import (
 from .entity_filters import looks_like_internal_bridge_entity_id, name_has_model_marker
 from .ha_dispatcher import DispatchPolicy, dispatch
 from .operation_store import PersistentOperationStore
+from .device_access import DeviceAccess
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -289,6 +291,7 @@ class BridgeCoordinator:
     def _dispatch_policy(self) -> DispatchPolicy:
         conf = self._conf()
         return DispatchPolicy(
+            access=DeviceAccess(self.hass, conf),
             allow_template=bool(conf.get(CONF_ENABLE_TEMPLATE_API, DEFAULT_ENABLE_TEMPLATE_API)),
             allow_dangerous_services=bool(
                 conf.get(CONF_ALLOW_DANGEROUS_SERVICES, DEFAULT_ALLOW_DANGEROUS_SERVICES)
@@ -315,7 +318,11 @@ class BridgeCoordinator:
             return True
 
         registry_entry = registry.async_get(entity_id)
-        return bool(registry_entry and registry_entry.config_entry_id == self._entry.entry_id)
+        return bool(registry_entry and (registry_entry.config_entry_id == self._entry.entry_id
+                                      or getattr(registry_entry, "platform", None) == DOMAIN))
+
+    def _is_excluded_entity(self, entity_id: str) -> bool:
+        return self._is_own_entity(entity_id) or not DeviceAccess(self.hass, self._conf()).allows(entity_id)
 
     @callback
     def _is_model_marked_standalone_entity(self, state: Any) -> bool:
@@ -565,7 +572,7 @@ class BridgeCoordinator:
             aiomqtt = await self._async_import_aiomqtt()
             self._aiomqtt = aiomqtt
 
-        client_id = f"seenzus-bridge-{self._entry.entry_id[:8]}"
+        client_id = f"seenzus-bridge-{self._entry.entry_id}"
 
         while True:
             try:
@@ -790,8 +797,10 @@ class BridgeCoordinator:
         effective_msg_id = str(req.get("msgId", req.get("correlationId", msg_id))) or msg_id
         operation_key = req.get("operationKey")
         operation_key = operation_key.strip() if isinstance(operation_key, str) else None
+        scope_fingerprint = DeviceAccess(self.hass, self._conf()).fingerprint()
         fingerprint = hashlib.sha256(json.dumps(
-            {"method": method.upper(), "path": path, "body": body},
+            {"method": method.upper(), "path": path, "body": body,
+             **({"access": scope_fingerprint} if DeviceAccess(self.hass, self._conf()).restricted else {})},
             sort_keys=True, separators=(",", ":"),
         ).encode()).hexdigest() if operation_key else None
 
@@ -828,6 +837,9 @@ class BridgeCoordinator:
 
             if operation_key and fingerprint:
                 claim_status, replay = await self._operation_store.claim(operation_key, fingerprint)
+                if scope_fingerprint != DeviceAccess(self.hass, self._conf()).fingerprint():
+                    await self._publish_result(client, effective_msg_id, success=False, status=409, error="device_grant_changed")
+                    return
                 if claim_status == "completed" and replay is not None:
                     await self._publish_result(client, effective_msg_id, **replay)
                     return
@@ -843,7 +855,13 @@ class BridgeCoordinator:
                 if not await self._operation_store.mark_dispatched(operation_key, fingerprint):
                     await self._publish_result(client, effective_msg_id, success=False, status=409, error="control_outcome_unknown")
                     return
+            if scope_fingerprint != DeviceAccess(self.hass, self._conf()).fingerprint():
+                await self._publish_result(client, effective_msg_id, success=False, status=409, error="device_grant_changed")
+                return
             result = await dispatch(self.hass, method, path, body, self._dispatch_policy())
+            if scope_fingerprint != DeviceAccess(self.hass, self._conf()).fingerprint():
+                await self._publish_result(client, effective_msg_id, success=False, status=409, error="device_grant_changed")
+                return
             result_payload = {
                 "success": result.status < 400,
                 "status": result.status,
@@ -929,7 +947,7 @@ class BridgeCoordinator:
         published = 0
         for state in states:
             entity_id = getattr(state, "entity_id", "")
-            if not entity_id or self._is_own_entity(entity_id):
+            if not entity_id or self._is_excluded_entity(entity_id):
                 continue
             if self._is_model_marked_standalone_entity(state):
                 continue
@@ -972,6 +990,7 @@ class BridgeCoordinator:
             source=source,
             correlation_id=correlation_id,
             is_own_entity=self._is_own_entity,
+            access=DeviceAccess(self.hass, self._conf()),
         )
 
     def _build_state_payload(
@@ -987,7 +1006,7 @@ class BridgeCoordinator:
             "bridgeId": self._topics.bridge_id,
             "entityId": entity_id,
             "state": state_obj.state,
-            "attributes": dict(state_obj.attributes),
+            "attributes": DeviceAccess(self.hass, self._conf()).attributes(state_obj.attributes),
             # HA reserves `unavailable` for reachability. `unknown` means the Entity is present but
             # its current value is unknown (common for stateless buttons), not that it is offline.
             "available": str(state_obj.state).lower() != "unavailable",
@@ -1009,7 +1028,7 @@ class BridgeCoordinator:
     ) -> None:
         if self._topics is None:
             return
-        if self._is_own_entity(entity_id):
+        if self._is_excluded_entity(entity_id):
             return
         state = self.hass.states.get(entity_id)
         if state is None:
@@ -1036,7 +1055,7 @@ class BridgeCoordinator:
             return
         new_state = event.data.get("new_state")
         entity_id = getattr(new_state, "entity_id", None) if new_state is not None else None
-        if not entity_id or self._is_own_entity(entity_id):
+        if not entity_id or self._is_excluded_entity(entity_id):
             return
         if self._is_model_marked_standalone_entity(new_state):
             return
@@ -1103,7 +1122,7 @@ class BridgeCoordinator:
         new_state = event.data.get("new_state")
         if new_state is None or not getattr(new_state, "entity_id", None):
             return
-        if self._is_own_entity(new_state.entity_id):
+        if self._is_excluded_entity(new_state.entity_id):
             return
         if self._is_model_marked_standalone_entity(new_state):
             return

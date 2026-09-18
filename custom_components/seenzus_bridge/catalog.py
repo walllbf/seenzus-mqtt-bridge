@@ -19,6 +19,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .bridge_protocol import CATALOG_WIRE_VERSION
 from .entity_filters import name_has_model_marker
+from .device_access import DeviceAccess
 
 # Membership is load-bearing — shrinking it drops standalone official Entities before the
 # backend can classify them. Official membership follows the installed HA release; these Helpers
@@ -139,6 +140,7 @@ def build_device_catalog_payload(
     source: str,
     correlation_id: str | None = None,
     is_own_entity: Callable[[str], bool],
+    access: DeviceAccess | None = None,
 ) -> dict[str, Any]:
     entity_registry = er.async_get(hass)
     device_registry = dr.async_get(hass)
@@ -147,7 +149,7 @@ def build_device_catalog_payload(
 
     for state in hass.states.async_all():
         entity_id = getattr(state, "entity_id", "")
-        if not entity_id or is_own_entity(entity_id):
+        if not entity_id or is_own_entity(entity_id) or (access and not access.allows(entity_id)):
             continue
 
         entity_entry = entity_registry.async_get(entity_id)
@@ -165,6 +167,8 @@ def build_device_catalog_payload(
         if attached_to_device:
             if device_id not in devices:
                 devices[device_id] = build_catalog_device(device_id, device_entry)
+                if access and access.restricted and devices[device_id].get("viaDeviceId") not in access.device_ids:
+                    devices[device_id].pop("viaDeviceId", None)
             devices[device_id]["entities"].append(entity_payload)
         else:
             standalone_device = build_catalog_device(
@@ -217,4 +221,6 @@ def build_device_catalog_payload(
     }
     if correlation_id:
         payload["correlationMsgId"] = correlation_id
+    if access:
+        payload["access"] = access.catalog_access()
     return payload
