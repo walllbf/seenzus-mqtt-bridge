@@ -485,9 +485,29 @@ class _QuickPairFlowMixin:
         if owner and owner != current:
             manager = self.hass.config_entries.options if owner[0] == FLOW_MANAGER_OPTIONS else self.hass.config_entries.flow
             if any(flow["flow_id"] == owner[1] for flow in manager.async_progress()):
-                return False
+                if owner[1] not in domain_data.get("pairing_parked_flows", set()):
+                    return False
+                # 死路页面（中转页未部署、授权页无法回调）会把在位流程永远留在外部
+                # 授权步；新的主动配对接管槽位并终止僵尸流程，否则只能重启 HA 解锁。
+                try:
+                    manager.async_abort(owner[1])
+                except Exception:  # noqa: BLE001 — 在位流程已消失时直接接管
+                    pass
+                domain_data.get("pairing_parked_flows", set()).discard(owner[1])
         domain_data["pairing_flow_owner"] = current
         return True
+
+    def _mark_pairing_parked(self) -> None:
+        """Mark this flow as parked at the external authorize step awaiting the browser."""
+        self.hass.data.setdefault(DOMAIN, {}).setdefault("pairing_parked_flows", set()).add(
+            getattr(self, "flow_id", None)
+        )
+
+    def _clear_pairing_parked(self) -> None:
+        """Best-effort cleanup once the external phase ends for this flow."""
+        parked = self.hass.data.get(DOMAIN, {}).get("pairing_parked_flows")
+        if parked is not None:
+            parked.discard(getattr(self, "flow_id", None))
 
     def _init_quick_pair_state(self) -> None:
         """Reset the quick-pair handshake state attributes."""
@@ -687,6 +707,7 @@ class _QuickPairFlowMixin:
             )
 
         if user_input is not None:
+            self._clear_pairing_parked()
             try:
                 state_payload = user_input.get("state")
                 if (
@@ -743,6 +764,7 @@ class _QuickPairFlowMixin:
 
         if not self._quick_pair_external_opened:
             self._quick_pair_external_opened = True
+            self._mark_pairing_parked()
             return self.async_external_step(
                 step_id="seamless_authorize",
                 url=self._quick_pair_page_url,
@@ -752,7 +774,12 @@ class _QuickPairFlowMixin:
         return self.async_external_step_done(next_step_id="seamless_finish")
 
     async def async_step_seamless_finish(self, user_input: dict | None = None):
+        self._clear_pairing_parked()
         if self._quick_pair_finish_error == "environment_required":
+            return await self.async_step_environment()
+        # 中转路径（自动识别）没有可用回调时——中转页未部署或不可达——按中转页
+        # 「无记录或失效时补选」的同一口径回退到桥内环境选择，绝不默认境外 PRD。
+        if self._quick_pair_api_base is None and self._quick_pair_finish_error:
             return await self.async_step_environment()
         if not self._quick_pair_page_url or not self._quick_pair_api_base or not self._quick_pair_session_id:
             return self.async_abort(reason="quick_pair_missing_context")

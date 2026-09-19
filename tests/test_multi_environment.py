@@ -211,6 +211,77 @@ async def test_area_expansion_is_a_snapshot_and_scope_options_preserve_binding(h
 
 
 @pytest.mark.asyncio
+async def test_relay_path_without_callback_falls_back_to_environment_selection(monkeypatch):
+    """中转页不可用（未部署/无法回调）时，自动路径超时后回退桥内补选环境，而不是死循环报错。"""
+    hass = FakeHass()
+    flow = flow_for(hass, "world-fallback")
+    flow.flow_id = "relay-timeout-flow"
+    flow.async_show_form = lambda **kwargs: kwargs
+    flow.async_external_step_done = lambda *, next_step_id: {"type": "external_step_done", "next_step_id": next_step_id}
+    flow._selected_environment = "auto"
+    flow._quick_pair_api_base = None
+    flow._quick_pair_session_id = None
+    flow._quick_pair_external_opened = True
+    flow._quick_pair_page_url = "https://app.seenzus.cn/ha-connect?state=dead-end"
+
+    result = await flow.async_step_seamless_authorize()
+    assert result["type"] == "external_step_done"
+    finish = await flow.async_step_seamless_finish()
+    assert finish["step_id"] == "environment"
+
+    create = AsyncMock(return_value=SimpleNamespace(ok=True, session_id="wps_new",
+        pairing_page_url="https://seenzus.ai/pair?session_id=wps_new", app_return_url=None))
+    monkeypatch.setattr("seenzus_bridge.config_flow.create_web_pairing_session", create)
+    monkeypatch.setattr("seenzus_bridge.config_flow._build_quick_pair_callback_context",
+        lambda *_a, **_k: ("https://homeassistant.local:8123/api/seenzus_bridge/quick_pair/callback", "ps", "jwt"))
+    monkeypatch.setattr("seenzus_bridge.config_flow._resolve_ha_instance_id", AsyncMock(return_value="ha-uuid"))
+    flow.async_external_step = lambda *, step_id, url, description_placeholders=None: {"type": "external", "step_id": step_id, "url": url}
+    flow._selected_pairing_mode = "seamless"
+    flow._scope_only = False
+    flow._scope = {"device_scope": "all"}
+
+    picked = await flow.async_step_environment({"environment": "global"})
+    assert picked["type"] == "external" and picked["url"].startswith("https://seenzus.ai/pair")
+    assert create.await_args.kwargs["api_base"] == ENVIRONMENTS["global"][1]
+
+
+@pytest.mark.asyncio
+async def test_new_pairing_supersedes_flow_parked_at_external_step(monkeypatch):
+    """死路页面把流程留在外部授权步时，新的配对应接管槽位并终止僵尸流程，而不是要求重启 HA。"""
+    hass = FakeHass()
+    first, second = flow_for(hass), flow_for(hass)
+    first.flow_id, second.flow_id = "zombie-flow", "fresh-flow"
+    assert first._claim_pairing_slot()
+    first._quick_pair_page_url = "https://app.seenzus.cn/ha-connect?state=dead-end"
+    first._quick_pair_external_opened = False
+    first.async_external_step = lambda *, step_id, url, description_placeholders=None: {"type": "external", "step_id": step_id, "url": url}
+    assert (await first.async_step_seamless_authorize())["type"] == "external"
+
+    aborted: list[str] = []
+    monkeypatch.setattr(hass.config_entries.flow, "async_progress", lambda: [{"flow_id": "zombie-flow"}])
+    hass.config_entries.flow.async_abort = lambda flow_id: aborted.append(flow_id)
+
+    second._reshow_seamless_form = lambda reason: {"error": reason}
+    create = AsyncMock(return_value=SimpleNamespace(ok=True, session_id="wps_new",
+        pairing_page_url="https://seenzus.ai/pair?session_id=wps_new", app_return_url=None))
+    monkeypatch.setattr("seenzus_bridge.config_flow.create_web_pairing_session", create)
+    monkeypatch.setattr("seenzus_bridge.config_flow._build_quick_pair_callback_context",
+        lambda *_a, **_k: ("https://homeassistant.local:8123/api/seenzus_bridge/quick_pair/callback", "ps", "jwt"))
+    monkeypatch.setattr("seenzus_bridge.config_flow._resolve_ha_instance_id", AsyncMock(return_value="ha-uuid"))
+    second.async_external_step = lambda *, step_id, url, description_placeholders=None: {"type": "external", "step_id": step_id, "url": url}
+    second._selected_environment = "global"
+    second._selected_pairing_mode = "seamless"
+    second._scope_only = False
+    second._scope = {"device_scope": "all"}
+
+    result = await second.async_step_seamless({})
+    assert result["type"] == "external"
+    assert create.await_args.kwargs["api_base"] == ENVIRONMENTS["global"][1]
+    assert aborted == ["zombie-flow"]
+    assert hass.data["seenzus_bridge"]["pairing_flow_owner"][1] == "fresh-flow"
+
+
+@pytest.mark.asyncio
 async def test_pending_pairing_serializes_entries_but_cancelled_flow_releases_slot(monkeypatch):
     hass = FakeHass()
     first, second = flow_for(hass), flow_for(hass, "world-b")
