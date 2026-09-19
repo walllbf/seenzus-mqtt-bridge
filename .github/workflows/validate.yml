@@ -6,25 +6,53 @@ on:
   schedule:
     - cron: "0 0 * * *"
   workflow_dispatch:
+    inputs:
+      home_assistant:
+        description: "Exact stable Core version to reproduce (empty = latest stable)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
+  resolve:
+    name: Resolve exact HA releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - id: matrix
+        name: Resolve stable once (fail closed on lookup errors)
+        env:
+          REQUESTED_CORE: ${{ inputs.home_assistant }}
+        run: |
+          python tools/ha_matrix.py --version "$REQUESTED_CORE" > ha-matrix.json
+          cat ha-matrix.json
+          echo "matrix=$(cat ha-matrix.json)" >> "$GITHUB_OUTPUT"
+          cat ha-matrix.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ha-matrix
+          path: ha-matrix.json
+
   pytest:
     name: Pytest (HA Core ${{ matrix.home_assistant }})
+    needs: resolve
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - home_assistant: "2025.1.4"
-            python: "3.13"
-            core: "homeassistant==2025.1.4"
-            pytest: "pytest==8.3.4"
-            pytest_asyncio: "pytest-asyncio==0.24.0"
-          - home_assistant: "2026.8.0"
-            python: "3.14.2"
-            core: "git+https://github.com/home-assistant/core.git@2026.8.0"
-            pytest: "pytest==9.0.3"
-            pytest_asyncio: "pytest-asyncio==1.4.0"
+      matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    env:
+      EXPECTED_HA_VERSION: ${{ matrix.home_assistant }}
+      CORE_REQUIREMENT: ${{ matrix.core }}
+      TEST_REQUIREMENTS: ${{ matrix.test_dependencies }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,11 +64,29 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements_contract.txt
-          python -m pip install "${{ matrix.core }}" "${{ matrix.pytest }}" "${{ matrix.pytest_asyncio }}"
+          read -r -a test_requirements <<< "$TEST_REQUIREMENTS"
+          python -m pip install "$CORE_REQUIREMENT" "${test_requirements[@]}"
       - name: Prove the exact Core version and run publisher contracts
         run: |
-          python -c "from homeassistant.const import __version__; assert __version__ == '${{ matrix.home_assistant }}', __version__"
-          python -m pytest -q
+          mkdir -p compatibility-results
+          python -m compileall -q custom_components tests tools
+          python -m pytest -q --junitxml=compatibility-results/pytest.xml
+      - name: Record installed versions even after failure
+        if: always()
+        run: |
+          mkdir -p compatibility-results
+          echo "Selected Core: $EXPECTED_HA_VERSION" | tee compatibility-results/versions.txt
+          echo "Install: $CORE_REQUIREMENT $TEST_REQUIREMENTS" >> compatibility-results/versions.txt
+          python --version >> compatibility-results/versions.txt
+          python -m pip freeze --all > compatibility-results/requirements.txt
+          python -c "from homeassistant.const import __version__; print('Imported Core:', __version__)" >> compatibility-results/versions.txt
+          cat compatibility-results/versions.txt >> "$GITHUB_STEP_SUMMARY"
+          echo "Reproduce: workflow_dispatch home_assistant=$EXPECTED_HA_VERSION" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ha-${{ matrix.home_assistant }}-results
+          path: compatibility-results/
 
   hassfest:
     name: Hassfest

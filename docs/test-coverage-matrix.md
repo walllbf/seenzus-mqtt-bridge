@@ -1,7 +1,7 @@
 # seenzus MQTT Bridge 测试覆盖对照表
 
 > 现状对照（v0.2.2）。所有测试位于 `tests/` 目录，共 17 个文件。
-> 运行：`python -m pytest tests -q`（或先建隔离环境，见 `README.md` 的「测试与验证」）。
+> 运行前将 `EXPECTED_HA_VERSION` 设为本次明确选择的版本，再执行 `python -m pytest tests -q`；隔离环境见 `README.md` 的「测试与验证」。
 > 本表由 `tests/` 实际收集重建；新增/重命名测试后请同步更新，或直接以 `pytest --collect-only` 为准。
 
 ## `tests/test_config_flow_behavior.py` — 配置流 / 快速配对 UI（51）
@@ -229,3 +229,7 @@
 | 测试 | 验证行为 |
 |---|---|
 | `test_fake_mqtt_client_records_publish_calls` | Fake MQTT 客户端记录 publish 调用 |
+
+## HA 上游兼容性（#49）
+
+`test_core_version_contract.py` 按作业显式指定版本校验真实 Core，并从安装中的 Platform 集合核验 Publisher。`test_real_ha_contract.py` 在隔离真实 HA 实例中覆盖目录／状态／服务目录，以及开关、数值、选项、触发和失败结果。`test_ha_matrix.py` 覆盖稳定通道选择、精确版本重跑和失败不回退。运行方式及证据见 [兼容性说明](ha-compatibility.zh-CN.md)。

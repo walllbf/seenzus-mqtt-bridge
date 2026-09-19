@@ -41,7 +41,7 @@ HA 官方跳转不会保留最初的应用 launch ID，因此浏览器提示与 
 - [x] MQTT 客户端、诊断、通知、监听和缓存按条目隔离。
 - [x] 本地配对、权限、撤权、跨条目回归测试。
 - [ ] 真实 HA／Android WebView、部署后的三环境网络及 PostgreSQL 迁移联调。
-- [ ] CI 的 HA 2026.8.0／Python 3.14.2、Hassfest、HACS 验证。
+- [ ] CI 的最低支持版／最新稳定版 HA、Hassfest、HACS 验证；版本选择和手动重现见 [兼容性说明](ha-compatibility.zh-CN.md)。
 
 ## HA 管理员操作
 
