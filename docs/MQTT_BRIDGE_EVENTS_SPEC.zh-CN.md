@@ -281,6 +281,13 @@ seenzus/v2/bridge/ha-demo/catalog
       "primaryDomain": "light",
       "online": true,
       "primaryAvailable": true,
+      "configEntries": [
+        {
+          "id": "xiaomi-home-entry-a",
+          "title": "Joseph",
+          "domain": "xiaomi_home"
+        }
+      ],
       "entities": [
         {
           "entityId": "light.kitchen",
@@ -320,6 +327,7 @@ seenzus/v2/bridge/ha-demo/catalog
 - `online`: 当前设备下任一实体 `available=true` 即为 true(语义不变;等价于 `availableEntityCount > 0`)
 - `primaryDomain`: 根据实体 domain 优先级推断的主 domain
 - `primaryAvailable`: 主域(`primaryDomain`)**任一**实体可用即为 true,反映设备核心功能是否在线;无主域实体时为 `null`。需要更贴近用户体感的在线判断时,优先用此字段而非 `online`
+- `configEntries`: 该设备关联的 HA config entry 列表，按 `id` 去重并排序；每项只含 `id`、展示标题 `title` 和集成域 `domain`。它用于在同一个数据源内按账号/集成分组选择设备，不会把一个桥拆成多个数据源。空数组表示当前完整快照确认没有关联项。插件不会上报 config entry 的 `data`、`options`、令牌或其他凭证。该字段是 `2.1` 的向后兼容增量字段，不改变现有 wire 版本。
 
 `devices[].entities[]` 内每个实体对象字段：
 

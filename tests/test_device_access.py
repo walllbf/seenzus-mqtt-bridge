@@ -52,6 +52,29 @@ async def test_catalog_read_snapshots_and_events_share_the_grant(home):
     assert all("private_url" not in json.loads(msg["payload"])["attributes"] for msg in client.published)
 
 
+def test_config_entry_groups_only_describe_authorized_devices(home):
+    hass, entities, _, _, coordinator = home
+    for entity_id, entry_id, title in (
+        ("light.city", "city-entry", "City account"),
+        ("light.suburb", "private-suburb-entry", "Private suburban account"),
+    ):
+        entities.async_get(entity_id).config_entry_id = entry_id
+        hass.config_entries.entries.append(SimpleNamespace(
+            entry_id=entry_id, title=title, domain="test_integration",
+            data={"token": "secret"}, options={"password": "secret"},
+        ))
+    catalog = coordinator._build_device_catalog_payload(source="test")
+    devices = {device["deviceId"]: device for device in catalog["devices"]}
+    assert set(devices) == {"city", "input_boolean.helper"}
+    assert devices["city"]["configEntries"] == [
+        {"id": "city-entry", "title": "City account", "domain": "test_integration"},
+    ]
+    assert devices["input_boolean.helper"]["configEntries"] == []
+    assert "private-suburb-entry" not in json.dumps(catalog)
+    assert "Private suburban account" not in json.dumps(catalog)
+    assert "secret" not in json.dumps(catalog)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path,body", [
     ("/api/services/light/turn_on", {"entity_id": ["light.city", "light.suburb"]}),

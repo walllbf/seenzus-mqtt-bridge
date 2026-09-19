@@ -135,6 +135,9 @@ class FakeConfigEntries:
             setattr(entry, key, value)
         return True
 
+    def async_get_entry(self, entry_id: str):
+        return next((entry for entry in self.entries if entry.entry_id == entry_id), None)
+
     async def async_reload(self, _entry_id: str) -> None:
         self.reload_calls.append(_entry_id)
         return None
