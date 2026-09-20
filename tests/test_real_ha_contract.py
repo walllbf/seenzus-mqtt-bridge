@@ -97,7 +97,10 @@ async def test_real_service_dispatch_publishes_result_and_observed_state(
     observed = json.loads(client.published[-1]["payload"])
     assert observed["entityId"] == entity_id
     assert observed["state"] == new_state
-    assert observed["attributes"] == {"friendly_name": "Isolated device"}
+    assert observed["attributes"]["friendly_name"] == "Isolated device"
+    assert observed["attributes"]["seenzus_display"]["time_zone"] == "UTC"
+    # Display enrichment belongs to the wire payload, not HA's original state.
+    assert hass.states.get(entity_id).attributes == {"friendly_name": "Isolated device"}
     assert observed["correlationMsgId"] == "contract"
 
 
