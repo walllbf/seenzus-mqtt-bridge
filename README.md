@@ -348,6 +348,9 @@ entry 已包含 web_pair 写入的 mqtt + bridge 绑定上下文
 - 普通实体状态变化会被发布到正确的 `state` topic
 - 配置变更触发 reload 前会清理旧桥 retained `presence`
 - reload 流程会在清理后继续调用配置项重载
+- 在线状态、新建快速配对和重新配对上报的版本号与 `manifest.json` 一致
+
+升级集成版本时，同时更新 `manifest.json` 和 `const.py` 中的 `BRIDGE_VERSION`；行为测试会检查对外发送的版本号，防止两者再次不一致。
 
 按 [兼容性说明](docs/ha-compatibility.zh-CN.md) 解析版本并创建隔离环境。例如使用 Python 3.13 验证最低版：
 

@@ -286,7 +286,7 @@ async def test_user_step_routes_to_manual_form(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_seamless_step_starts_external_quick_pair(monkeypatch) -> None:
+async def test_seamless_step_starts_external_quick_pair(monkeypatch, bridge_manifest_version) -> None:
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
     monkeypatch.setattr(flow, "_async_current_entries", lambda: [])
@@ -337,6 +337,7 @@ async def test_seamless_step_starts_external_quick_pair(monkeypatch) -> None:
     assert result["url"] == "https://app.seenzus.xxx/web-pairing/wps_1"
     # 无 dev 覆盖文件 → 用内置生产默认地址。
     assert create_calls[0]["api_base"] == DEFAULT_PAIRING_API_BASE
+    assert create_calls[0]["bridge_version"] == bridge_manifest_version
     assert create_calls[0]["redirect_uri"] == f"http://homeassistant.local:8123{QUICK_PAIR_CALLBACK_PATH}"
     assert create_calls[0]["state"] == "jwt-state"
 
@@ -649,7 +650,7 @@ async def test_options_flow_creates_entry_with_flattened_data() -> None:
 
 
 @pytest.mark.asyncio
-async def test_options_seamless_step_uses_options_flow_manager(monkeypatch) -> None:
+async def test_options_seamless_step_uses_options_flow_manager(monkeypatch, bridge_manifest_version) -> None:
     config_entry = FakeConfigEntry(data={"mqtt_host": "old-broker"})
     flow = SavanAIBridgeOptionsFlow(config_entry)
     flow.hass = FakeHass()
@@ -698,6 +699,7 @@ async def test_options_seamless_step_uses_options_flow_manager(monkeypatch) -> N
     assert context_calls == [(flow.hass, "options-flow-7", FLOW_MANAGER_OPTIONS)]
     # 模型 A:重配对无视 entry 存值,无 dev 文件 → 内置生产默认。
     assert create_calls[0]["api_base"] == DEFAULT_PAIRING_API_BASE
+    assert create_calls[0]["bridge_version"] == bridge_manifest_version
     assert create_calls[0]["state"] == "jwt-state"
     assert result["type"] == "external"
     assert result["step_id"] == "seamless_authorize"
