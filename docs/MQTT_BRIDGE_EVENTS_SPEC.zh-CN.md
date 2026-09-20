@@ -322,13 +322,15 @@ seenzus/v2/bridge/ha-demo/catalog
 - `eventId`: 本次 catalog 快照事件唯一 ID
 - `bridgeId`: 当前桥实例 ID
 - `wireVersion`: Catalog wire Schema 版本；当前为 `2.1`，与插件发布版本、Topic 根路径版本分别演进
-- `source`: 本次 catalog 的来源，取值 `startup_snapshot`（首次连接全量）/ `reconnect`（断线重连重发）/ `command`（收到查询命令回发）。**为开放枚举**：消费方应只识别已知值、对未知值按惰性/基线处理（catalog 无论何种 source 都按整包重新校准设备基线，不据 source 派生事件），后续新增取值不应破坏现有消费方
+- `source`: 本次 catalog 的来源，取值 `startup_snapshot`（首次连接全量）/ `reconnect`（断线重连重发）/ `command`（收到查询命令回发）/ `registry_update`（设备 Registry 元数据变更）。**为开放枚举**：消费方应只识别已知值、对未知值按惰性/基线处理（catalog 无论何种 source 都按整包重新校准设备基线，不据 source 派生事件），后续新增取值不应破坏现有消费方
 - `ts`: 快照生成时间
 - `isComplete`: 本次是否为完整的来源级快照。只有 `true` 才能把未出现的既有设备作为 soft-missing 证据；字段缺省表示旧插件，服务端按完整快照兼容处理。当前插件从 HA 本地状态注册表一次性取全量，无分页或远端权限截断，因此发布 `true`
 - `devices`: 设备列表
 - `deviceCount`: 设备数量
 - `entityCount`(顶层): 所有设备下实体总数
 - `correlationMsgId`: 可选，command 触发时用于关联请求
+
+Device Registry 中影响目录的字段（名称、型号、制造商、区域及上级设备）更新时，插件会合并约 1.5 秒内的更新，然后重发 retained catalog，`source` 为 `registry_update`。它不依赖实体名称或状态同时变化，也不受 live state 开关影响；发送期间发生的后续修改会再次补发。断线重连的目录快照负责恢复当前值，卸载时取消待发送任务。此消息只更新目录，不生成设备操作或物理状态事件。
 
 `devices[]` 内每个设备对象字段：
 

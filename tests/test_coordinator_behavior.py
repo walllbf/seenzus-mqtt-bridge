@@ -116,6 +116,117 @@ async def test_registry_rename_publishes_latest_naming_without_a_state_change(co
     coordinator._unsubscribe_runtime_listeners()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["配电箱电表", None])
+async def test_device_rename_refreshes_retained_catalog_without_entity_rename(coordinator, monkeypatch, name) -> None:
+    from homeassistant.core import Event
+
+    monkeypatch.setattr(coordinator_module, "CATALOG_REFRESH_DELAY_SECONDS", 0.01, raising=False)
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    client = AsyncFakeMQTTClient()
+    coordinator._mqtt_client = client
+    coordinator.mqtt_connected = True
+    coordinator.hass.states.set("switch.meter", state="off", attributes={"friendly_name": "电量清零"})
+    er.async_get(coordinator.hass).add("switch.meter", device_id="meter", name="电量清零")
+    devices = dr.async_get(coordinator.hass)
+    devices.add("meter", name="单相互感器1", name_by_user="旧设备名")
+    coordinator._subscribe_device_registry()
+    listeners = [call["callback"] for call in coordinator.hass.bus.listen_calls
+                 if call["event_type"] == "device_registry_updated"]
+    assert len(listeners) == 1
+    changed = listeners[0]
+    try:
+        # A burst of edits must publish the final registry snapshot just once.
+        devices.async_get("meter").name_by_user = "中间名称"
+        changed(Event("device_registry_updated", {"action": "update", "device_id": "meter", "changes": {"name_by_user": "旧设备名"}}))
+        devices.async_get("meter").name_by_user = name
+        changed(Event("device_registry_updated", {"action": "update", "device_id": "meter", "changes": {"name_by_user": "中间名称"}}))
+        assert client.published == []
+        await coordinator._catalog_refresh_task
+        assert len(client.published) == 1
+        published = client.published[0]
+        assert published["topic"] == coordinator._topics.catalog_topic
+        assert published["retain"] is True
+        payload = json.loads(published["payload"])
+        assert payload["source"] == "registry_update"
+        assert payload["devices"][0]["name"] == (name or "单相互感器1")
+        assert payload["devices"][0]["entities"][0]["name"] == "电量清零"
+        assert coordinator._pending_state_events == {}
+        assert coordinator.hass.services.calls == []
+    finally:
+        coordinator._unsubscribe_runtime_listeners()
+
+
+@pytest.mark.asyncio
+async def test_device_catalog_refresh_ignores_unrelated_changes_and_cancels_on_stop(coordinator, monkeypatch) -> None:
+    from homeassistant.core import Event
+
+    monkeypatch.setattr(coordinator_module, "CATALOG_REFRESH_DELAY_SECONDS", 0.01, raising=False)
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    client = AsyncFakeMQTTClient()
+    coordinator._mqtt_client = client
+    coordinator.mqtt_connected = True
+    coordinator._subscribe_device_registry()
+    listeners = [call["callback"] for call in coordinator.hass.bus.listen_calls
+                 if call["event_type"] == "device_registry_updated"]
+    assert len(listeners) == 1
+    changed = listeners[0]
+    changed(Event("device_registry_updated", {"action": "update", "device_id": "meter", "changes": {"sw_version": "old"}}))
+    await asyncio.sleep(0.02)
+    assert client.published == []
+    changed(Event("device_registry_updated", {"action": "update", "device_id": "meter", "changes": {"name_by_user": None}}))
+    await coordinator.async_stop()
+    await asyncio.sleep(0.02)
+    assert not [item for item in client.published if item["topic"] == coordinator._topics.catalog_topic]
+
+
+@pytest.mark.asyncio
+async def test_device_catalog_refresh_preserves_edits_during_publish_and_while_offline(coordinator, monkeypatch) -> None:
+    from homeassistant.core import Event
+
+    monkeypatch.setattr(coordinator_module, "CATALOG_REFRESH_DELAY_SECONDS", 0.001)
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    coordinator.hass.states.set("switch.meter", state="off")
+    er.async_get(coordinator.hass).add("switch.meter", device_id="meter", name="电量清零")
+    devices = dr.async_get(coordinator.hass)
+    devices.add("meter", name="Meter")
+    coordinator._subscribe_device_registry()
+    changed = next(call["callback"] for call in coordinator.hass.bus.listen_calls
+                   if call["event_type"] == "device_registry_updated")
+    event = Event("device_registry_updated", {"action": "update", "device_id": "meter", "changes": {"name_by_user": None}})
+    devices.async_get("meter").name_by_user = "离线时改名"
+    changed(event)
+    assert coordinator._catalog_refresh_task is None
+
+    first_publish = asyncio.Event()
+    release_publish = asyncio.Event()
+    class PausedClient(AsyncFakeMQTTClient):
+        async def publish(self, *args, **kwargs):
+            await super().publish(*args, **kwargs)
+            if len(self.published) == 1:
+                first_publish.set()
+                await release_publish.wait()
+
+    client = PausedClient()
+    coordinator._mqtt_client = client
+    coordinator.mqtt_connected = True
+    coordinator._start_catalog_refresh_if_ready()
+    task = coordinator._catalog_refresh_task
+    try:
+        await asyncio.wait_for(first_publish.wait(), timeout=1)
+        devices.async_get("meter").name_by_user = "发送期间再次改名"
+        changed(event)
+        release_publish.set()
+        await asyncio.wait_for(task, timeout=1)
+        names = [json.loads(item["payload"])["devices"][0]["name"] for item in client.published]
+        assert names == ["离线时改名", "发送期间再次改名"]
+        assert coordinator._entry.foreground_task_names == ["seenzus catalog metadata refresh"]
+    finally:
+        release_publish.set()
+        coordinator._unsubscribe_runtime_listeners()
+        await coordinator._stop_catalog_refresh()
+
+
 @pytest.mark.parametrize("model_id", ["SPM01-U01", None])
 def test_catalog_transports_model_id_separately_from_description(coordinator, model_id) -> None:
     coordinator._topics = build_topics("seenzus/v2", "ha-demo")

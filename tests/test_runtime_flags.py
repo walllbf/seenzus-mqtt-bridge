@@ -37,7 +37,10 @@ async def test_async_start_registers_state_listener_when_enabled(runtime_coordin
     await runtime_coordinator.async_start()
 
     assert runtime_coordinator._state_unsub is not None
-    assert runtime_coordinator.hass.bus.listen_calls[0]["event_type"] == "state_changed"
+    subscribed = [call["event_type"] for call in runtime_coordinator.hass.bus.listen_calls]
+    assert "state_changed" in subscribed
+    assert subscribed.count("device_registry_updated") == 1
+    await runtime_coordinator.async_stop()
 
 
 @pytest.mark.asyncio
@@ -57,7 +60,9 @@ async def test_async_start_skips_state_listener_when_disabled(monkeypatch) -> No
     await coordinator.async_start()
 
     assert coordinator._state_unsub is None
-    assert hass.bus.listen_calls == []
+    assert [call["event_type"] for call in hass.bus.listen_calls] == ["device_registry_updated"]
+    await coordinator.async_stop()
+    assert coordinator._device_registry_unsub is None
 
 
 @pytest.mark.asyncio
