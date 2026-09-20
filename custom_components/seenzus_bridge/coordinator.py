@@ -81,6 +81,7 @@ from .const import (
 from .entity_filters import looks_like_internal_bridge_entity_id, name_has_model_marker
 from .ha_dispatcher import DispatchPolicy, dispatch
 from .operation_store import PersistentOperationStore
+from .sensor_display import async_prepare_sensor_display, sensor_display_attributes, supports_entity_display
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -200,6 +201,7 @@ class BridgeCoordinator:
         self._listeners: list[Callable[[], None]] = []
         self._task: asyncio.Task | None = None
         self._state_unsub = None
+        self._display_unsubs: list[Callable[[], None]] = []
         self._ha_started_unsub = None
         self._mqtt_client = None
         self._aiomqtt = None
@@ -373,6 +375,25 @@ class BridgeCoordinator:
     def _subscribe_state_events(self) -> None:
         if self._state_unsub is None:
             self._state_unsub = self.hass.bus.async_listen(EVENT_STATE_CHANGED, self._on_state_changed)
+        if not self._display_unsubs:
+            self._display_unsubs = [self.hass.bus.async_listen(name, self._on_display_metadata_changed)
+                                    for name in ("entity_registry_updated", "core_config_updated")]
+
+    @callback
+    def _on_display_metadata_changed(self, event: Event) -> None:
+        if event.event_type == "core_config_updated":
+            if "time_zone" not in event.data:
+                return
+        elif event.data.get("action") != "update" or not set(event.data.get("changes", {})).intersection({
+            "options", "translation_key", "platform", "device_class", "original_device_class", "unit_of_measurement", "name", "original_name", "has_entity_name",
+        }):
+            return
+        entity_id = event.data.get("entity_id")
+        states = [self.hass.states.get(entity_id)] if entity_id else self.hass.states.async_all()
+        for state in states:
+            if state is not None and supports_entity_display(state.entity_id):
+                # Use the bounded/coalesced publisher, but never claim an HA state-change event.
+                self._on_state_changed(Event("seenzus_display_metadata_changed", {"new_state": state}))
 
     async def async_stop(self) -> None:
         """Stop the runtime without allowing external I/O to delay HA."""
@@ -425,6 +446,9 @@ class BridgeCoordinator:
         if self._state_unsub is not None:
             self._state_unsub()
             self._state_unsub = None
+        for unsubscribe in self._display_unsubs:
+            unsubscribe()
+        self._display_unsubs = []
 
     def _cancel_runtime_tasks(self) -> None:
         for task in (
@@ -987,7 +1011,7 @@ class BridgeCoordinator:
             "bridgeId": self._topics.bridge_id,
             "entityId": entity_id,
             "state": state_obj.state,
-            "attributes": dict(state_obj.attributes),
+            "attributes": sensor_display_attributes(self.hass, entity_id, dict(state_obj.attributes)),
             # HA reserves `unavailable` for reachability. `unknown` means the Entity is present but
             # its current value is unknown (common for stateless buttons), not that it is offline.
             "available": str(state_obj.state).lower() != "unavailable",
@@ -1017,6 +1041,7 @@ class BridgeCoordinator:
         if self._is_model_marked_standalone_entity(state):
             return
         topic_entity = entity_id.replace("/", "_")
+        await async_prepare_sensor_display(self.hass, [entity_id])
         payload = self._build_state_payload(
             entity_id, state, source=source, correlation_id=correlation_id
         )
@@ -1107,8 +1132,10 @@ class BridgeCoordinator:
             return
         if self._is_model_marked_standalone_entity(new_state):
             return
+        await async_prepare_sensor_display(self.hass, [new_state.entity_id])
         payload = self._build_state_payload(
-            new_state.entity_id, new_state, source="ha_state_changed"
+            new_state.entity_id, new_state,
+            source="display_metadata" if event.event_type == "seenzus_display_metadata_changed" else "ha_state_changed",
         )
         topic_entity = new_state.entity_id.replace("/", "_")
         try:

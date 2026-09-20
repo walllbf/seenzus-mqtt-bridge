@@ -53,6 +53,32 @@ def test_fire_notifies_listeners_without_async_add_job(coordinator) -> None:
     assert calls == ["updated"]
 
 
+@pytest.mark.asyncio
+async def test_display_options_refresh_uses_metadata_provenance(coordinator) -> None:
+    from homeassistant.core import Event
+
+    coordinator.hass.states.set("sensor.demo", state="12.345", attributes={"unit_of_measurement": "V"})
+    coordinator.hass.config.time_zone = "Asia/Shanghai"
+    coordinator._subscribe_state_events()
+    assert {call["event_type"] for call in coordinator.hass.bus.listen_calls} >= {"state_changed", "entity_registry_updated", "core_config_updated"}
+    coordinator._on_display_metadata_changed(Event("entity_registry_updated", {"action": "update", "entity_id": "sensor.demo", "changes": {"options": {}}}))
+    assert "sensor.demo" in coordinator._pending_state_events
+    event = coordinator._pending_state_events.pop("sensor.demo")
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    await coordinator._publish_state_from_event(event)
+    payload = json.loads(coordinator._mqtt_client.published[-1]["payload"])
+    assert payload["state"] == "12.345"
+    assert payload["source"] == "display_metadata"
+    assert payload["attributes"]["seenzus_display"]["time_zone"] == "Asia/Shanghai"
+    assert coordinator.hass.bus.fire_calls == []
+    coordinator.hass.states.set("select.mode", state="decoupled", attributes={"options": ["control_relay", "decoupled"]})
+    coordinator._on_display_metadata_changed(Event("entity_registry_updated", {"action": "update", "entity_id": "select.mode", "changes": {"name": None}}))
+    assert coordinator._pending_state_events["select.mode"].event_type == "seenzus_display_metadata_changed"
+    coordinator._unsubscribe_runtime_listeners()
+    assert coordinator._display_unsubs == []
+
+
 def test_mqtt_auth_error_sets_pairing_status_for_web_pair_config() -> None:
     coordinator = BridgeCoordinator(
         FakeHass(),

@@ -7,6 +7,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import service as service_helper
+from .sensor_display import async_prepare_sensor_display, sensor_display_attributes
 
 
 @dataclass(slots=True)
@@ -101,7 +102,14 @@ async def dispatch(
         return DispatchResult(status=200, data=data, touched_entities=[])
 
     if method == "GET" and path == "/api/states":
-        return DispatchResult(status=200, data=[s.as_dict() for s in hass.states.async_all()], touched_entities=[])
+        states = hass.states.async_all()
+        await async_prepare_sensor_display(hass, [s.entity_id for s in states])
+        data = []
+        for state in states:
+            item = dict(state.as_dict())
+            item["attributes"] = sensor_display_attributes(hass, state.entity_id, item.get("attributes", {}))
+            data.append(item)
+        return DispatchResult(status=200, data=data, touched_entities=[])
 
     if method == "GET" and path == "/api/services":
         descriptions = await service_helper.async_get_all_descriptions(hass)
@@ -112,7 +120,10 @@ async def dispatch(
         entity_id = state_match.group(1)
         state = hass.states.get(entity_id)
         if state:
-            return DispatchResult(status=200, data=state.as_dict(), touched_entities=[entity_id])
+            await async_prepare_sensor_display(hass, [entity_id])
+            data = dict(state.as_dict())
+            data["attributes"] = sensor_display_attributes(hass, entity_id, data.get("attributes", {}))
+            return DispatchResult(status=200, data=data, touched_entities=[entity_id])
         return DispatchResult(status=404, data={"message": f"Entity not found: {entity_id}"}, touched_entities=[])
 
     service_match = re.fullmatch(r"/api/services/([^/]+)/([^/]+)", path)
