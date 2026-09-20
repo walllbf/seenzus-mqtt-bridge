@@ -207,6 +207,7 @@ seenzus/v2/bridge/ha-demo/state/light.living_room
 - `sensor_options`：Registry `options.sensor` 中原样的 `display_precision`、`suggested_display_precision`，显式 0 有效。
 - `time_zone`：HA 实例配置的时区，不代表某个 HA 用户的浏览器显示偏好。
 - `naming`：Registry 原始 `name`（用户覆盖，可为 null）、`original_name`、`has_entity_name` 和 `platform`。由服务端决定名称显示，不让插件猜测厂商名称；用户覆盖不得被通用译名替换。
+- 实体 Registry 的名称更新（含清除自定义名称）也会通过同一 state topic 上报最新 `naming`，`source` 为 `display_metadata`；即使读数和 `friendly_name` 未变化也会上报。消费方据名称证据刷新目录，不应将这类消息当作设备操作。
 - `translations`：`en`、`zh-Hans` 各自的 `entity`、`device_class`、`default` 资源片段；片段中 `state` 为原始枚举值到文本的字典，`name` 为可选名称模板，`unit_of_measurement` 为可选单位文本，`state_attributes.<attribute>.state` 为属性选项字典。名称占位符参数不从状态属性猜测，无法展开时保留来源名称。
 
 插件通过 HA 官方 `async_get_translations` 加载、按当前授权实体的资源前缀裁剪，仅传输该实体所需片段，不传完整平台字典。每个片段最多 128 个状态项、32 个属性且每属性最多 128 项，单个文本最多 256 字符。插件不选择当前状态译文、不格式化数字、不换算单位；服务端按实时值解释优先级，再发布安全显示提示。保留原始 `state`、`options` 和其他属性值，禁止按显示文本控制设备。Registry 名称、翻译键或显示选项变化会重新发送 `display_metadata`，不伪造状态变化事件。
@@ -332,6 +333,8 @@ seenzus/v2/bridge/ha-demo/catalog
 `devices[]` 内每个设备对象字段：
 
 - `deviceId`: HA device registry 的 device id；没有 registry 设备时，使用 `entityId` 构造独立设备
+- `model`: 可选，HA device registry 的原始 `model`；它可能是产品描述，不保证是型号代码
+- `modelId`: 可选，HA device registry 的原始 `model_id`（如 `SPM01-U01`）；没有该字段时省略。与 `model` 分开透传，由服务端决定功能识别，插件不解释型号
 - `entityCount`(设备级): 该设备下实体数量
 - `availableEntityCount`: 该设备下 `available=true` 的实体数量;配合设备级 `entityCount` 可体现「部分掉线」程度
 - `online`: 当前设备下任一实体 `available=true` 即为 true(语义不变;等价于 `availableEntityCount > 0`)

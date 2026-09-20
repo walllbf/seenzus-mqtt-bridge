@@ -79,6 +79,61 @@ async def test_display_options_refresh_uses_metadata_provenance(coordinator) -> 
     assert coordinator._display_unsubs == []
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["电量清零", None])
+async def test_registry_rename_publishes_latest_naming_without_a_state_change(coordinator, name) -> None:
+    from homeassistant.core import Event
+
+    entity_id = "switch.meter"
+    coordinator.hass.states.set(entity_id, state="off", attributes={"friendly_name": "Meter state"})
+    registry = er.async_get(coordinator.hass)
+    registry.add(entity_id, name="旧名称")
+    entry = registry.async_get(entity_id)
+    entry.original_name = "State"
+    entry.platform = "mqtt"
+    entry.has_entity_name = True
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    coordinator._subscribe_state_events()
+    changed = next(call["callback"] for call in coordinator.hass.bus.listen_calls
+                   if call["event_type"] == "entity_registry_updated")
+
+    entry.name = name
+    changed(Event("entity_registry_updated", {"action": "update", "entity_id": entity_id, "changes": {"name": "旧名称"}}))
+    assert list(coordinator._pending_state_events) == [entity_id]
+    event = coordinator._pending_state_events.pop(entity_id)
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    await coordinator._publish_state_from_event(event)
+
+    published = coordinator._mqtt_client.published
+    assert len(published) == 1
+    assert published[0]["topic"].endswith("/state/switch.meter")
+    payload = json.loads(published[0]["payload"])
+    assert payload["state"] == "off"
+    assert payload["attributes"]["friendly_name"] == "Meter state"
+    assert payload["attributes"]["seenzus_display"]["naming"]["name"] == name
+    assert payload["source"] == "display_metadata"
+    assert coordinator.hass.services.calls == []
+    coordinator._unsubscribe_runtime_listeners()
+
+
+@pytest.mark.parametrize("model_id", ["SPM01-U01", None])
+def test_catalog_transports_model_id_separately_from_description(coordinator, model_id) -> None:
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    coordinator.hass.states.set("switch.meter", state="off")
+    er.async_get(coordinator.hass).add("switch.meter", device_id="meter", name="电量清零")
+    registry = dr.async_get(coordinator.hass)
+    registry.add("meter", manufacturer="BITUO TECHNIK", model="Smart energy monitor for 1P+N system")
+    registry.async_get("meter").model_id = model_id
+
+    device = coordinator._build_device_catalog_payload(source="test")["devices"][0]
+    assert device["model"] == "Smart energy monitor for 1P+N system"
+    assert device["entities"][0]["name"] == "电量清零"
+    if model_id is None:
+        assert "modelId" not in device
+    else:
+        assert device["modelId"] == model_id
+
+
 def test_mqtt_auth_error_sets_pairing_status_for_web_pair_config() -> None:
     coordinator = BridgeCoordinator(
         FakeHass(),
