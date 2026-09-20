@@ -37,7 +37,7 @@ def make_state_changed_event(entity_id: str, *, state: str = "on", attributes: d
         state=state,
         attributes=attributes or {},
     )
-    return SimpleNamespace(data={"new_state": new_state})
+    return SimpleNamespace(event_type="state_changed", data={"new_state": new_state})
 
 
 class FakeBus:

@@ -202,6 +202,15 @@ seenzus/v2/bridge/ha-demo/state/light.living_room
 - `source`: 事件来源
 - `correlationMsgId`: 可选，若本次状态由某次 `command` 触发，则用于关联该请求
 
+实体的 `attributes.seenzus_display` 是可选的显示资源信封，覆盖传感器和设备页面的控制域，随实时状态、快照及 GET 状态回读传输；旧桥缺失此字段时，服务端保留原名、原值和基本类别回退。内容包括：
+
+- `sensor_options`：Registry `options.sensor` 中原样的 `display_precision`、`suggested_display_precision`，显式 0 有效。
+- `time_zone`：HA 实例配置的时区，不代表某个 HA 用户的浏览器显示偏好。
+- `naming`：Registry 原始 `name`（用户覆盖，可为 null）、`original_name`、`has_entity_name` 和 `platform`。由服务端决定名称显示，不让插件猜测厂商名称；用户覆盖不得被通用译名替换。
+- `translations`：`en`、`zh-Hans` 各自的 `entity`、`device_class`、`default` 资源片段；片段中 `state` 为原始枚举值到文本的字典，`name` 为可选名称模板，`unit_of_measurement` 为可选单位文本，`state_attributes.<attribute>.state` 为属性选项字典。名称占位符参数不从状态属性猜测，无法展开时保留来源名称。
+
+插件通过 HA 官方 `async_get_translations` 加载、按当前授权实体的资源前缀裁剪，仅传输该实体所需片段，不传完整平台字典。每个片段最多 128 个状态项、32 个属性且每属性最多 128 项，单个文本最多 256 字符。插件不选择当前状态译文、不格式化数字、不换算单位；服务端按实时值解释优先级，再发布安全显示提示。保留原始 `state`、`options` 和其他属性值，禁止按显示文本控制设备。Registry 名称、翻译键或显示选项变化会重新发送 `display_metadata`，不伪造状态变化事件。
+
 ### 4.6 source 语义
 
 当前实现取值：
@@ -210,6 +219,7 @@ seenzus/v2/bridge/ha-demo/state/light.living_room
 - `ha_state_changed`: HA 内部真实状态变化产生的主动推送
 - `startup_snapshot`: MQTT 连接成功后启动快照
 - `full_snapshot`: `GET /api/states` 命令触发的全量状态快照
+- `display_metadata`: Registry 显示选项或 HA 时区变化后重发当前读数和显示资源；不表示实际传感器状态发生变化，不据此生成状态变化或掉线历史。
 
 **为开放枚举**，消费方应只识别已知值、对未知值惰性处理，后续新增取值不应破坏现有消费方。语义锚：
 
