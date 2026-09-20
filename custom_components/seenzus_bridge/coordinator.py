@@ -86,6 +86,7 @@ from .sensor_display import async_prepare_sensor_display, sensor_display_attribu
 _LOGGER = logging.getLogger(__name__)
 
 PRESENCE_HEARTBEAT_INTERVAL_SECONDS = 30
+CATALOG_REFRESH_DELAY_SECONDS = 1.5
 MAX_INFLIGHT_COMMANDS = 8
 # 全量快照分批发布并短暂让出事件循环，避免短时间内把上千条 QoS 0 消息压进
 # paho 队列，也给心跳、命令和连接维护任务稳定的调度机会。
@@ -202,6 +203,9 @@ class BridgeCoordinator:
         self._task: asyncio.Task | None = None
         self._state_unsub = None
         self._display_unsubs: list[Callable[[], None]] = []
+        self._device_registry_unsub: Callable[[], None] | None = None
+        self._catalog_refresh_task: asyncio.Task | None = None
+        self._catalog_refresh_pending = False
         self._ha_started_unsub = None
         self._mqtt_client = None
         self._aiomqtt = None
@@ -339,6 +343,7 @@ class BridgeCoordinator:
             self.pairing_status = PAIRING_STATUS_PAIRED
 
         self._aiomqtt = await self._async_import_aiomqtt()
+        self._subscribe_device_registry()
 
         conf = self._conf()
         events_enabled = bool(conf.get(CONF_ENABLE_STATE_EVENTS, DEFAULT_ENABLE_STATE_EVENTS))
@@ -370,6 +375,56 @@ class BridgeCoordinator:
         self._ha_started_unsub = None
         if bool(self._conf().get(CONF_ENABLE_STATE_EVENTS, DEFAULT_ENABLE_STATE_EVENTS)):
             self._subscribe_state_events()
+
+    @callback
+    def _subscribe_device_registry(self) -> None:
+        # Catalog metadata is independent of the optional live-state stream.
+        if self._device_registry_unsub is None:
+            self._device_registry_unsub = self.hass.bus.async_listen(
+                "device_registry_updated", self._on_device_registry_changed
+            )
+
+    @callback
+    def _on_device_registry_changed(self, event: Event) -> None:
+        if event.data.get("action") != "update" or not set(event.data.get("changes", {})).intersection({
+            "name", "name_by_user", "manufacturer", "model", "model_id", "area_id", "via_device_id",
+        }):
+            return
+        self._catalog_refresh_pending = True
+        self._start_catalog_refresh_if_ready()
+
+    def _start_catalog_refresh_if_ready(self) -> None:
+        if not self._catalog_refresh_pending or self._mqtt_client is None or not self.mqtt_connected:
+            return
+        if self._catalog_refresh_task is None or self._catalog_refresh_task.done():
+            self._catalog_refresh_task = self._entry.async_create_task(
+                self.hass, self._refresh_catalog_metadata(), "seenzus catalog metadata refresh"
+            )
+
+    async def _refresh_catalog_metadata(self) -> None:
+        try:
+            while self._catalog_refresh_pending:
+                # One entry-owned task batches edits and preserves changes arriving during I/O.
+                await asyncio.sleep(CATALOG_REFRESH_DELAY_SECONDS)
+                client = self._mqtt_client
+                if client is None or not self.mqtt_connected:
+                    return
+                self._catalog_refresh_pending = False
+                try:
+                    await self._publish_device_catalog(client, source="registry_update")
+                except Exception as err:  # noqa: BLE001
+                    # Reconnect and periodic catalog requests remain the recovery path.
+                    _LOGGER.warning("Device metadata catalog refresh failed: %s", err)
+        finally:
+            self._catalog_refresh_task = None
+
+    async def _stop_catalog_refresh(self) -> None:
+        task = self._catalog_refresh_task
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self._catalog_refresh_task = None
+        self._catalog_refresh_pending = False
 
     @callback
     def _subscribe_state_events(self) -> None:
@@ -449,12 +504,19 @@ class BridgeCoordinator:
         for unsubscribe in self._display_unsubs:
             unsubscribe()
         self._display_unsubs = []
+        if self._device_registry_unsub is not None:
+            self._device_registry_unsub()
+            self._device_registry_unsub = None
+        self._catalog_refresh_pending = False
+        if self._catalog_refresh_task is not None:
+            self._catalog_refresh_task.cancel()
 
     def _cancel_runtime_tasks(self) -> None:
         for task in (
             self._task,
             self._initial_snapshot_task,
             self._state_worker_task,
+            self._catalog_refresh_task,
             self._presence_heartbeat_task,
             *self._command_tasks,
         ):
@@ -475,6 +537,7 @@ class BridgeCoordinator:
             ("command cancellation", tuple(self._command_tasks)),
             ("initial snapshot cancellation", (self._initial_snapshot_task,)),
             ("state task cancellation", (self._state_worker_task,)),
+            ("catalog refresh cancellation", (self._catalog_refresh_task,)),
             ("MQTT disconnect", (self._task,)),
             ("heartbeat cancellation", (self._presence_heartbeat_task,)),
         )
@@ -612,9 +675,10 @@ class BridgeCoordinator:
                 _LOGGER.exception("Fatal MQTT runtime error: %s", err)
                 raise
             finally:
+                self._mqtt_client = None
+                await self._stop_catalog_refresh()
                 await self._stop_presence_heartbeat()
                 await self._stop_initial_snapshot()
-                self._mqtt_client = None
 
     async def _connect_and_serve(self, aiomqtt: Any, client_id: str) -> bool:
         """Resolve config, connect, announce, become ready, pump messages.
@@ -693,6 +757,7 @@ class BridgeCoordinator:
             self._fire()
             self._start_presence_heartbeat()
             self._start_state_worker_if_ready()
+            self._start_catalog_refresh_if_ready()
             self._start_initial_snapshot(client)
             _LOGGER.info(
                 "MQTT connected %s:%s, v2 command topic: %s",
