@@ -36,6 +36,8 @@ seenzus MQTT Bridge (HAOS)
 
 ## 安装
 
+兼容性策略：保留最低支持版本 HA Core **2025.1.4**，不设置运行时版本上限。CI 持续验证最低版和官方最新稳定版；测试结果是已验证范围，不是新版本用户能否控制设备的准入开关。手动重跑、隔离测试及版本证据见 [HA 兼容性验证](docs/ha-compatibility.zh-CN.md)。
+
 ### HACS（推荐）
 
 1. HA -> HACS -> Integrations
@@ -350,16 +352,17 @@ entry 已包含 web_pair 写入的 mqtt + bridge 绑定上下文
 
 升级集成版本时，同时更新 `manifest.json` 和 `const.py` 中的 `BRIDGE_VERSION`；行为测试会检查对外发送的版本号，防止两者再次不一致。
 
-推荐在仓库根目录执行：
+按 [兼容性说明](docs/ha-compatibility.zh-CN.md) 解析版本并创建隔离环境。例如使用 Python 3.13 验证最低版：
 
 ```text
 python -m venv .venv-test
-.\.venv-test\Scripts\python -m pip install -r requirements_test.txt
+.\.venv-test\Scripts\python -m pip install -r requirements_contract.txt homeassistant==2025.1.4 pytest==8.3.4 pytest-asyncio==0.24.0 pytest-timeout==2.3.1
 ```
 
 运行测试：
 
-```text
+```powershell
+$env:EXPECTED_HA_VERSION='2025.1.4'
 .\.venv-test\Scripts\python -m pytest tests -q
 ```
 
