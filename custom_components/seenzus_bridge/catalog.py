@@ -112,6 +112,7 @@ def build_catalog_device(
         "displayName": name,
         "manufacturer": getattr(device_entry, "manufacturer", None),
         "model": getattr(device_entry, "model", None),
+        "modelId": getattr(device_entry, "model_id", None),
         "areaId": getattr(device_entry, "area_id", None),
         "viaDeviceId": getattr(device_entry, "via_device_id", None),
         "entities": [] if entity is None else [entity],
