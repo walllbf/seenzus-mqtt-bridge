@@ -1,6 +1,9 @@
 from pathlib import Path
 import sys
 import asyncio
+import json
+
+import pytest
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -11,3 +14,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 for path in (REPO_ROOT, REPO_ROOT / "custom_components"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
+
+
+@pytest.fixture
+def bridge_manifest_version() -> str:
+    manifest = REPO_ROOT / "custom_components" / "seenzus_bridge" / "manifest.json"
+    return json.loads(manifest.read_text(encoding="utf-8"))["version"]

@@ -6,7 +6,7 @@ import json
 import pytest
 
 import seenzus_bridge
-from seenzus_bridge import BridgeCoordinator, BRIDGE_VERSION, er
+from seenzus_bridge import BridgeCoordinator, er
 from seenzus_bridge.bridge_protocol import build_topics
 from tests.helpers import AsyncFakeMQTTClient, FakeConfigEntry, FakeEntityRegistry, FakeHass, make_state_changed_event
 
@@ -77,7 +77,7 @@ async def test_on_state_changed_ignores_events_when_state_push_disabled(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_publish_presence_includes_expected_payload(runtime_coordinator) -> None:
+async def test_publish_presence_includes_expected_payload(runtime_coordinator, bridge_manifest_version) -> None:
     runtime_coordinator._mqtt_client = AsyncFakeMQTTClient()
     runtime_coordinator._topics = build_topics("seenzus/v2", "ha-demo")
 
@@ -87,7 +87,7 @@ async def test_publish_presence_includes_expected_payload(runtime_coordinator) -
     payload = json.loads(runtime_coordinator._mqtt_client.published[0]["payload"])
     assert payload["bridgeId"] == "ha-demo"
     assert payload["status"] == "online"
-    assert payload["version"] == BRIDGE_VERSION
+    assert payload["version"] == bridge_manifest_version
     assert payload["capabilities"] == {"persistentOperationIdempotency": True}
 
 
