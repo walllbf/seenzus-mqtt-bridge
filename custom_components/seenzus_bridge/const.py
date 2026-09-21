@@ -2,7 +2,7 @@
 
 DOMAIN = "seenzus_bridge"
 # Keep in sync with manifest.json; presence and pairing tests guard this contract.
-BRIDGE_VERSION = "0.2.9"
+BRIDGE_VERSION = "0.2.10"
 
 # 产品显示名（Python 侧唯一来源：config_flow / sensor / quick_pair 都引用这里）。
 # 注意：manifest.json、strings.json、translations 因 HA 翻译机制无法引用 Python
