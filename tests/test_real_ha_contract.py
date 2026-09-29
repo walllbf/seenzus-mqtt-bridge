@@ -5,7 +5,7 @@ schema validation and dispatch are the installed upstream implementation.
 """
 import json
 from inspect import signature
-from datetime import datetime, timezone
+from datetime import datetime
 from types import MappingProxyType
 
 import pytest
@@ -179,9 +179,7 @@ async def test_real_registry_catalog_and_snapshot_preserve_identity_and_evidence
     assert custom["available"] is True and custom["unit"] == "W"
     assert entities["switch.unreachable"]["available"] is False
 
-    before = datetime.now(timezone.utc)
     result = await command(bridge, client, "GET", "/api/states")
-    after = datetime.now(timezone.utc)
     states = {item["entity_id"]: item for item in result["data"]}
     evidence = states[attached.entity_id]
     assert datetime.fromisoformat(evidence["last_changed"]) == hass.states.get(attached.entity_id).last_changed
@@ -191,4 +189,7 @@ async def test_real_registry_catalog_and_snapshot_preserve_identity_and_evidence
     assert publications[attached.entity_id]["available"] is True
     assert publications["switch.unreachable"]["available"] is False
     assert publications[attached.entity_id]["attributes"]["unit_of_measurement"] == "W"
-    assert before <= datetime.fromisoformat(publications[attached.entity_id]["ts"]) <= after
+    assert (
+        datetime.fromisoformat(publications[attached.entity_id]["ts"])
+        == hass.states.get(attached.entity_id).last_updated
+    )

@@ -14,7 +14,7 @@ import json
 import logging
 import uuid
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import islice
 from typing import Any
 
@@ -23,6 +23,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_STATE_CHANGED
 from homeassistant.core import CoreState, Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.recorder import DATA_INSTANCE as RECORDER_INSTANCE
 
 from .bridge_protocol import (
     BridgeTopics,
@@ -97,6 +98,11 @@ SNAPSHOT_BATCH_PAUSE_SECONDS = 0.05
 # 窗口，拖慢刚恢复的连接。超出上限丢最旧的一条——按 entity 合并后，只有每个
 # entity 的最新状态有价值。
 MAX_PENDING_STATE_EVENTS = 2000
+# Recorder catch-up is deliberately bounded independently of recorder retention.
+# A reconnect must not turn a busy HA database into an unbounded MQTT flood.
+HISTORY_REPLAY_WINDOW = timedelta(minutes=30)
+MAX_HISTORY_REPLAY_EVENTS_PER_ENTITY = 100
+MAX_HISTORY_REPLAY_EVENTS = 2000
 PENDING_DROP_LOG_INTERVAL = 500
 SHUTDOWN_CLEANUP_TIMEOUT_SECONDS = 3.0
 RELOAD_CLEANUP_TIMEOUT_SECONDS = 10.0
@@ -215,10 +221,13 @@ class BridgeCoordinator:
         self._ha_started_event = asyncio.Event()
         self._initial_snapshot_attempted = False
         self._initial_snapshot_task: asyncio.Task | None = None
-        self._pending_state_events: dict[str, Event] = {}
+        # Current-state domains coalesce under their entity_id key. Stateless
+        # event/button occurrences use unique keys so repeated presses/rings survive.
+        self._pending_state_events: dict[object, Event] = {}
         self._dropped_state_events = 0
         self._next_drop_log_at = 1
         self._state_worker_task: asyncio.Task | None = None
+        self._history_replay_task: asyncio.Task | None = None
         self._presence_heartbeat_task: asyncio.Task | None = None
         self._command_tasks: set[asyncio.Task] = set()
         self._operation_store = PersistentOperationStore(hass, entry.entry_id)
@@ -483,6 +492,7 @@ class BridgeCoordinator:
         self._task = None
         self._initial_snapshot_task = None
         self._state_worker_task = None
+        self._history_replay_task = None
         self._presence_heartbeat_task = None
         self._command_tasks.clear()
         self._pending_state_events.clear()
@@ -516,6 +526,7 @@ class BridgeCoordinator:
             self._task,
             self._initial_snapshot_task,
             self._state_worker_task,
+            self._history_replay_task,
             self._catalog_refresh_task,
             self._presence_heartbeat_task,
             *self._command_tasks,
@@ -537,6 +548,7 @@ class BridgeCoordinator:
             ("command cancellation", tuple(self._command_tasks)),
             ("initial snapshot cancellation", (self._initial_snapshot_task,)),
             ("state task cancellation", (self._state_worker_task,)),
+            ("history replay cancellation", (self._history_replay_task,)),
             ("catalog refresh cancellation", (self._catalog_refresh_task,)),
             ("MQTT disconnect", (self._task,)),
             ("heartbeat cancellation", (self._presence_heartbeat_task,)),
@@ -676,6 +688,7 @@ class BridgeCoordinator:
                 raise
             finally:
                 self._mqtt_client = None
+                await self._stop_history_replay()
                 await self._stop_catalog_refresh()
                 await self._stop_presence_heartbeat()
                 await self._stop_initial_snapshot()
@@ -758,6 +771,7 @@ class BridgeCoordinator:
             self._start_presence_heartbeat()
             self._start_state_worker_if_ready()
             self._start_catalog_refresh_if_ready()
+            self._start_history_replay(client)
             self._start_initial_snapshot(client)
             _LOGGER.info(
                 "MQTT connected %s:%s, v2 command topic: %s",
@@ -803,6 +817,35 @@ class BridgeCoordinator:
     async def _stop_initial_snapshot(self) -> None:
         task = self._initial_snapshot_task
         self._initial_snapshot_task = None
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    def _start_history_replay(self, client: Any) -> None:
+        """Backfill a bounded recorder window after startup or reconnect.
+
+        The exact start of a network partition cannot be observed reliably,
+        and a process restart has no in-memory boundary at all. Replaying the
+        whole bounded window on every connection covers both cases; stable IDs
+        make overlap with already delivered live events safe.
+        """
+        if not bool(self._conf().get(CONF_ENABLE_STATE_EVENTS, DEFAULT_ENABLE_STATE_EVENTS)):
+            return
+        if self._history_replay_task is not None and not self._history_replay_task.done():
+            return
+        end_time = datetime.now(timezone.utc)
+        start_time = end_time - HISTORY_REPLAY_WINDOW
+        self._history_replay_task = self._entry.async_create_task(
+            self.hass,
+            self._run_history_replay(start_time, end_time, client=client),
+            "seenzus recorder history replay",
+        )
+
+    async def _stop_history_replay(self) -> None:
+        task = self._history_replay_task
+        self._history_replay_task = None
         if task is None:
             return
         if not task.done():
@@ -1063,6 +1106,15 @@ class BridgeCoordinator:
             is_own_entity=self._is_own_entity,
         )
 
+    @staticmethod
+    def _state_datetime(state_obj: Any, attribute: str) -> datetime | None:
+        value = getattr(state_obj, attribute, None)
+        if not isinstance(value, datetime):
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
     def _build_state_payload(
         self,
         entity_id: str,
@@ -1070,9 +1122,38 @@ class BridgeCoordinator:
         *,
         source: str,
         correlation_id: str | None = None,
+        observed_at: datetime | None = None,
     ) -> dict[str, Any]:
+        # last_updated includes attribute-only changes; snapshots and live events
+        # therefore retain HA's observation clock instead of bridge publish time.
+        observed_at = (
+            observed_at
+            or self._state_datetime(state_obj, "last_updated")
+            or datetime.now(timezone.utc)
+        )
+        observed_at = observed_at.astimezone(timezone.utc)
+        last_updated = self._state_datetime(state_obj, "last_updated") or observed_at
+        last_changed = self._state_datetime(state_obj, "last_changed") or last_updated
+        # Recorder replay is a retry of the original HA state fact. Other
+        # sources (command/snapshot/display) remain distinct evidence so they
+        # cannot consume a live event's identity before activity derivation.
+        identity_source = "ha_state_changed" if source == "history_replay" else source
+        identity = json.dumps(
+            [
+                self._topics.bridge_id,
+                identity_source,
+                correlation_id or "",
+                entity_id,
+                last_changed.isoformat(),
+                last_updated.isoformat(),
+                str(state_obj.state),
+            ],
+            separators=(",", ":"),
+        )
         payload: dict[str, Any] = {
-            "eventId": str(uuid.uuid4()),
+            # UUIDv5 is stable for the same HA fact across MQTT retries, recorder
+            # replay and process restarts. A new HA update changes its timestamps.
+            "eventId": str(uuid.uuid5(uuid.NAMESPACE_URL, identity)),
             "bridgeId": self._topics.bridge_id,
             "entityId": entity_id,
             "state": state_obj.state,
@@ -1080,7 +1161,7 @@ class BridgeCoordinator:
             # HA reserves `unavailable` for reachability. `unknown` means the Entity is present but
             # its current value is unknown (common for stateless buttons), not that it is offline.
             "available": str(state_obj.state).lower() != "unavailable",
-            "ts": utc_now_iso(),
+            "ts": observed_at.isoformat(),
             "source": source,
         }
         if correlation_id:
@@ -1105,10 +1186,33 @@ class BridgeCoordinator:
             return
         if self._is_model_marked_standalone_entity(state):
             return
+        await self._publish_state_object(
+            client,
+            state,
+            source=source,
+            correlation_id=correlation_id,
+            qos=qos,
+        )
+
+    async def _publish_state_object(
+        self,
+        client: Any,
+        state: Any,
+        *,
+        source: str,
+        correlation_id: str | None = None,
+        qos: int = 1,
+        observed_at: datetime | None = None,
+    ) -> None:
+        entity_id = state.entity_id
         topic_entity = entity_id.replace("/", "_")
         await async_prepare_sensor_display(self.hass, [entity_id])
         payload = self._build_state_payload(
-            entity_id, state, source=source, correlation_id=correlation_id
+            entity_id,
+            state,
+            source=source,
+            correlation_id=correlation_id,
+            observed_at=observed_at,
         )
         await self._publish(
             client,
@@ -1118,6 +1222,110 @@ class BridgeCoordinator:
         )
         self.state_push_count += 1
         self._fire()
+
+    async def _async_fetch_history_states(
+        self, start_time: datetime, end_time: datetime
+    ) -> list[Any]:
+        """Read full recorder states off the HA event loop."""
+        recorder_instance = self.hass.data.get(RECORDER_INSTANCE)
+        if recorder_instance is None:
+            return []
+
+        entity_ids = [
+            state.entity_id
+            for state in self.hass.states.async_all()
+            if state.entity_id
+            and not self._is_own_entity(state.entity_id)
+            and not self._is_model_marked_standalone_entity(state)
+        ]
+        if not entity_ids:
+            return []
+
+        def _query_history():
+            # Importing recorder history loads SQLAlchemy and can itself be
+            # expensive on first use, so keep both import and query on the
+            # recorder's dedicated executor.
+            from homeassistant.components.recorder import history
+
+            return history.get_significant_states(
+                self.hass,
+                start_time,
+                end_time,
+                entity_ids,
+                include_start_time_state=False,
+                significant_changes_only=False,
+                minimal_response=False,
+                no_attributes=False,
+            )
+
+        rows_by_entity = await recorder_instance.async_add_executor_job(_query_history)
+        states: list[Any] = []
+        for entity_id in entity_ids:
+            rows = list(rows_by_entity.get(entity_id, ()))
+            rows.sort(
+                key=lambda state: self._state_datetime(state, "last_updated")
+                or self._state_datetime(state, "last_changed")
+                or start_time
+            )
+            overflow = max(0, len(rows) - MAX_HISTORY_REPLAY_EVENTS_PER_ENTITY)
+            if overflow:
+                self._record_dropped_state_events(overflow, "recorder per-entity replay limit")
+                rows = rows[-MAX_HISTORY_REPLAY_EVENTS_PER_ENTITY:]
+            states.extend(rows)
+        states.sort(
+            key=lambda state: self._state_datetime(state, "last_updated")
+            or self._state_datetime(state, "last_changed")
+            or start_time
+        )
+        overflow = max(0, len(states) - MAX_HISTORY_REPLAY_EVENTS)
+        if overflow:
+            self._record_dropped_state_events(overflow, "recorder total replay limit")
+            states = states[-MAX_HISTORY_REPLAY_EVENTS:]
+        return states
+
+    async def _run_history_replay(
+        self,
+        start_time: datetime,
+        end_time: datetime,
+        *,
+        client: Any | None = None,
+    ) -> None:
+        publish_client = client or self._mqtt_client
+        if publish_client is None or self._topics is None:
+            return
+        try:
+            states = await self._async_fetch_history_states(start_time, end_time)
+            states.sort(
+                key=lambda state: self._state_datetime(state, "last_updated")
+                or self._state_datetime(state, "last_changed")
+                or start_time
+            )
+            for state in states:
+                if self._is_own_entity(state.entity_id) or self._is_model_marked_standalone_entity(state):
+                    continue
+                observed_at = (
+                    self._state_datetime(state, "last_changed")
+                    or self._state_datetime(state, "last_updated")
+                )
+                await self._publish_state_object(
+                    publish_client,
+                    state,
+                    source="history_replay",
+                    observed_at=observed_at,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001
+            # Recorder is optional in HA. Keep live forwarding healthy and retry
+            # the same bounded window on the next MQTT connection.
+            _LOGGER.warning("Recorder history replay unavailable or interrupted: %s", err)
+            return
+        if states:
+            _LOGGER.info(
+                "Replayed %s HA recorder state change(s) from %s",
+                len(states),
+                start_time.isoformat(),
+            )
 
     @callback
     def _on_state_changed(self, event: Event) -> None:
@@ -1130,21 +1338,29 @@ class BridgeCoordinator:
             return
         if self._is_model_marked_standalone_entity(new_state):
             return
-        # Re-inserting an existing key does not update dict insertion order.
-        # Move it to the end so trimming really discards the least recently
-        # updated entity and retains this entity's newest event.
-        self._pending_state_events.pop(entity_id, None)
-        self._pending_state_events[entity_id] = event
+        domain = entity_id.partition(".")[0]
+        is_transient = event.event_type == EVENT_STATE_CHANGED and domain in {"event", "button"}
+        if is_transient:
+            # Repeated occurrences can have the same state/event_type. A unique
+            # queue key preserves each occurrence and their insertion order.
+            queue_key: object = (entity_id, uuid.uuid4())
+        else:
+            # Re-inserting an existing key does not update dict insertion order.
+            # Move it to the end so trimming really discards the least recently
+            # updated entity and retains this entity's newest event.
+            queue_key = entity_id
+            self._pending_state_events.pop(queue_key, None)
+        self._pending_state_events[queue_key] = event
         self._trim_pending_state_events()
         self._start_state_worker_if_ready()
 
     def _trim_pending_state_events(self) -> None:
-        """把合并后的积压压在 MAX_PENDING_STATE_EVENTS 以内，超出丢最旧的。
+        """Keep the mixed coalesced/transient backlog within its hard limit.
 
-        _on_state_changed 不管连没连着都入列，而 _state_worker 只在连上时排空。
-        真机上一次断线的 5 秒内（大量实体持续抖动）就能攒出几千条，重连瞬间以
-        QoS 1 全量回放，把刚建立的链路再次打死。丢弃是有意的：这里只保留每个
-        entity 的最新状态，快照与 catalog 才是补齐真值的路径。
+        Current-state domains keep only the latest entity value; event/button
+        entries remain individual and ordered. If either kind overflows, drop
+        the globally oldest queued item and expose the shared drop counter.
+        Recorder replay is the bounded recovery path after reconnection.
         """
         overflow = len(self._pending_state_events) - MAX_PENDING_STATE_EVENTS
         if overflow <= 0:
@@ -1153,13 +1369,17 @@ class BridgeCoordinator:
         # overflow 几乎恒为 1，不该为此复制整份 key 列表。
         for stale_entity_id in list(islice(self._pending_state_events, overflow)):
             del self._pending_state_events[stale_entity_id]
-        self._dropped_state_events += overflow
+        self._record_dropped_state_events(overflow, "live MQTT backlog limit")
+
+    def _record_dropped_state_events(self, count: int, reason: str) -> None:
+        if count <= 0:
+            return
+        self._dropped_state_events += count
         if self._dropped_state_events >= self._next_drop_log_at:
             self._next_drop_log_at = self._dropped_state_events + PENDING_DROP_LOG_INTERVAL
             _LOGGER.warning(
-                "State backlog exceeded %s coalesced entries while the MQTT link was "
-                "unhealthy; dropped %s oldest event(s) so far",
-                MAX_PENDING_STATE_EVENTS,
+                "State history overflow (%s); dropped %s event(s) so far",
+                reason,
                 self._dropped_state_events,
             )
 
@@ -1178,8 +1398,9 @@ class BridgeCoordinator:
         while self._pending_state_events:
             if self._mqtt_client is None or not self.mqtt_connected:
                 return
-            entity_id, event = next(iter(self._pending_state_events.items()))
-            self._pending_state_events.pop(entity_id, None)
+            queue_key, event = next(iter(self._pending_state_events.items()))
+            self._pending_state_events.pop(queue_key, None)
+            entity_id = getattr(event.data.get("new_state"), "entity_id", queue_key)
             try:
                 await self._publish_state_from_event(event)
             except Exception as err:  # noqa: BLE001
@@ -1197,21 +1418,16 @@ class BridgeCoordinator:
             return
         if self._is_model_marked_standalone_entity(new_state):
             return
-        await async_prepare_sensor_display(self.hass, [new_state.entity_id])
-        payload = self._build_state_payload(
-            new_state.entity_id, new_state,
-            source="display_metadata" if event.event_type == "seenzus_display_metadata_changed" else "ha_state_changed",
-        )
-        topic_entity = new_state.entity_id.replace("/", "_")
         try:
-            await self._publish(
+            await self._publish_state_object(
                 self._mqtt_client,
-                f"{self._topics.state_prefix}/{topic_entity}",
-                json.dumps(payload, default=str),
-                qos=1,
+                new_state,
+                source=(
+                    "display_metadata"
+                    if event.event_type == "seenzus_display_metadata_changed"
+                    else "ha_state_changed"
+                ),
             )
-            self.state_push_count += 1
-            self._fire()
         except Exception as err:  # noqa: BLE001
             self.err_count += 1
             self.last_error = f"state_publish_failed:{err}"
@@ -1240,9 +1456,13 @@ class BridgeCoordinator:
             "ts": utc_now_iso(),
             "requestCount": self.req_count,
             "errorCount": self.err_count,
+            "droppedStateEventCount": self._dropped_state_events,
             "lastError": self.last_error,
             "version": BRIDGE_VERSION,
-            "capabilities": {"persistentOperationIdempotency": True},
+            "capabilities": {
+                "persistentOperationIdempotency": True,
+                "recorderHistoryReplay": True,
+            },
         }
         if transport_ws_path is not None:
             payload["wsPath"] = transport_ws_path

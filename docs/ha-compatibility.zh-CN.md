@@ -41,7 +41,7 @@ PowerShell 使用 `$env:EXPECTED_HA_VERSION='2026.9.2'` 后运行同一 pytest �
 - 使用 HA 自带服务描述读取路径生成动作目录，注册及移除服务后核验目录内容，而非伪造服务描述返回值。
 - 四类代表操作（开关、数值、选项、触发）经过真实 HA ServiceRegistry 和 schema 校验。模拟设备 handler 只更新隔离状态机，MQTT 使用内存传输。
 - 缺失服务、schema 错误、设备 handler 异常必须给出失败结果；HA 接受命令但设备尚未变化时，回读仍保留原状态，不能凭接受就伪造确认。
-- 保留 `unknown` 可用、`unavailable` 不可用的区别，验证真实状态时间及属性；发布的 `ts` 是桥生成消息的时间，不能混称 HA 原始状态变化时间。
+- 保留 `unknown` 可用、`unavailable` 不可用的区别，验证真实状态时间及完整属性；实时、命令回显和快照的 `ts` 等于 HA `last_updated`，recorder 补录的 `ts` 等于原始 `last_changed`，不使用桥构造消息的当前时间。
 
 真实接口测试不启动硬件集成，不连接住户 HA 或 MQTT。FakeHass 行为测试仍用于故障、并发和生命周期覆盖，但不能单独证明上游 API 兼容。当前官方 Entity Platform 集合取自安装中的 Core；“45 项”仅是 2026.8 的历史分类基线，不对未来数量作固定断言。
 
