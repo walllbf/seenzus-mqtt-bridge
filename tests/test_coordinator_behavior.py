@@ -1053,6 +1053,35 @@ async def test_state_event_uses_ha_observation_time_full_attributes_and_stable_i
     assert payloads[0]["eventId"] == payloads[1]["eventId"]
 
 
+@pytest.mark.asyncio
+async def test_attribute_only_changes_get_distinct_stable_event_ids(coordinator) -> None:
+    observed_at = datetime(2026, 9, 30, 10, 20, 30, tzinfo=timezone.utc)
+    dim = make_state_changed_event(
+        "light.living_room",
+        state="on",
+        attributes={"brightness": 80},
+        last_changed=observed_at,
+        last_updated=observed_at,
+    )
+    bright = make_state_changed_event(
+        "light.living_room",
+        state="on",
+        attributes={"brightness": 180},
+        last_changed=observed_at,
+        last_updated=observed_at,
+    )
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+
+    await coordinator._publish_state_from_event(dim)
+    await coordinator._publish_state_from_event(bright)
+    await coordinator._publish_state_from_event(bright)
+
+    payloads = [json.loads(item["payload"]) for item in coordinator._mqtt_client.published]
+    assert payloads[0]["eventId"] != payloads[1]["eventId"]
+    assert payloads[1]["eventId"] == payloads[2]["eventId"]
+
+
 def test_history_replay_respects_disabled_state_events(coordinator) -> None:
     coordinator._entry.options = {"enable_state_events": False}
 
@@ -1119,3 +1148,49 @@ async def test_history_replay_publishes_original_states_in_order_with_stable_ids
     ]
     assert live_payload["eventId"] == first_payloads[0]["eventId"]
     assert command_payload["eventId"] != first_payloads[0]["eventId"]
+
+
+@pytest.mark.asyncio
+async def test_history_fetch_uses_recorder_with_full_attributes_and_reports_limits(
+    coordinator, monkeypatch
+) -> None:
+    from homeassistant.components.recorder import history
+    from homeassistant.helpers.recorder import DATA_INSTANCE
+
+    start = datetime(2026, 9, 30, 10, 0, tzinfo=timezone.utc)
+    coordinator.hass.states.set("binary_sensor.door", state="off")
+    rows = [
+        SimpleNamespace(
+            entity_id="binary_sensor.door",
+            state=state,
+            attributes={"device_class": "door", "sequence": index},
+            last_changed=start + timedelta(seconds=index),
+            last_updated=start + timedelta(seconds=index),
+        )
+        for index, state in enumerate(("off", "on", "off"), start=1)
+    ]
+    query_calls = []
+
+    def _get_significant_states(*args, **kwargs):
+        query_calls.append((args, kwargs))
+        return {"binary_sensor.door": list(reversed(rows))}
+
+    class _Recorder:
+        async def async_add_executor_job(self, target, *args):
+            return target(*args)
+
+    coordinator.hass.data[DATA_INSTANCE] = _Recorder()
+    monkeypatch.setattr(history, "get_significant_states", _get_significant_states)
+    monkeypatch.setattr(coordinator_module, "MAX_HISTORY_REPLAY_EVENTS_PER_ENTITY", 2)
+
+    result = await coordinator._async_fetch_history_states(
+        start, start + timedelta(minutes=1)
+    )
+
+    assert [state.attributes["sequence"] for state in result] == [2, 3]
+    assert coordinator._dropped_state_events == 1
+    assert len(query_calls) == 1
+    _args, kwargs = query_calls[0]
+    assert kwargs["include_start_time_state"] is False
+    assert kwargs["significant_changes_only"] is False
+    assert kwargs["no_attributes"] is False

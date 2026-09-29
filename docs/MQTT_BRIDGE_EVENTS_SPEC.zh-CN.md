@@ -193,7 +193,7 @@ seenzus/v2/bridge/ha-demo/state/light.living_room
 
 ### 4.5 字段说明
 
-- `eventId`: 状态事实的稳定 ID。由桥实例、语义来源、可选命令关联、实体、HA 状态时间和状态值确定；同一 HA 变化因 MQTT 重试或 recorder 补录再次发送时复用，新的状态更新生成新 ID。命令回显、快照和显示元数据与真实 `ha_state_changed` 使用不同身份，避免先到的基线消息吞掉真实活动
+- `eventId`: 状态事实的稳定 ID。由桥实例、语义来源、可选命令关联、实体、HA 状态时间、状态值和原始属性快照确定；同一 HA 变化因 MQTT 重试或 recorder 补录再次发送时复用，新的状态更新生成新 ID。命令回显、快照和显示元数据与真实 `ha_state_changed` 使用不同身份，避免先到的基线消息吞掉真实活动
 - `bridgeId`: 当前桥实例 ID
 - `entityId`: 真实 HA 实体 ID
 - `state`: 实体主状态

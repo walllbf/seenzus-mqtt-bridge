@@ -1134,9 +1134,15 @@ class BridgeCoordinator:
         observed_at = observed_at.astimezone(timezone.utc)
         last_updated = self._state_datetime(state_obj, "last_updated") or observed_at
         last_changed = self._state_datetime(state_obj, "last_changed") or last_updated
+        original_attributes = dict(state_obj.attributes)
+        published_attributes = sensor_display_attributes(
+            self.hass, entity_id, original_attributes
+        )
         # Recorder replay is a retry of the original HA state fact. Other
         # sources (command/snapshot/display) remain distinct evidence so they
         # cannot consume a live event's identity before activity derivation.
+        # Include the original HA attributes so two attribute-only updates stay
+        # distinct even if the upstream clock has insufficient resolution.
         identity_source = "ha_state_changed" if source == "history_replay" else source
         identity = json.dumps(
             [
@@ -1147,8 +1153,11 @@ class BridgeCoordinator:
                 last_changed.isoformat(),
                 last_updated.isoformat(),
                 str(state_obj.state),
+                original_attributes,
             ],
+            sort_keys=True,
             separators=(",", ":"),
+            default=str,
         )
         payload: dict[str, Any] = {
             # UUIDv5 is stable for the same HA fact across MQTT retries, recorder
@@ -1157,7 +1166,7 @@ class BridgeCoordinator:
             "bridgeId": self._topics.bridge_id,
             "entityId": entity_id,
             "state": state_obj.state,
-            "attributes": sensor_display_attributes(self.hass, entity_id, dict(state_obj.attributes)),
+            "attributes": published_attributes,
             # HA reserves `unavailable` for reachability. `unknown` means the Entity is present but
             # its current value is unknown (common for stateless buttons), not that it is offline.
             "available": str(state_obj.state).lower() != "unavailable",
