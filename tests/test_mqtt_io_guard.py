@@ -88,6 +88,10 @@ def test_control_reply_waits_for_large_tls_write_and_reader_recovers(control_opc
     async def run(directory):
         server_context, client_context = _contexts(directory)
         listener = socket.socket()
+        # Linux negotiates TCP window scaling during accept: set the initial
+        # receive limit before listen, not after the handshake has advertised
+        # a large window that can absorb the whole test payload.
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
         listener.bind(("127.0.0.1", 0))
         listener.listen(1)
         ready = threading.Event()
@@ -106,6 +110,9 @@ def test_control_reply_waits_for_large_tls_write_and_reader_recovers(control_opc
                     tls_connection.sendall(bytes([control_opcode, 1]) + b"p")
                     ready.set()
                     assert drain.wait(5)
+                    # Backpressure has been established; now drain quickly on
+                    # both Windows and Linux instead of keeping a tiny window.
+                    tls_connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
                     received.append(_receive_frame(tls_connection))
                     received.append(_receive_frame(tls_connection))
                     # Fresh MQTT input after the echo proves the reader was restored.
@@ -157,7 +164,10 @@ def test_control_reply_waits_for_large_tls_write_and_reader_recovers(control_opc
                 if len(received) == 2 and (control_opcode != 0x89 or client._ping_t == 0):
                     break
             assert not server_errors, repr(server_errors)
-            assert received == [(0x2, payload), (0xA if control_opcode == 0x89 else 0x8, b"p")]
+            assert len(received) == 2, "server did not receive data and control reply"
+            assert received[0][0] == 0x2
+            assert hashlib.sha256(received[0][1]).digest() == hashlib.sha256(payload).digest()
+            assert received[1] == (0xA if control_opcode == 0x89 else 0x8, b"p")
             if control_opcode == 0x89:
                 assert client._ping_t == 0, "incoming MQTT packets were starved after the write completed"
             assert not any("BAD_LENGTH" in record.getMessage() for record in caplog.records)
@@ -262,6 +272,7 @@ def test_real_aiomqtt_wss_connection_keeps_acknowledgements_concurrent():
     async def run(directory):
         server_context, client_context = _contexts(directory)
         listener = socket.socket()
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
         listener.bind(("127.0.0.1", 0))
         listener.listen(1)
         send_ping = threading.Event()
@@ -292,6 +303,7 @@ def test_real_aiomqtt_wss_connection_keeps_acknowledgements_concurrent():
                     tls_connection.sendall(b"\x89\x01p")
                     ping_sent.set()
                     assert drain.wait(4)
+                    tls_connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576)
                     large_mid = None
                     while len(publications) < 2 or not control_frames:
                         opcode, frame = _receive_frame(tls_connection)
@@ -312,7 +324,7 @@ def test_real_aiomqtt_wss_connection_keeps_acknowledgements_concurrent():
                         publications.append((topic, len(body)))
                         if topic == "test/large":
                             large_mid = mid
-                            assert body == b"x" * 524288
+                            assert hashlib.sha256(body).digest() == hashlib.sha256(b"x" * 524288).digest()
                         else:
                             assert topic == "test/small" and body == b"ok"
                             # The second acknowledgement intentionally arrives first.
