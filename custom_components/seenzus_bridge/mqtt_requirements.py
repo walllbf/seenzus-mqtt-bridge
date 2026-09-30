@@ -68,6 +68,28 @@ def _check_loaded_versions() -> None:
             )
 
 
+def _mqtt_requirement_state(requirements: list[str]) -> tuple[list[str], str | None]:
+    """Keep a failure tied to the installed aiomqtt version that produced it."""
+    failures = _unsatisfied_requirements(requirements)
+    if not failures:
+        _check_loaded_versions()
+        return [], None
+    try:
+        incompatible_version = metadata.version("aiomqtt")
+    except metadata.PackageNotFoundError:
+        incompatible_version = None
+    return failures, incompatible_version
+
+
+async def _async_mqtt_requirement_state(
+    hass: HomeAssistant, requirements: list[str],
+) -> tuple[list[str], str | None]:
+    """Read metadata while HA's shared installation lock excludes writers."""
+    manager = ha_requirements._async_get_manager(hass)
+    async with manager.pip_lock:
+        return await hass.async_add_executor_job(_mqtt_requirement_state, requirements)
+
+
 async def async_ensure_mqtt_requirements(hass: HomeAssistant) -> None:
     """Use HA's installer, constraints, pip lock and failure history for repairs."""
     requirements = await hass.async_add_executor_job(_core_mqtt_requirements, hass.config.config_dir)
@@ -76,20 +98,20 @@ async def async_ensure_mqtt_requirements(hass: HomeAssistant) -> None:
         # path without clearing its cache or bypassing its installer lock.
         await ha_requirements.async_process_requirements(hass, DOMAIN, requirements)
 
-    failures = await hass.async_add_executor_job(_unsatisfied_requirements, requirements)
-    if failures and not hass.config.skip_pip and not (
+    failures, incompatible_version = await _async_mqtt_requirement_state(hass, requirements)
+    if failures and incompatible_version is not None and not hass.config.skip_pip and not (
         MQTT_PACKAGES & set(hass.config.skip_pip_packages)
     ):
         # Both versions can meet Core's individual bounds while aiomqtt needs
         # a different Paho major. Exclude the incompatible installed aiomqtt
         # version so HA actually invokes its resolver, which backtracks under
-        # Core's constraints (including Paho 1.6 on legacy Core).
-        current = await hass.async_add_executor_job(metadata.version, "aiomqtt")
+        # Core's constraints (including Paho 1.6 on legacy Core). Use the
+        # version from the failure snapshot: another integration may have
+        # repaired the pair after we released HA's installation lock.
         aiomqtt = next(Requirement(raw) for raw in requirements if Requirement(raw).name == "aiomqtt")
-        aiomqtt.specifier &= SpecifierSet(f"!={current}")
+        aiomqtt.specifier &= SpecifierSet(f"!={incompatible_version}")
         await ha_requirements.async_process_requirements(hass, DOMAIN, [str(aiomqtt)])
-        failures = await hass.async_add_executor_job(_unsatisfied_requirements, requirements)
+        failures, _ = await _async_mqtt_requirement_state(hass, requirements)
 
     if failures:
         raise ha_requirements.RequirementsNotFound(DOMAIN, failures)
-    await hass.async_add_executor_job(_check_loaded_versions)

@@ -1,6 +1,7 @@
 """Exercise HA's already-installed fast path before bridge startup."""
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from importlib import metadata
@@ -196,4 +197,81 @@ async def test_inactive_core_and_dependency_markers_are_ignored(monkeypatch, tmp
         assert await seenzus_bridge.async_setup(hass, {})
         assert not installs
     finally:
+        await hass.async_stop(force=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("old_aiomqtt", ["2.4.0", "2.5.1"])
+@pytest.mark.parametrize("repair_timing", ["after-check", "before-installer"])
+async def test_other_integration_repairs_mqtt_before_bridge_resolves(
+    monkeypatch, tmp_path, old_aiomqtt, repair_timing,
+) -> None:
+    """A stale incompatibility result must not exclude a newly repaired version."""
+    versions = {"aiomqtt": old_aiomqtt, "paho-mqtt": "1.6.1"}
+    resolved = {"aiomqtt": "2.0.1", "paho-mqtt": "1.6.1"}
+    installed, installs = _installed_mqtt(monkeypatch, tmp_path, LEGACY_CONSTRAINTS, versions, resolved)
+    hass = HomeAssistant(str(tmp_path))
+    repair_requested = asyncio.Event()
+    repair_done = asyncio.Event()
+    real_executor = hass.async_add_executor_job
+    real_process = ha_requirements.async_process_requirements
+
+    def install_package(raw_requirement, **kwargs):
+        installs.append(raw_requirement)
+        requirement = Requirement(raw_requirement)
+        if resolved[requirement.name] not in requirement.specifier:
+            return False
+        installed.update(resolved)
+        return True
+
+    monkeypatch.setattr(package, "install_package", install_package)
+
+    async def checked_executor(job, *args):
+        result = await real_executor(job, *args)
+        # The bridge's metadata check takes one requirement list. HA's uv
+        # worker takes that list plus kwargs, so it is not paused here.
+        if repair_timing == "after-check" and len(args) == 1 and isinstance(args[0], list):
+            failures = result[0] if isinstance(result, tuple) else result
+            if failures and not repair_requested.is_set():
+                repair_requested.set()
+                await asyncio.sleep(0)  # Let the other integration request HA's lock.
+                if not ha_requirements._async_get_manager(hass).pip_lock.locked():
+                    await repair_done.wait()
+        return result
+
+    async def process(hass, name, requirements, *args, **kwargs):
+        if repair_timing == "before-installer" and name == "seenzus_bridge" and any(
+            "!=" in req for req in requirements
+        ):
+            repair_requested.set()
+            await repair_done.wait()
+        await real_process(hass, name, requirements, *args, **kwargs)
+
+    async def repair_other_integration():
+        await repair_requested.wait()
+        try:
+            await real_process(hass, "other_integration", ["aiomqtt==2.0.1"])
+        finally:
+            repair_done.set()
+
+    monkeypatch.setattr(hass, "async_add_executor_job", checked_executor)
+    monkeypatch.setattr(ha_requirements, "async_process_requirements", process)
+    tasks = []
+    try:
+        manifest = json.loads((ROOT / "custom_components/seenzus_bridge/manifest.json").read_text())
+        await real_process(hass, "seenzus_bridge", manifest["requirements"])
+        assert not installs, "Start from the already-installed manifest fast path"
+        tasks = [
+            asyncio.create_task(seenzus_bridge.async_setup(hass, {})),
+            asyncio.create_task(repair_other_integration()),
+        ]
+        results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=2)
+        assert results[0] is True
+        assert {name: installed[name] for name in resolved} == resolved
+        assert installs == ["aiomqtt==2.0.1"], "The bridge must accept the repaired pair"
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         await hass.async_stop(force=True)

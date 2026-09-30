@@ -55,9 +55,9 @@ PowerShell 使用 `$env:EXPECTED_HA_VERSION='2026.9.2'` 后运行同一 pytest �
 
 HA 的已安装检查只匹配 manifest 中的单个版本范围，可能跳过安装器：例如 aiomqtt 2.5.1 / Paho 1.6.1 分别满足桥的范围，但不能一起导入。集成在全局 `async_setup` 中读取当前 Core 的约束文件，将其与 manifest 范围取交集，再通过 HA 的需求管理器处理；同时核验 aiomqtt 发行包声明的 Paho 依赖。旧版 Core 下若现有 aiomqtt 需要较新的 Paho，就排除该不兼容的 aiomqtt 版本，让 HA 安装器按 Core 约束重新求解。
 
-修复沿用 HA 的安装锁、重试次数和失败记录，遵守跳过安装设置，安装后再次检查实际元数据。若模块已在内存中保留旧版本，集成给出重启提示，不热替换其他集成正在使用的模块。
+修复沿用 HA 的安装锁、重试次数和失败记录，遵守跳过安装设置，安装后再次检查实际元数据。元数据检查在 HA 的共享安装锁下同时记录失败原因和当时的 aiomqtt 版本，释放锁后才请求安装器；其他集成若已完成修复，桥接受已兼容的组合，不会用旧检查结果排除新版本。若模块已在内存中保留旧版本，集成给出重启提示，不热替换其他集成正在使用的模块。
 
-`tests/test_mqtt_requirements.py` 通过真实 HA 需求管理器复现缓存与已安装路径，覆盖旧版本残留、Core 升级和降级、混装、跳过安装、安装失败及已导入的旧模块。CI 还在独立虚拟环境预装真实 aiomqtt 2.5.1 / Paho 1.6.1，运行 `tools/mqtt_upgrade_smoke.py`，确认 manifest 检查会接受该组合，随后由集成启动和真实 uv 安装器修复，并成功构造 TCP/WebSocket 客户端。该步骤不预先导入损坏的 MQTT 库，也不连接外部 broker；过程证据保存在 `mqtt-upgrade.txt`。
+`tests/test_mqtt_requirements.py` 通过真实 HA 需求管理器复现缓存与已安装路径，覆盖旧版本残留、Core 升级和降级、混装、跳过安装、安装失败及已导入的旧模块，并用两个并发启动任务验证其他集成在检查后或安装前修好依赖的场景。CI 还在独立虚拟环境预装真实 aiomqtt 2.5.1 / Paho 1.6.1，运行 `tools/mqtt_upgrade_smoke.py`，确认 manifest 检查会接受该组合，随后由集成启动和真实 uv 安装器修复，并成功构造 TCP/WebSocket 客户端。该步骤不预先导入损坏的 MQTT 库，也不连接外部 broker；过程证据保存在 `mqtt-upgrade.txt`。
 
 ## 完成标准
 
