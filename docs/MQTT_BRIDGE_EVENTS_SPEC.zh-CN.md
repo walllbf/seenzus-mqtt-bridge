@@ -423,7 +423,7 @@ seenzus/v2/bridge/ha-demo/presence
   "errorCount": 1,
   "droppedStateEventCount": 0,
   "lastError": null,
-  "version": "0.2.10",
+  "version": "0.2.11",
   "capabilities": {
     "persistentOperationIdempotency": true,
     "recorderHistoryReplay": true
