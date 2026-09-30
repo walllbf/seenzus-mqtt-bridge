@@ -16,7 +16,8 @@ def guard_websocket_io(client: Any) -> None:
     concurrent; there is no lock around client.publish().
 
     The adapter is scoped to this aiomqtt client. It uses aiomqtt's _client /
-    _disconnected and Paho's _sendbuffer, tested against aiomqtt 2.4/Paho 2.1.
+    _disconnected and Paho's _sendbuffer. HA runtime constraints select either
+    aiomqtt 2.0/Paho 1.6 or aiomqtt 2.5/Paho 2.1; both pairs are tested in CI.
     """
     loop = asyncio.get_running_loop()
     paho_client = client._client

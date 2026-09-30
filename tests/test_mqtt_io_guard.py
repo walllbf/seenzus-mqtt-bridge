@@ -129,8 +129,13 @@ def test_control_reply_waits_for_large_tls_write_and_reader_recovers(control_opc
         connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
         connection.connect(listener.getsockname())
         tls_connection = client_context.wrap_socket(connection, server_hostname="localhost")
-        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, transport="websockets")
-        wrapper = mqtt._WebsocketWrapper.__new__(mqtt._WebsocketWrapper)
+        # HA 2025.1.4 constrains Paho to 1.6.1, which predates callback API v2.
+        kwargs = {"transport": "websockets"}
+        if hasattr(mqtt, "CallbackAPIVersion"):
+            kwargs["callback_api_version"] = mqtt.CallbackAPIVersion.VERSION2
+        client = mqtt.Client(**kwargs)
+        wrapper_class = getattr(mqtt, "_WebsocketWrapper", None) or mqtt.WebsocketWrapper
+        wrapper = wrapper_class.__new__(wrapper_class)
         for name, value in {
             "_socket": tls_connection, "_ssl": True, "connected": True,
             "_sendbuffer": bytearray(), "_requested_size": 0,

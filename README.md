@@ -334,7 +334,7 @@ entry 已包含 web_pair 写入的 mqtt + bridge 绑定上下文
 
 ## 运行要求
 
-- Home Assistant 2026.3+
+- Home Assistant 2025.1.4+
 - Python 3.11+（HA 内置）
 - 公网 MQTT Broker（推荐 EMQX Cloud / HiveMQ）
 
@@ -387,6 +387,11 @@ docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 ---
 
 ## 版本变更记录
+
+### 未发布
+
+- 集成依赖改为受限的兼容版本范围，由 HA 的运行时约束选择 MQTT 库：HA 2025.1.4 使用 aiomqtt 2.0.1 / Paho 1.6.1，新版 HA 使用 aiomqtt 2.5.x / Paho 2.1.0，修复 0.2.11 因依赖冲突加载失败、无法配对的问题；保留 WSS 写入保护
+- CI 安装集成 manifest 依赖时使用所选 HA Core 的 `package_constraints.txt`，并验证实际安装版本，避免预装依赖绕过运行时约束
 
 ### v0.2.11 (2026-09-30)
 
