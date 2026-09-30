@@ -4,6 +4,7 @@
   "codeowners": ["@walllbf"],
   "config_flow": true,
   "dependencies": ["http"],
+  "after_dependencies": ["recorder"],
   "documentation": "https://github.com/walllbf/seenzus-mqtt-bridge",
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/walllbf/seenzus-mqtt-bridge/issues",
