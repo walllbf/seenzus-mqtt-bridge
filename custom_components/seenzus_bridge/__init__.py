@@ -11,6 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr  # noqa: F401
 from homeassistant.helpers import entity_registry as er  # noqa: F401
+from homeassistant.helpers.typing import ConfigType
 
 from .catalog import IOT_DEVICE_DOMAINS  # noqa: F401
 from .const import BRIDGE_VERSION, DOMAIN  # noqa: F401
@@ -18,8 +19,15 @@ from .coordinator import (  # noqa: F401
     PRESENCE_HEARTBEAT_INTERVAL_SECONDS,
     BridgeCoordinator,
 )
+from .mqtt_requirements import async_ensure_mqtt_requirements
 
 PLATFORMS = ["sensor"]
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Prepare the integration before config flows and entries start."""
+    await async_ensure_mqtt_requirements(hass)
+    return True
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

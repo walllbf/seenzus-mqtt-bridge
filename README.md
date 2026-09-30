@@ -391,7 +391,8 @@ docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 ### 未发布
 
 - 集成依赖改为受限的兼容版本范围，由 HA 的运行时约束选择 MQTT 库：HA 2025.1.4 使用 aiomqtt 2.0.1 / Paho 1.6.1，新版 HA 使用 aiomqtt 2.5.x / Paho 2.1.0，修复 0.2.11 因依赖冲突加载失败、无法配对的问题；保留 WSS 写入保护
-- CI 安装集成 manifest 依赖时使用所选 HA Core 的 `package_constraints.txt`，并验证实际安装版本，避免预装依赖绕过运行时约束
+- 启动时同时检查已安装库与 Core 约束、aiomqtt 的 Paho 依赖，不兼容时通过 HA 安装器修复；若旧库已被其他集成导入，日志会提示重启 HA 后加载已修复的版本
+- CI 使用所选 Core 的运行时约束安装 manifest 依赖，并在独立环境预装不兼容的 MQTT 库，通过真实 HA 安装器验证升级修复路径
 
 ### v0.2.11 (2026-09-30)
 

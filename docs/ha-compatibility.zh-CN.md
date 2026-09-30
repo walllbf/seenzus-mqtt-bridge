@@ -25,7 +25,7 @@ GitHub Actions → Validate → Run workflow → `home_assistant` 填入 `2026.9
 python tools/ha_matrix.py --version 2026.9.2
 ```
 
-使用输出中指定的 Python 创建独立虚拟环境，安装 `requirements_contract.txt`、该条目的 `core` 和 `test_dependencies`，再执行：
+使用输出中指定的 Python 创建独立虚拟环境，先安装该条目的 `core` 和 `test_dependencies`，再按该 Core 的 `homeassistant/package_constraints.txt` 安装 `requirements_contract.txt` 与集成 manifest 的实际依赖。完整安装步骤见 Validate 工作流。最后执行：
 
 ```sh
 EXPECTED_HA_VERSION=2026.9.2 python -m pytest -q --junitxml=pytest.xml
@@ -47,9 +47,17 @@ PowerShell 使用 `$env:EXPECTED_HA_VERSION='2026.9.2'` 后运行同一 pytest �
 
 ## WSS 传输与断线恢复（#62）
 
-运行和契约测试统一固定 aiomqtt 2.4.0 / Paho 2.1.0。WSS I/O guard 使用这两个库的私有 socket/断线通知接口，升级依赖时需要重跑 `tests/test_mqtt_io_guard.py`：真实回环 TLS 背压下的 PING/CLOSE、接收恢复和异常通知、完整 WSS/MQTT 握手，以及小消息先获 QoS 1 确认的并发场景。TLS 证书仅为测试生成，临时目录在结束时删除。
+运行和契约依赖统一使用有上限的兼容范围，并遵守所选 Core 的运行时约束。已验证 HA 2025.1.4 的 aiomqtt 2.0.1 / Paho 1.6.1 与 HA 2026.9.4 的 aiomqtt 2.5.1 / Paho 2.1.0。WSS I/O guard 使用这些库的私有 socket/断线通知接口，升级依赖时需要重跑 `tests/test_mqtt_io_guard.py`：真实回环 TLS 背压下的 PING/CLOSE、接收恢复和异常通知、完整 WSS/MQTT 握手，以及小消息先获 QoS 1 确认的并发场景。TLS 证书仅为测试生成，临时目录在结束时删除。
 
 `tests/test_mqtt_recovery.py` 使用真实协调器覆盖失败结果后停止发送、状态失败后停止回传错误、取消传递，以及重连等待前取消旧命令和 #61 新增的历史补录任务。其他正常命令与历史语义继续由完整套件覆盖。修复没有改变 broker 消息限制或固定重连间隔；这些回归通过不能代替用户 HA 的安装及首次断线原因验证。
+
+## 已安装 MQTT 库的升级检查（#66）
+
+HA 的已安装检查只匹配 manifest 中的单个版本范围，可能跳过安装器：例如 aiomqtt 2.5.1 / Paho 1.6.1 分别满足桥的范围，但不能一起导入。集成在全局 `async_setup` 中读取当前 Core 的约束文件，将其与 manifest 范围取交集，再通过 HA 的需求管理器处理；同时核验 aiomqtt 发行包声明的 Paho 依赖。旧版 Core 下若现有 aiomqtt 需要较新的 Paho，就排除该不兼容的 aiomqtt 版本，让 HA 安装器按 Core 约束重新求解。
+
+修复沿用 HA 的安装锁、重试次数和失败记录，遵守跳过安装设置，安装后再次检查实际元数据。若模块已在内存中保留旧版本，集成给出重启提示，不热替换其他集成正在使用的模块。
+
+`tests/test_mqtt_requirements.py` 通过真实 HA 需求管理器复现缓存与已安装路径，覆盖旧版本残留、Core 升级和降级、混装、跳过安装、安装失败及已导入的旧模块。CI 还在独立虚拟环境预装真实 aiomqtt 2.5.1 / Paho 1.6.1，运行 `tools/mqtt_upgrade_smoke.py`，确认 manifest 检查会接受该组合，随后由集成启动和真实 uv 安装器修复，并成功构造 TCP/WebSocket 客户端。该步骤不预先导入损坏的 MQTT 库，也不连接外部 broker；过程证据保存在 `mqtt-upgrade.txt`。
 
 ## 完成标准
 
