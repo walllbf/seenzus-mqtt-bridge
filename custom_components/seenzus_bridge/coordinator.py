@@ -168,6 +168,22 @@ def _transport_connect_kwargs(conf: dict) -> dict[str, Any]:
     return kwargs
 
 
+def _identity_json_default(value: object) -> object:
+    """Canonicalize values the way HA's recorder serializes them to JSON.
+
+    The recorder stores attributes as JSON (``datetime`` becomes an ISO
+    string, sets become lists), so history replay sees already-canonical
+    values while live events hold the original objects. Serializing both
+    sides through this hook keeps one ``eventId`` per HA fact.
+    """
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, (set, frozenset)):
+        # Sorted for cross-restart stability (set order is hash-randomized).
+        return sorted(value, key=str)
+    return str(value)
+
+
 class BridgeCoordinator:
     """Manage MQTT bridge runtime and HA dispatch."""
 
@@ -1157,7 +1173,7 @@ class BridgeCoordinator:
             ],
             sort_keys=True,
             separators=(",", ":"),
-            default=str,
+            default=_identity_json_default,
         )
         payload: dict[str, Any] = {
             # UUIDv5 is stable for the same HA fact across MQTT retries, recorder

@@ -1082,6 +1082,45 @@ async def test_attribute_only_changes_get_distinct_stable_event_ids(coordinator)
     assert payloads[1]["eventId"] == payloads[2]["eventId"]
 
 
+@pytest.mark.asyncio
+async def test_replayed_fact_matches_live_event_id_after_recorder_round_trip(
+    coordinator,
+) -> None:
+    """Recorder stores attributes as JSON (datetime -> ISO string).
+
+    The identity material must canonicalize the same way, so a fact delivered
+    live (datetime object) and replayed from history (ISO string) keeps one ID.
+    """
+    observed_at = datetime(2026, 9, 30, 10, 20, 30, tzinfo=timezone.utc)
+    live = make_state_changed_event(
+        "sensor.next_dawn",
+        state="2026-10-01",
+        attributes={"next_dawn": observed_at, "tags": {"b", "a"}},
+        last_changed=observed_at,
+        last_updated=observed_at,
+    )
+    replayed = make_state_changed_event(
+        "sensor.next_dawn",
+        state="2026-10-01",
+        attributes={"next_dawn": observed_at.isoformat(), "tags": ["a", "b"]},
+        last_changed=observed_at,
+        last_updated=observed_at,
+    )
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+
+    await coordinator._publish_state_from_event(live)
+    replay_payload = coordinator._build_state_payload(
+        "sensor.next_dawn",
+        replayed.data["new_state"],
+        source="history_replay",
+        observed_at=observed_at,
+    )
+
+    live_payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
+    assert replay_payload["eventId"] == live_payload["eventId"]
+
+
 def test_history_replay_respects_disabled_state_events(coordinator) -> None:
     coordinator._entry.options = {"enable_state_events": False}
 
