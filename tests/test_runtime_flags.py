@@ -93,7 +93,11 @@ async def test_publish_presence_includes_expected_payload(runtime_coordinator, b
     assert payload["bridgeId"] == "ha-demo"
     assert payload["status"] == "online"
     assert payload["version"] == bridge_manifest_version
-    assert payload["capabilities"] == {"persistentOperationIdempotency": True}
+    assert payload["capabilities"] == {
+        "persistentOperationIdempotency": True,
+        "recorderHistoryReplay": True,
+    }
+    assert payload["droppedStateEventCount"] == 0
 
 
 @pytest.mark.asyncio

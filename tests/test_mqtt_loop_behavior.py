@@ -365,13 +365,21 @@ async def test_loop_wss_entry_connects_with_websockets_transport(monkeypatch) ->
 async def test_loop_publishes_startup_snapshot_once_across_reconnect_cycles(monkeypatch) -> None:
     coordinator, fake = _make_coordinator(
         monkeypatch,
-        data=dict(HAPPY_ENTRY_DATA),
+        data={**HAPPY_ENTRY_DATA, "enable_state_events": True},
         cycles=[
             {"end": FakeMqttError("[code:7] connection lost")},
             {"end": asyncio.CancelledError},
         ],
     )
     coordinator.hass.states.set("light.living_room", state="on")
+    replay_clients = []
+    original_start_history_replay = coordinator._start_history_replay
+
+    def _record_history_replay(client):
+        replay_clients.append(client)
+        original_start_history_replay(client)
+
+    monkeypatch.setattr(coordinator, "_start_history_replay", _record_history_replay)
     sleeps, _real_sleep = _install_recording_sleep(monkeypatch)
     coordinator._on_ha_started(None)
 
@@ -401,6 +409,7 @@ async def test_loop_publishes_startup_snapshot_once_across_reconnect_cycles(monk
     assert reconnect_catalog["qos"] == 1
     assert json.loads(reconnect_catalog["payload"])["source"] == "reconnect"
     assert coordinator._initial_snapshot_attempted is True
+    assert replay_clients == [first_cycle, second_cycle]
     assert coordinator._mqtt_client is None
     # A recovered connection must not keep presenting the previous iterator
     # disconnect as its current Last error.

@@ -1,6 +1,7 @@
 {
   "domain": "seenzus_bridge",
   "name": "seenzus MQTT Bridge",
+  "after_dependencies": ["recorder"],
   "codeowners": ["@walllbf"],
   "config_flow": true,
   "dependencies": ["http"],

@@ -193,12 +193,12 @@ seenzus/v2/bridge/ha-demo/state/light.living_room
 
 ### 4.5 字段说明
 
-- `eventId`: 本次状态事件唯一 ID
+- `eventId`: 状态事实的稳定 ID。由桥实例、语义来源、可选命令关联、实体、HA 状态时间、状态值和原始属性快照确定；同一 HA 变化因 MQTT 重试或 recorder 补录再次发送时复用，新的状态更新生成新 ID。命令回显、快照和显示元数据与真实 `ha_state_changed` 使用不同身份，避免先到的基线消息吞掉真实活动
 - `bridgeId`: 当前桥实例 ID
 - `entityId`: 真实 HA 实体 ID
 - `state`: 实体主状态
-- `attributes`: 实体属性快照
-- `ts`: 事件时间
+- `attributes`: HA `State.attributes` 的完整快照，桥不裁剪键值；包括 `device_class`，`event` 实体包括 `event_type`
+- `ts`: 事件的 HA 原始观测时间。实时事件、命令回显和快照使用 `last_updated`；recorder 补录使用记录的 `last_changed`。不得理解成 MQTT 接收时间或桥构造消息的当前时间
 - `source`: 事件来源
 - `correlationMsgId`: 可选，若本次状态由某次 `command` 触发，则用于关联该请求
 
@@ -220,6 +220,7 @@ seenzus/v2/bridge/ha-demo/state/light.living_room
 - `ha_state_changed`: HA 内部真实状态变化产生的主动推送
 - `startup_snapshot`: MQTT 连接成功后启动快照
 - `full_snapshot`: `GET /api/states` 命令触发的全量状态快照
+- `history_replay`: 启动或 MQTT 重连后从 HA recorder 补录的断线窗口状态变化
 - `display_metadata`: Registry 显示选项或 HA 时区变化后重发当前读数和显示资源；不表示实际传感器状态发生变化，不据此生成状态变化或掉线历史。
 
 **为开放枚举**，消费方应只识别已知值、对未知值惰性处理，后续新增取值不应破坏现有消费方。语义锚：
@@ -240,6 +241,9 @@ seenzus/v2/bridge/ha-demo/state/light.living_room
 - 名称末尾带含数字 ASCII 型号 token（如 `T1*`）的实体不做 state 上报，详见 §5.7；普通用户命名里的 `*` 不受影响
 - `state` 默认不 retain
 - `startup_snapshot` 和 `full_snapshot` 的 state 发布使用 `qos=0`，其他 state 使用 `qos=1`
+- 普通当前态和连续测量在内存积压中仍按实体合并；`event`、`button` 域逐条保序，不合并连续同类型触发
+- 桥启动及每次 MQTT 重连都补查 recorder 最近 30 分钟，以覆盖无法精确探测起点的网络分区和桥进程重启。每实体最多补 100 条、每轮最多补 2,000 条，取较新的记录；超限计入 `presence.droppedStateEventCount` 并记录警告
+- recorder 补录按 HA 原始时间发送，应用应按 `eventId` 幂等接收；补录不代表事实刚刚发生，也不应倒拨当前态
 
 ## 5. catalog
 
@@ -417,8 +421,13 @@ seenzus/v2/bridge/ha-demo/presence
   "ts": "2026-04-22T12:00:00.000000+00:00",
   "requestCount": 12,
   "errorCount": 1,
+  "droppedStateEventCount": 0,
   "lastError": null,
-  "version": "0.2.3"
+  "version": "0.2.10",
+  "capabilities": {
+    "persistentOperationIdempotency": true,
+    "recorderHistoryReplay": true
+  }
 }
 ```
 
@@ -439,8 +448,10 @@ seenzus/v2/bridge/ha-demo/presence
 - `ts`: 上报时间
 - `requestCount`: 累计请求数
 - `errorCount`: 累计错误数
+- `droppedStateEventCount`: 有界实时队列与 recorder 补录因容量上限丢弃的累计事件数
 - `lastError`: 最近一次错误
 - `version`: 插件版本
+- `capabilities.recorderHistoryReplay`: `true` 表示支持有界 HA recorder 断线补录
 
 ### 6.6 Retain 语义
 

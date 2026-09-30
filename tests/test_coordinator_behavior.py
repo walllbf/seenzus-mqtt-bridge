@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -999,3 +1001,235 @@ def test_pending_state_backlog_keeps_recent_update_for_existing_entity(
     retained = coordinator._pending_state_events["light.a"]
     assert retained.data["new_state"].state == "latest"
     assert coordinator._dropped_state_events == 1
+
+
+def test_pending_state_backlog_preserves_each_event_and_button_occurrence(coordinator) -> None:
+    first_ring = make_state_changed_event(
+        "event.front_door", state="2026-09-30T10:00:00+00:00", attributes={"event_type": "ring"}
+    )
+    second_ring = make_state_changed_event(
+        "event.front_door", state="2026-09-30T10:00:01+00:00", attributes={"event_type": "ring"}
+    )
+    first_press = make_state_changed_event("button.scene", state="unknown")
+    second_press = make_state_changed_event("button.scene", state="unknown")
+
+    for event in (first_ring, second_ring, first_press, second_press):
+        coordinator._on_state_changed(event)
+
+    assert list(coordinator._pending_state_events.values()) == [
+        first_ring,
+        second_ring,
+        first_press,
+        second_press,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_state_event_uses_ha_observation_time_full_attributes_and_stable_identity(
+    coordinator,
+) -> None:
+    observed_at = datetime(2026, 9, 30, 10, 20, 30, 123456, tzinfo=timezone.utc)
+    event = make_state_changed_event(
+        "light.living_room",
+        state="on",
+        attributes={
+            "brightness": 180,
+            "color_temp": 300,
+            "effect": "reading",
+            "device_class": "light",
+            "vendor_nested": {"kept": [1, 2]},
+        },
+        last_updated=observed_at,
+    )
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+
+    await coordinator._publish_state_from_event(event)
+    await coordinator._publish_state_from_event(event)
+
+    payloads = [json.loads(item["payload"]) for item in coordinator._mqtt_client.published]
+    assert payloads[0]["attributes"] == event.data["new_state"].attributes
+    assert payloads[0]["ts"] == "2026-09-30T10:20:30.123456+00:00"
+    assert payloads[0]["eventId"] == payloads[1]["eventId"]
+
+
+@pytest.mark.asyncio
+async def test_attribute_only_changes_get_distinct_stable_event_ids(coordinator) -> None:
+    observed_at = datetime(2026, 9, 30, 10, 20, 30, tzinfo=timezone.utc)
+    dim = make_state_changed_event(
+        "light.living_room",
+        state="on",
+        attributes={"brightness": 80},
+        last_changed=observed_at,
+        last_updated=observed_at,
+    )
+    bright = make_state_changed_event(
+        "light.living_room",
+        state="on",
+        attributes={"brightness": 180},
+        last_changed=observed_at,
+        last_updated=observed_at,
+    )
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+
+    await coordinator._publish_state_from_event(dim)
+    await coordinator._publish_state_from_event(bright)
+    await coordinator._publish_state_from_event(bright)
+
+    payloads = [json.loads(item["payload"]) for item in coordinator._mqtt_client.published]
+    assert payloads[0]["eventId"] != payloads[1]["eventId"]
+    assert payloads[1]["eventId"] == payloads[2]["eventId"]
+
+
+@pytest.mark.asyncio
+async def test_replayed_fact_matches_live_event_id_after_recorder_round_trip(
+    coordinator,
+) -> None:
+    """Recorder stores attributes as JSON (datetime -> ISO string).
+
+    The identity material must canonicalize the same way, so a fact delivered
+    live (datetime object) and replayed from history (ISO string) keeps one ID.
+    """
+    observed_at = datetime(2026, 9, 30, 10, 20, 30, tzinfo=timezone.utc)
+    live = make_state_changed_event(
+        "sensor.next_dawn",
+        state="2026-10-01",
+        attributes={"next_dawn": observed_at, "tags": {"b", "a"}},
+        last_changed=observed_at,
+        last_updated=observed_at,
+    )
+    replayed = make_state_changed_event(
+        "sensor.next_dawn",
+        state="2026-10-01",
+        attributes={"next_dawn": observed_at.isoformat(), "tags": ["a", "b"]},
+        last_changed=observed_at,
+        last_updated=observed_at,
+    )
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+
+    await coordinator._publish_state_from_event(live)
+    replay_payload = coordinator._build_state_payload(
+        "sensor.next_dawn",
+        replayed.data["new_state"],
+        source="history_replay",
+        observed_at=observed_at,
+    )
+
+    live_payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
+    assert replay_payload["eventId"] == live_payload["eventId"]
+
+
+def test_history_replay_respects_disabled_state_events(coordinator) -> None:
+    coordinator._entry.options = {"enable_state_events": False}
+
+    coordinator._start_history_replay(AsyncFakeMQTTClient())
+
+    assert coordinator._history_replay_task is None
+
+
+@pytest.mark.asyncio
+async def test_history_replay_publishes_original_states_in_order_with_stable_ids(
+    coordinator, monkeypatch
+) -> None:
+    start = datetime(2026, 9, 30, 10, 0, tzinfo=timezone.utc)
+    old = SimpleNamespace(
+        entity_id="binary_sensor.door",
+        state="on",
+        attributes={"device_class": "door"},
+        last_changed=start + timedelta(seconds=1),
+        last_updated=start + timedelta(seconds=1),
+    )
+    new = SimpleNamespace(
+        entity_id="binary_sensor.door",
+        state="off",
+        attributes={"device_class": "door"},
+        last_changed=start + timedelta(seconds=2),
+        last_updated=start + timedelta(seconds=2),
+    )
+
+    async def _history_states(_start, _end):
+        return [new, old]
+
+    monkeypatch.setattr(coordinator, "_async_fetch_history_states", _history_states)
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    coordinator.mqtt_connected = True
+
+    await coordinator._run_history_replay(start, start + timedelta(minutes=1))
+    first_payloads = [json.loads(item["payload"]) for item in coordinator._mqtt_client.published]
+    await coordinator._run_history_replay(start, start + timedelta(minutes=1))
+    second_payloads = [
+        json.loads(item["payload"])
+        for item in coordinator._mqtt_client.published[len(first_payloads):]
+    ]
+
+    assert [payload["state"] for payload in first_payloads] == ["on", "off"]
+    assert all(payload["source"] == "history_replay" for payload in first_payloads)
+    assert [payload["ts"] for payload in first_payloads] == [
+        "2026-09-30T10:00:01+00:00",
+        "2026-09-30T10:00:02+00:00",
+    ]
+    assert [payload["eventId"] for payload in first_payloads] == [
+        payload["eventId"] for payload in second_payloads
+    ]
+
+    await coordinator._publish_state_object(
+        coordinator._mqtt_client, old, source="ha_state_changed"
+    )
+    await coordinator._publish_state_object(
+        coordinator._mqtt_client, old, source="command"
+    )
+    live_payload, command_payload = [
+        json.loads(item["payload"])
+        for item in coordinator._mqtt_client.published[-2:]
+    ]
+    assert live_payload["eventId"] == first_payloads[0]["eventId"]
+    assert command_payload["eventId"] != first_payloads[0]["eventId"]
+
+
+@pytest.mark.asyncio
+async def test_history_fetch_uses_recorder_with_full_attributes_and_reports_limits(
+    coordinator, monkeypatch
+) -> None:
+    from homeassistant.components.recorder import history
+    from homeassistant.helpers.recorder import DATA_INSTANCE
+
+    start = datetime(2026, 9, 30, 10, 0, tzinfo=timezone.utc)
+    coordinator.hass.states.set("binary_sensor.door", state="off")
+    rows = [
+        SimpleNamespace(
+            entity_id="binary_sensor.door",
+            state=state,
+            attributes={"device_class": "door", "sequence": index},
+            last_changed=start + timedelta(seconds=index),
+            last_updated=start + timedelta(seconds=index),
+        )
+        for index, state in enumerate(("off", "on", "off"), start=1)
+    ]
+    query_calls = []
+
+    def _get_significant_states(*args, **kwargs):
+        query_calls.append((args, kwargs))
+        return {"binary_sensor.door": list(reversed(rows))}
+
+    class _Recorder:
+        async def async_add_executor_job(self, target, *args):
+            return target(*args)
+
+    coordinator.hass.data[DATA_INSTANCE] = _Recorder()
+    monkeypatch.setattr(history, "get_significant_states", _get_significant_states)
+    monkeypatch.setattr(coordinator_module, "MAX_HISTORY_REPLAY_EVENTS_PER_ENTITY", 2)
+
+    result = await coordinator._async_fetch_history_states(
+        start, start + timedelta(minutes=1)
+    )
+
+    assert [state.attributes["sequence"] for state in result] == [2, 3]
+    assert coordinator._dropped_state_events == 1
+    assert len(query_calls) == 1
+    _args, kwargs = query_calls[0]
+    assert kwargs["include_start_time_state"] is False
+    assert kwargs["significant_changes_only"] is False
+    assert kwargs["no_attributes"] is False

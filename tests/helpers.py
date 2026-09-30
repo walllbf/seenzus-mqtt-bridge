@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -8,10 +9,20 @@ from homeassistant.core import CoreState
 
 
 class FakeState:
-    def __init__(self, entity_id: str, *, state: str = "on", attributes: dict | None = None) -> None:
+    def __init__(
+        self,
+        entity_id: str,
+        *,
+        state: str = "on",
+        attributes: dict | None = None,
+        last_changed: datetime | None = None,
+        last_updated: datetime | None = None,
+    ) -> None:
         self.entity_id = entity_id
         self.state = state
         self.attributes = attributes or {}
+        self.last_changed = last_changed or datetime.now(timezone.utc)
+        self.last_updated = last_updated or self.last_changed
 
     def as_dict(self) -> dict:
         return {
@@ -31,11 +42,21 @@ class AsyncFakeMQTTClient:
         )
 
 
-def make_state_changed_event(entity_id: str, *, state: str = "on", attributes: dict | None = None):
+def make_state_changed_event(
+    entity_id: str,
+    *,
+    state: str = "on",
+    attributes: dict | None = None,
+    last_changed: datetime | None = None,
+    last_updated: datetime | None = None,
+):
+    changed_at = last_changed or datetime.now(timezone.utc)
     new_state = SimpleNamespace(
         entity_id=entity_id,
         state=state,
         attributes=attributes or {},
+        last_changed=changed_at,
+        last_updated=last_updated or changed_at,
     )
     return SimpleNamespace(event_type="state_changed", data={"new_state": new_state})
 
