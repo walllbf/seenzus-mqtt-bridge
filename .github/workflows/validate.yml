@@ -81,6 +81,7 @@ jobs:
           PY
       - name: Repair an already-installed incompatible MQTT pair with HA's installer
         run: |
+          set -o pipefail
           python -m venv --system-site-packages .venv-test/mqtt-upgrade
           source .venv-test/mqtt-upgrade/bin/activate
           # Deliberately reproduce a pair accepted by both manifest ranges.
