@@ -344,11 +344,14 @@ def test_real_aiomqtt_wss_connection_keeps_acknowledgements_concurrent():
         aio_client = aiomqtt.Client(
             "127.0.0.1", port=listener.getsockname()[1], transport="websockets",
             tls_context=client_context, timeout=5,
-            socket_options=[(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)],
         )
         guard_module.guard_websocket_io(aio_client)
         try:
             async with aio_client as client:
+                # aiomqtt ignores socket_options for Paho's WebSocket wrapper.
+                # Limit the actual TLS socket so Linux's much larger default
+                # send buffer cannot absorb the entire payload before our gate.
+                client._client.socket()._socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
                 large = asyncio.create_task(client.publish("test/large", b"x" * 524288, qos=1))
                 small = None
                 try:
