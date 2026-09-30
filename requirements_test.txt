@@ -1,4 +1,4 @@
 pytest
 pytest-asyncio
 pytest-homeassistant-custom-component
-aiomqtt
+-r requirements_contract.txt

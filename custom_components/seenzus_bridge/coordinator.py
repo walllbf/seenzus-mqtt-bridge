@@ -81,6 +81,7 @@ from .const import (
 )
 from .entity_filters import looks_like_internal_bridge_entity_id, name_has_model_marker
 from .ha_dispatcher import DispatchPolicy, dispatch
+from .mqtt_io_guard import guard_websocket_io
 from .operation_store import PersistentOperationStore
 from .sensor_display import async_prepare_sensor_display, sensor_display_attributes, supports_entity_display
 
@@ -109,6 +110,10 @@ RELOAD_CLEANUP_TIMEOUT_SECONDS = 10.0
 
 
 _TLS_CONTEXT_CACHE = None
+
+
+class _MqttPublishFailure(Exception):
+    """A transport failure that cannot be reported over the same MQTT socket."""
 
 
 def _client_tls_context():
@@ -683,31 +688,47 @@ class BridgeCoordinator:
         client_id = f"seenzus-bridge-{self._entry.entry_id[:8]}"
 
         while True:
+            retry_delay = 0
             try:
                 if not await self._connect_and_serve(aiomqtt, client_id):
                     _LOGGER.warning("MQTT host missing, retry in 10s")
-                    await asyncio.sleep(10)
-                    continue
-            except aiomqtt.MqttError as err:
-                await self._stop_presence_heartbeat()
+                    retry_delay = 10
+            except (aiomqtt.MqttError, _MqttPublishFailure) as err:
                 self._mark_mqtt_error(str(err))
                 self._fire()
                 _LOGGER.error("MQTT disconnected: %s, retry in 5s", err)
-                await asyncio.sleep(5)
+                retry_delay = 5
             except asyncio.CancelledError:
                 raise
             except Exception as err:  # noqa: BLE001
-                await self._stop_presence_heartbeat()
                 self._mark_mqtt_error(str(err))
                 self._fire()
                 _LOGGER.exception("Fatal MQTT runtime error: %s", err)
                 raise
             finally:
                 self._mqtt_client = None
+                await self._stop_connection_commands()
                 await self._stop_history_replay()
                 await self._stop_catalog_refresh()
                 await self._stop_presence_heartbeat()
                 await self._stop_initial_snapshot()
+            if retry_delay:
+                await asyncio.sleep(retry_delay)
+
+
+    async def _stop_connection_commands(self) -> None:
+        """Retire handlers holding the old client before reconnecting."""
+        tasks = tuple(self._command_tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await self._run_bounded_cleanup(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=SHUTDOWN_CLEANUP_TIMEOUT_SECONDS,
+                stage="disconnected command cancellation",
+                context="MQTT reconnect",
+            )
 
     async def _connect_and_serve(self, aiomqtt: Any, client_id: str) -> bool:
         """Resolve config, connect, announce, become ready, pump messages.
@@ -740,14 +761,17 @@ class BridgeCoordinator:
 
         # keepalive 保持 aiomqtt 默认 60s，别调大：Cloudflare 对空闲 ~100s 的
         # WebSocket 会掐连接，60s 心跳正好压在窗口内（issue #14）。
-        async with aiomqtt.Client(
+        mqtt_client = aiomqtt.Client(
             hostname=host,
             port=port,
             username=username,
             password=password,
             identifier=client_id,
             **_transport_connect_kwargs(conf),
-        ) as client:
+        )
+        if _effective_transport(conf)[0] in (MQTT_SCHEME_WS, MQTT_SCHEME_WSS):
+            guard_websocket_io(mqtt_client)
+        async with mqtt_client as client:
             if self._topics is None:
                 self._topics = self._resolve_topics()
                 self._command_prefix = self._topics.command_sub[:-2]
@@ -956,13 +980,14 @@ class BridgeCoordinator:
                     source="command",
                     correlation_id=effective_msg_id,
                 )
-                await self._publish_result(
+                if not await self._publish_result(
                     client,
                     effective_msg_id,
                     success=True,
                     status=200,
                     data=catalog_payload,
-                )
+                ):
+                    return
                 # Reuse the already-built payload for the retained catalog topic
                 # instead of rebuilding (which would mint a fresh eventId/ts).
                 # Acceptable side effect: result.data and the retained catalog now
@@ -1001,11 +1026,17 @@ class BridgeCoordinator:
                 if not await self._operation_store.complete(operation_key, fingerprint, result_payload):
                     await self._publish_result(client, effective_msg_id, success=False, status=409, error="control_outcome_unknown")
                     return
-            await self._publish_result(client, effective_msg_id, **result_payload)
+            if not await self._publish_result(client, effective_msg_id, **result_payload):
+                return
             if method.upper() == "GET" and path.rstrip("/") == "/api/states":
                 await self._publish_all_states(client, source="full_snapshot", correlation_id=effective_msg_id)
             else:
                 await self._publish_states_for_entities(client, result.touched_entities, correlation_id=effective_msg_id)
+        except _MqttPublishFailure as err:
+            self.err_count += 1
+            self.last_error = f"[{effective_msg_id}] state_publish_failed:{err}"
+            self._fire()
+            _LOGGER.warning("[%s] Command state publish failed: %s", effective_msg_id, err)
         except Exception as err:  # noqa: BLE001
             self.err_count += 1
             self.last_error = f"[{effective_msg_id}] {err}"
@@ -1031,11 +1062,14 @@ class BridgeCoordinator:
         blocking.  Burst control belongs at the producers (snapshot batching and
         the bounded, coalescing state backlog), not around this acknowledgement.
         """
-        await client.publish(topic, payload, qos=qos, retain=retain)
+        try:
+            await client.publish(topic, payload, qos=qos, retain=retain)
+        except Exception as err:  # noqa: BLE001
+            raise _MqttPublishFailure(str(err)) from err
 
-    async def _publish_result(self, client: Any, msg_id: str, *, success: bool, status: int, data: Any = None, error: str | None = None) -> None:
+    async def _publish_result(self, client: Any, msg_id: str, *, success: bool, status: int, data: Any = None, error: str | None = None) -> bool:
         if self._topics is None:
-            return
+            return False
         payload: dict[str, Any] = {
             "msgId": msg_id,
             "bridgeId": self._topics.bridge_id,
@@ -1062,9 +1096,10 @@ class BridgeCoordinator:
             self.last_error = f"result_publish_failed:{err}"
             self._fire()
             _LOGGER.exception("[%s] Result publish failed: %s", msg_id, err)
-            return
+            return False
         self.result_count += 1
         self._fire()
+        return True
 
     async def _publish_states_for_entities(self, client: Any, entity_ids: list[str], *, correlation_id: str | None = None) -> None:
         dedup = list(dict.fromkeys(entity_ids))

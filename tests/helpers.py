@@ -344,6 +344,13 @@ class FakeAiomqttClient(AsyncFakeMQTTClient):
         self.connected = False
         self._connect_error = connect_error
         self.messages = _FakeMessageStream(messages, end)
+        # Fake connection has no socket; real WSS behavior is tested separately.
+        self._client = SimpleNamespace(
+            socket=lambda: None,
+            loop_read=lambda: 0,
+            loop_write=lambda: 0,
+            on_socket_open=None,
+        )
 
     async def __aenter__(self):
         if self._connect_error is not None:
