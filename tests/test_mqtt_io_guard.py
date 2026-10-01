@@ -85,13 +85,15 @@ def _receive_frame(connection):
     return opcode, payload
 
 
-def _websocket_upgrade(connection):
+def _websocket_upgrade(connection, before_response=None):
     request = bytearray()
     while not request.endswith(b"\r\n\r\n"):
         request.extend(_receive_exact(connection, 1))
     headers = dict(line.split(":", 1) for line in request.decode().split("\r\n")[1:] if ":" in line)
     key = next(value.strip() for name, value in headers.items() if name.lower() == "sec-websocket-key")
     accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+    if before_response is not None:
+        before_response()
     connection.sendall(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + accept + "\r\nSec-WebSocket-Protocol: mqtt\r\n\r\n").encode())
 
 
@@ -511,6 +513,124 @@ def test_real_wss_failed_connect_keeps_auth_errors_and_cancellation(outcome):
 
     try:
         with tempfile.TemporaryDirectory(prefix="wss-failed-connect-", dir=ROOT) as directory:
+            loop.run_until_complete(asyncio.wait_for(run(directory), timeout=8))
+    finally:
+        loop.close()
+
+
+@pytest.mark.parametrize("phase", ["websocket-upgrade", "connack"])
+def test_coordinator_cancellation_retires_wss_even_when_broker_stays_open(phase, monkeypatch):
+    """Cancel the actual bridge owner before socket-open or while waiting for CONNACK."""
+    import seenzus_bridge.coordinator as coordinator_module
+    from seenzus_bridge import BridgeCoordinator, dr, er
+    from tests.helpers import FakeConfigEntry, FakeDeviceRegistry, FakeEntityRegistry, FakeHass
+
+    loop = asyncio.SelectorEventLoop()
+    callback_errors = []
+    loop.set_exception_handler(lambda _loop, context: callback_errors.append(context))
+
+    async def run(directory):
+        server_context, client_context = _contexts(directory)
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        reached_upgrade = threading.Event()
+        resume_upgrade = threading.Event()
+        finish = threading.Event()
+        cancelled = threading.Event()
+        worker_finished = threading.Event()
+        waiting_for_connack = asyncio.Event()
+        server_errors = []
+        clients = []
+
+        def pause_upgrade():
+            reached_upgrade.set()
+            assert resume_upgrade.wait(3)
+
+        def server():
+            try:
+                connection, _address = listener.accept()
+                with server_context.wrap_socket(connection, server_side=True) as tls_connection:
+                    tls_connection.settimeout(3)
+                    _websocket_upgrade(tls_connection, pause_upgrade if phase == "websocket-upgrade" else None)
+                    opcode, packet = _receive_frame(tls_connection)
+                    assert opcode == 2 and packet[0] == 0x10
+                    if phase == "websocket-upgrade":
+                        # A late successful CONNACK must not resurrect the cancelled owner.
+                        tls_connection.sendall(b"\x82\x04\x20\x02\x00\x00")
+                    assert finish.wait(3)
+            except (EOFError, ConnectionError, ssl.SSLError) as error:
+                if not cancelled.is_set():
+                    server_errors.append(error)
+            except Exception as error:
+                server_errors.append(error)
+
+        class ObservedClient(aiomqtt.Client):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                clients.append(self)
+                native_connect = self._client.connect
+
+                def observe_connect(*args, **kwargs):
+                    try:
+                        return native_connect(*args, **kwargs)
+                    finally:
+                        worker_finished.set()
+
+                # Both aiomqtt versions use this real Paho entry point; 2.0
+                # predates aiomqtt's separate _client_connect helper.
+                self._client.connect = observe_connect
+
+            async def _wait_for(self, future, timeout):
+                if future is self._connected:
+                    waiting_for_connack.set()
+                return await super()._wait_for(future, timeout)
+
+        thread = threading.Thread(target=server, daemon=True)
+        thread.start()
+        monkeypatch.setattr(er, "async_get", lambda _hass: FakeEntityRegistry())
+        monkeypatch.setattr(dr, "async_get", lambda _hass: FakeDeviceRegistry())
+        monkeypatch.setattr(coordinator_module, "_client_tls_context", lambda: client_context)
+        coordinator = BridgeCoordinator(FakeHass(), FakeConfigEntry(data={
+            "mqtt_host": "127.0.0.1", "mqtt_port": listener.getsockname()[1],
+            "mqtt_scheme": "wss", "pairing_mode": "manual",
+        }))
+        owner = asyncio.create_task(coordinator._connect_and_serve(SimpleNamespace(Client=ObservedClient), "cancel-regression"))
+        try:
+            if phase == "websocket-upgrade":
+                assert await asyncio.to_thread(reached_upgrade.wait, 2)
+            else:
+                await asyncio.wait_for(waiting_for_connack.wait(), timeout=2)
+            cancelled.set()
+            owner.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await owner
+            resume_upgrade.set()
+            assert await asyncio.to_thread(worker_finished.wait, 2)
+            # The server remains open: no EOF may do the owner's cleanup for it.
+            await asyncio.sleep(0.02)
+            client = clients[0]
+            assert client._client.socket() is None, "cancelled owner left a live socket"
+            assert client._connected.cancelled(), "late CONNACK revived a cancelled connection"
+            assert client._misc_task is None or client._misc_task.done(), "cancelled owner left keepalive running"
+            assert coordinator._mqtt_client is None
+            assert not callback_errors, [repr(context.get("exception")) for context in callback_errors]
+            assert not server_errors, repr(server_errors)
+        finally:
+            finish.set()
+            resume_upgrade.set()
+            owner.cancel()
+            await asyncio.gather(owner, return_exceptions=True)
+            for client in clients:
+                client._client._sock_close()
+                if client._misc_task:
+                    client._misc_task.cancel()
+                    await asyncio.gather(client._misc_task, return_exceptions=True)
+            listener.close()
+            await asyncio.to_thread(thread.join, 2)
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="wss-owner-cancel-", dir=ROOT) as directory:
             loop.run_until_complete(asyncio.wait_for(run(directory), timeout=8))
     finally:
         loop.close()

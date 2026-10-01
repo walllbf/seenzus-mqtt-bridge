@@ -81,7 +81,7 @@ from .const import (
 )
 from .entity_filters import looks_like_internal_bridge_entity_id, name_has_model_marker
 from .ha_dispatcher import DispatchPolicy, dispatch
-from .mqtt_io_guard import guard_websocket_io
+from .mqtt_io_guard import websocket_connection
 from .operation_store import PersistentOperationStore
 from .sensor_display import async_prepare_sensor_display, sensor_display_attributes, supports_entity_display
 
@@ -769,9 +769,10 @@ class BridgeCoordinator:
             identifier=client_id,
             **_transport_connect_kwargs(conf),
         )
+        connection = mqtt_client
         if _effective_transport(conf)[0] in (MQTT_SCHEME_WS, MQTT_SCHEME_WSS):
-            guard_websocket_io(mqtt_client)
-        async with mqtt_client as client:
+            connection = websocket_connection(mqtt_client)
+        async with connection as client:
             if self._topics is None:
                 self._topics = self._resolve_topics()
                 self._command_prefix = self._topics.command_sub[:-2]

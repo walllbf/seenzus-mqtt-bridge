@@ -55,6 +55,8 @@ PowerShell 使用 `$env:EXPECTED_HA_VERSION='2026.9.2'` 后运行同一 pytest �
 
 Paho 在连接线程排队注册 writer 后，socket 可能先被关闭；aiomqtt 原始回调缓存的 fd 随后在 HA/Linux 注册时会触发 `Bad file descriptor`。连接等待 Future 已取消时，继续读取 EOF 又会使 aiomqtt 的断线回调在读取该 Future 的异常时抛出 `CancelledError`。guard 将 reader/writer 的安装与就绪回调绑定到原 socket，在事件循环执行时检查身份、有效 fd 和连接取消状态；取消后的 socket 使用 Paho 原生关闭路径清理。reader 安装仍启动 aiomqtt 的 keepalive 任务，关闭仍沿用原生取消路径。
 
+协调器通过 `websocket_connection` 管理连接的完整生命周期，退出时立即标记该客户端退役并关闭现有 socket。即使取消发生在阻塞的 WSS 握手线程中、此时尚无连接 Future 的取消信号，线程稍后创建的 socket 也会在安装回调时关闭，不会恢复旧连接。实际协调器回归分别在 HTTP upgrade 前和等待 CONNACK 时取消；服务端保持打开，验证清理不依赖下一次 EOF、就绪回调或 keepalive。
+
 真实 Paho 回归覆盖连接线程中的 writer 回调尚未返回、reader/writer 已排队但 socket 已关闭，以及连接取消后收到 EOF 的场景。真实 TLS/WSS 握手分别验证 Broker 的鉴权拒绝继续上报、调用者取消继续传播，并检查没有事件循环回调异常。旧版 Paho 的鉴权拒绝码为 5，新版映射为 135；修复没有放宽 Broker 权限，也不恢复已吊销的凭证。
 
 ## 已安装 MQTT 库的升级检查（#66）
@@ -67,7 +69,7 @@ HA 的已安装检查只匹配 manifest 中的单个版本范围，可能跳过�
 
 ## 完成标准
 
-最低版与实施时最新稳定版的完整测试通过，指定版本能够运行相同检查，并保留精确版本和依赖证据。如果发现接口变化，先固定真实失败用例，再做最小桥端修复并重跑两个通道。兼容性测试自身不能新增运行时版本上限，也不能改变配对、凭证、topic、身份、空间归属或幂等规则。
+最低版与实施时最新稳定版的完整测试通过，指定版本能够运行相同检查，并保留精确版本和依赖证据。如果发现接口变化，先固定真实失败用例，再做最小桥端修复并重跑两个通道。兼容性测试自身不能新增运行时版本上限，也不能改变配对、凭证、topic、身份、空间归属或幂等规则。manifest 不重复声明 HA 自带的 aiohttp；全局 setup 使用 config-entry-only schema，与集成现有配置入口一致。
 
 ## #49 本地实施验证（2026-09-20）
 

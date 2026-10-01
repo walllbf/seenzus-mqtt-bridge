@@ -2,10 +2,23 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from typing import Any
 
 
-def guard_websocket_io(client: Any) -> None:
+@asynccontextmanager
+async def websocket_connection(client: Any) -> AsyncIterator[Any]:
+    """Own one bridge connection, including a connect worker that outlives cancellation."""
+    retire = guard_websocket_io(client)
+    try:
+        async with client as connected:
+            yield connected
+    finally:
+        retire()
+
+
+def guard_websocket_io(client: Any) -> Callable[[], None]:
     """Install connection-scoped I/O protection before connecting.
 
     Paho answers WebSocket PING/CLOSE frames from its receive path with a
@@ -29,11 +42,19 @@ def guard_websocket_io(client: Any) -> None:
     original_read = paho_client.loop_read
     original_write = paho_client.loop_write
     paused_socket: Any | None = None
+    retired = False
 
-    def current_socket(sock: Any) -> bool:
+    def retire_connection() -> None:
+        nonlocal retired
+        retired = True
+        if not client._connected.done():
+            client._connected.cancel()
+        paho_client._sock_close()
+
+    def socket_is_active(sock: Any) -> bool:
         if paho_client.socket() is not sock or sock.fileno() < 0:
             return False
-        if client._connected.cancelled():
+        if retired or client._connected.cancelled():
             # aiomqtt's disconnect hook calls _connected.exception(), which
             # raises CancelledError for a timed-out/cancelled connect. Retire
             # the socket before another readiness callback invokes that hook.
@@ -44,7 +65,7 @@ def guard_websocket_io(client: Any) -> None:
     def update_reader() -> None:
         nonlocal paused_socket
         sock = paho_client.socket()
-        if sock is None or not current_socket(sock):
+        if sock is None or not socket_is_active(sock):
             paused_socket = None
             return
         if getattr(sock, "_sendbuffer", b""):
@@ -63,7 +84,7 @@ def guard_websocket_io(client: Any) -> None:
         # while yielding to the writer whenever a frame is pending. Returning
         # 0 from loop_read alone would spin aiomqtt's SSL pending() while loop.
         try:
-            while current_socket(sock):
+            while socket_is_active(sock):
                 paho_client.loop_read()
                 if paho_client.socket() is not sock or getattr(sock, "_sendbuffer", b""):
                     break
@@ -74,7 +95,7 @@ def guard_websocket_io(client: Any) -> None:
                 client._disconnected.set_exception(err)
 
     def write_ready(sock: Any) -> None:
-        if not current_socket(sock):
+        if not socket_is_active(sock):
             return
         try:
             paho_client.loop_write()
@@ -83,7 +104,7 @@ def guard_websocket_io(client: Any) -> None:
                 client._disconnected.set_exception(err)
 
     def install_reader(sock: Any) -> None:
-        if not current_socket(sock):
+        if not socket_is_active(sock):
             return
         loop.add_reader(sock.fileno(), read_ready, sock)
         # Match aiomqtt's socket-open lifecycle, without its independently
@@ -92,7 +113,7 @@ def guard_websocket_io(client: Any) -> None:
         client._misc_task = loop.create_task(client._misc_loop())
 
     def install_writer(sock: Any) -> None:
-        if current_socket(sock):
+        if socket_is_active(sock):
             loop.add_writer(sock.fileno(), write_ready, sock)
 
     def socket_open(mqtt_client: Any, userdata: Any, sock: Any) -> None:
@@ -120,3 +141,4 @@ def guard_websocket_io(client: Any) -> None:
     paho_client.loop_write = guarded_write
     paho_client.on_socket_open = socket_open
     paho_client.on_socket_register_write = socket_register_write
+    return retire_connection
