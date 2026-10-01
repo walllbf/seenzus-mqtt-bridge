@@ -51,6 +51,12 @@ PowerShell 使用 `$env:EXPECTED_HA_VERSION='2026.9.2'` 后运行同一 pytest �
 
 `tests/test_mqtt_recovery.py` 使用真实协调器覆盖失败结果后停止发送、状态失败后停止回传错误、取消传递，以及重连等待前取消旧命令和 #61 新增的历史补录任务。其他正常命令与历史语义继续由完整套件覆盖。修复没有改变 broker 消息限制或固定重连间隔；这些回归通过不能代替用户 HA 的安装及首次断线原因验证。
 
+### WSS 断线后的回调生命周期（#67）
+
+Paho 在连接线程排队注册 writer 后，socket 可能先被关闭；aiomqtt 原始回调缓存的 fd 随后在 HA/Linux 注册时会触发 `Bad file descriptor`。连接等待 Future 已取消时，继续读取 EOF 又会使 aiomqtt 的断线回调在读取该 Future 的异常时抛出 `CancelledError`。guard 将 reader/writer 的安装与就绪回调绑定到原 socket，在事件循环执行时检查身份、有效 fd 和连接取消状态；取消后的 socket 使用 Paho 原生关闭路径清理。reader 安装仍启动 aiomqtt 的 keepalive 任务，关闭仍沿用原生取消路径。
+
+真实 Paho 回归覆盖连接线程中的 writer 回调尚未返回、reader/writer 已排队但 socket 已关闭，以及连接取消后收到 EOF 的场景。真实 TLS/WSS 握手分别验证 Broker 的鉴权拒绝继续上报、调用者取消继续传播，并检查没有事件循环回调异常。旧版 Paho 的鉴权拒绝码为 5，新版映射为 135；修复没有放宽 Broker 权限，也不恢复已吊销的凭证。
+
 ## 已安装 MQTT 库的升级检查（#66）
 
 HA 的已安装检查只匹配 manifest 中的单个版本范围，可能跳过安装器：例如 aiomqtt 2.5.1 / Paho 1.6.1 分别满足桥的范围，但不能一起导入。集成在全局 `async_setup` 中读取当前 Core 的约束文件，将其与 manifest 范围取交集，再通过 HA 的需求管理器处理；同时核验 aiomqtt 发行包声明的 Paho 依赖。旧版 Core 下若现有 aiomqtt 需要较新的 Paho，就排除该不兼容的 aiomqtt 版本，让 HA 安装器按 Core 约束重新求解。
