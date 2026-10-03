@@ -217,7 +217,8 @@ def test_control_reply_waits_for_large_tls_write_and_reader_recovers(control_opc
         loop.close()
 
 
-def test_aiomqtt_reader_remains_active_and_keeps_exception_delivery():
+@pytest.mark.parametrize("error_type", [OSError, RuntimeError])
+def test_aiomqtt_reader_remains_active_and_keeps_exception_delivery(error_type):
     """Use aiomqtt's real socket-open callback, including its SSL pending loop."""
     loop = asyncio.SelectorEventLoop()
 
@@ -247,7 +248,7 @@ def test_aiomqtt_reader_remains_active_and_keeps_exception_delivery():
 
         def read():
             if fail_read:
-                raise OSError("socket read failed")
+                raise error_type("socket read failed")
             consumed.append(connection.recv(1))
             return mqtt.MQTT_ERR_SUCCESS
 
@@ -271,7 +272,12 @@ def test_aiomqtt_reader_remains_active_and_keeps_exception_delivery():
             peer.send(b"y")
             await asyncio.sleep(0.02)
             assert aio_client._disconnected.done(), "reader lost aiomqtt's disconnect exception handler"
-            assert isinstance(aio_client._disconnected.exception(), OSError)
+            failure = aio_client._disconnected.exception()
+            if error_type is OSError:
+                assert isinstance(failure, aiomqtt.MqttError)
+                assert isinstance(failure.__cause__, OSError)
+            else:
+                assert isinstance(failure, RuntimeError), "programming errors must remain fatal"
         finally:
             if aio_client._disconnected.done():
                 aio_client._disconnected.exception()

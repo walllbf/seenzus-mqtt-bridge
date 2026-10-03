@@ -121,6 +121,9 @@ def guard_websocket_io(client: Any) -> Callable[[], None]:
     HA runtime constraints select either
     aiomqtt 2.0/Paho 1.6 or aiomqtt 2.5/Paho 2.1; both pairs are tested in CI.
     """
+    # Import only after HA has selected/installed its compatible MQTT pair.
+    from aiomqtt import MqttError
+
     loop = asyncio.get_running_loop()
     paho_client = client._client
     original_write = paho_client.loop_write
@@ -153,6 +156,19 @@ def guard_websocket_io(client: Any) -> Callable[[], None]:
             return False
         return True
 
+    def fail_connection(err: Exception) -> None:
+        if client._disconnected.done():
+            return
+        if isinstance(err, OSError):
+            # Control writes bypass Paho's normal OSError -> MQTT error path.
+            # aiomqtt 2.0 re-raises this future's exception on context exit,
+            # so keep transport faults recognizable by the reconnect loop.
+            failure = MqttError(str(err))
+            failure.__cause__ = err
+            client._disconnected.set_exception(failure)
+        else:
+            client._disconnected.set_exception(err)
+
     def read_ready(sock: Any) -> None:
         # Preserve aiomqtt's SSL-buffer draining and disconnect notification.
         try:
@@ -163,8 +179,7 @@ def guard_websocket_io(client: Any) -> Callable[[], None]:
                 if not hasattr(sock, "pending") or sock.pending() == 0:
                     break
         except Exception as err:  # noqa: BLE001
-            if not client._disconnected.done():
-                client._disconnected.set_exception(err)
+            fail_connection(err)
 
     def write_ready(sock: Any) -> None:
         if not socket_is_active(sock):
@@ -172,8 +187,7 @@ def guard_websocket_io(client: Any) -> Callable[[], None]:
         try:
             paho_client.loop_write()
         except Exception as err:  # noqa: BLE001
-            if not client._disconnected.done():
-                client._disconnected.set_exception(err)
+            fail_connection(err)
 
     def install_reader(sock: Any) -> None:
         if not socket_is_active(sock):

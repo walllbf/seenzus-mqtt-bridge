@@ -459,7 +459,7 @@ seenzus/v2/bridge/ha-demo/presence
 ### 6.6 Retain 语义
 
 - `presence` 使用 `retain=true`
-- 初始在线声明发送失败时，桥不会进入就绪状态。若完整离线声明超过本地预算，桥退回只含 `bridgeId`、`status=offline`、`mqttConnected=false`、`ts` 的精简声明；消费端须容忍诊断和能力字段缺省，完整错误保留在 HA 本地。
+- 初始在线声明发送失败时，桥不会进入就绪状态。若完整离线声明超过本地预算，桥退回只含 `bridgeId`、`status=offline`、`mqttConnected=false`、`ts` 的精简声明；长 Topic 导致仍超限时再退回 `{"status":"offline"}`。消费端须按 Topic 识别桥，容忍元数据缺省并将缺省 `mqttConnected` 视为 false，完整错误保留在 HA 本地。桥的配置校验会拒绝无法容纳最小离线消息的预算；空 retained 消息不代替有效离线声明。
 - 新订阅方会先收到该桥最后一次 retained `presence`
 
 ### 6.7 后端要求

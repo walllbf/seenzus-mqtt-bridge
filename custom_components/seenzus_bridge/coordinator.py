@@ -27,9 +27,11 @@ from homeassistant.helpers.recorder import DATA_INSTANCE as RECORDER_INSTANCE
 
 from .bridge_protocol import (
     BridgeTopics,
+    MINIMAL_OFFLINE_PRESENCE_PAYLOAD,
     build_bridge_id,
     build_mqtt_client_id,
     build_topics,
+    mqtt_publish_packet_size as _mqtt_publish_packet_size,
     retained_topics_to_clear_on_reload,
 )
 from .catalog import build_device_catalog_payload, utc_now_iso
@@ -83,7 +85,7 @@ from .const import (
 from .entity_filters import looks_like_internal_bridge_entity_id, name_has_model_marker
 from .ha_dispatcher import DispatchPolicy, dispatch
 from .mqtt_io_guard import websocket_connection
-from .mqtt_settings import mqtt_packet_size_limit
+from .mqtt_settings import mqtt_packet_size_limit, validate_mqtt_presence_budget
 from .operation_store import PersistentOperationStore
 from .sensor_display import async_prepare_sensor_display, sensor_display_attributes, supports_entity_display
 
@@ -139,17 +141,6 @@ def _mqtt_json(value: Any) -> str:
     # Preserve even an unpaired surrogate as a JSON escape, as json.dumps'
     # previous ensure_ascii=True default did; Paho encodes strings as UTF-8.
     return encoded.encode("utf-8", errors="backslashreplace").decode("utf-8")
-
-
-def _mqtt_publish_packet_size(topic: str, payload: str, qos: int) -> int:
-    """Count the complete MQTT 3.1.1 PUBLISH, including its variable header."""
-    remaining = 2 + len(topic.encode("utf-8")) + (2 if qos else 0) + len(payload.encode("utf-8"))
-    length_bytes = 1
-    encoded_length = remaining
-    while encoded_length >= 128:
-        encoded_length //= 128
-        length_bytes += 1
-    return 1 + length_bytes + remaining
 
 
 def _client_tls_context():
@@ -788,7 +779,7 @@ class BridgeCoordinator:
         """
         conf = self._conf()
         try:
-            mqtt_packet_size_limit(conf)
+            validate_mqtt_presence_budget(conf, self._entry.entry_id)
         except ValueError as err:
             raise _MqttConfigurationError(str(err)) from err
         self.pairing_mode = self._resolve_pairing_mode()
@@ -1656,15 +1647,18 @@ class BridgeCoordinator:
                 # Error diagnostics can make offline larger than the online
                 # announcement it retracts. Keep the status deliverable under
                 # the same budget; the full error remains in HA diagnostics.
+                offline = _mqtt_json({
+                    "bridgeId": self._topics.bridge_id,
+                    "status": "offline",
+                    "mqttConnected": False,
+                    "ts": payload["ts"],
+                })
+                if _mqtt_publish_packet_size(self._topics.presence_topic, offline, 1) > self.mqtt_max_packet_size:
+                    offline = MINIMAL_OFFLINE_PRESENCE_PAYLOAD
                 await self._publish(
                     publish_client,
                     self._topics.presence_topic,
-                    _mqtt_json({
-                        "bridgeId": self._topics.bridge_id,
-                        "status": "offline",
-                        "mqttConnected": False,
-                        "ts": payload["ts"],
-                    }),
+                    offline,
                     qos=1,
                     retain=True,
                 )

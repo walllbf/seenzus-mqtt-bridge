@@ -69,7 +69,11 @@ from .const import (
     normalize_pairing_mode,
 )
 from .dev_override import DevOverrideError, resolve_dev_pairing_api_base
-from .mqtt_settings import mqtt_packet_size_limit
+from .mqtt_settings import (
+    MqttPresenceBudgetError,
+    mqtt_packet_size_limit,
+    validate_mqtt_presence_budget,
+)
 from .pairing_bootstrap import (
     create_web_pairing_session,
     exchange_web_pairing_callback_code,
@@ -279,10 +283,13 @@ def _schema(pairing_mode: str, defaults: dict | None = None) -> vol.Schema:
     return vol.Schema(schema_fields)
 
 
-def _validate(data: dict) -> dict[str, str]:
+def _validate(data: dict, *, entry_id: str = "000000000000") -> dict[str, str]:
+    # Before entry creation, reserve the full 12-character generated ID suffix.
     errors: dict[str, str] = {}
     try:
-        mqtt_packet_size_limit(data)
+        validate_mqtt_presence_budget(data, entry_id)
+    except MqttPresenceBudgetError:
+        errors[CONF_MQTT_MAX_PACKET_SIZE_KIB] = "mqtt_packet_size_too_small_for_topic"
     except ValueError:
         errors[CONF_MQTT_MAX_PACKET_SIZE_KIB] = "invalid_mqtt_packet_size"
     pairing_mode = str(data.get(CONF_PAIRING_MODE, DEFAULT_PAIRING_MODE)).strip()
@@ -723,7 +730,8 @@ class _QuickPairFlowMixin:
             # _build_quick_pair_entry_data 的同款注释）。
             data[CONF_MQTT_SCHEME] = DEFAULT_MQTT_SCHEME
             data[CONF_MQTT_WS_PATH] = ""
-            errors = _validate(data)
+            entry = getattr(self, "_config_entry", None)
+            errors = _validate(data, entry_id=entry.entry_id if entry is not None else "000000000000")
             if not errors:
                 # Manual (re)config carries no return link; clear any stale
                 # return-link / failure notification from an earlier quick pair.
@@ -804,6 +812,12 @@ class SavanAIBridgeOptionsFlow(_QuickPairFlowMixin, config_entries.OptionsFlow):
         if user_input is not None:
             try:
                 budget_kib = mqtt_packet_size_limit(user_input) // 1024
+                validate_mqtt_presence_budget(
+                    {**self._current_config(), CONF_MQTT_MAX_PACKET_SIZE_KIB: budget_kib},
+                    self._config_entry.entry_id,
+                )
+            except MqttPresenceBudgetError:
+                errors[CONF_MQTT_MAX_PACKET_SIZE_KIB] = "mqtt_packet_size_too_small_for_topic"
             except ValueError:
                 errors[CONF_MQTT_MAX_PACKET_SIZE_KIB] = "invalid_mqtt_packet_size"
             else:

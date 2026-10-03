@@ -17,9 +17,59 @@ from seenzus_bridge.config_flow import SavanAIBridgeConfigFlow, SavanAIBridgeOpt
 from seenzus_bridge.const import CONF_MQTT_MAX_PACKET_SIZE_KIB
 from seenzus_bridge.mqtt_settings import mqtt_packet_size_limit
 from tests.helpers import FakeConfigEntry, FakeHass
+from tests.test_mqtt_payload_behavior import _paho_packet
 
 
 KEY = CONF_MQTT_MAX_PACKET_SIZE_KIB
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("topic_root", ["x" * 990, "温" * 330], ids=["ascii", "utf8"])
+async def test_options_reject_budget_that_cannot_retract_presence(topic_root):
+    entry = FakeConfigEntry(
+        data={"mqtt_host": "broker.example", "bridge_id": "ha-demo", "topic_root": "short"},
+        options={KEY: 2, "topic_root": topic_root},
+    )
+    flow = SavanAIBridgeOptionsFlow(entry)
+    flow.async_show_form = lambda **kwargs: {"type": "form", **kwargs}
+    flow.async_create_entry = lambda **kwargs: {"type": "create_entry", **kwargs}
+    result = await flow.async_step_connection_settings({KEY: 1})
+    assert result["type"] == "form"
+    assert result["errors"] == {KEY: "mqtt_packet_size_too_small_for_topic"}
+    assert entry.options == {KEY: 2, "topic_root": topic_root}
+
+
+@pytest.mark.asyncio
+async def test_manual_setup_rejects_budget_that_cannot_retract_presence():
+    flow = SavanAIBridgeConfigFlow()
+    flow.hass = FakeHass()
+    flow.async_show_form = lambda **kwargs: {"type": "form", **kwargs}
+    flow.async_create_entry = lambda **kwargs: {"type": "create_entry", **kwargs}
+    result = await flow.async_step_manual({
+        "mqtt_settings": {"mqtt_host": "broker.example"},
+        "advanced_settings": {KEY: 1, "topic_root": "x" * 990},
+    })
+    assert result["type"] == "form"
+    assert result["errors"] == {KEY: "mqtt_packet_size_too_small_for_topic"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("root_length,wire_size", [(973, 1024), (974, 1025)])
+async def test_minimal_offline_budget_uses_exact_paho_wire_boundary(root_length, wire_size):
+    root = "x" * root_length
+    assert len(_paho_packet(f"{root}/bridge/ha-demo/presence", '{"status":"offline"}', 1)) == wire_size
+    flow = SavanAIBridgeOptionsFlow(FakeConfigEntry(data={
+        "mqtt_host": "broker.example", "bridge_id": "ha-demo", "topic_root": root, KEY: 2,
+    }))
+    flow.async_show_form = lambda **kwargs: {"type": "form", **kwargs}
+    flow.async_create_entry = lambda **kwargs: {"type": "create_entry", **kwargs}
+    result = await flow.async_step_connection_settings({KEY: 1})
+    if wire_size == 1024:
+        assert result["type"] == "create_entry"
+        assert result["data"][KEY] == 1
+    else:
+        assert result["type"] == "form"
+        assert result["errors"] == {KEY: "mqtt_packet_size_too_small_for_topic"}
 
 
 def test_legacy_entries_keep_one_mib_without_migration():

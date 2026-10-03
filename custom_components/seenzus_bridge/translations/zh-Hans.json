@@ -64,7 +64,8 @@
       "quick_pair_code_exchange_failed": "回跳成功但兑换桥接配置失败，请检查后端服务状态",
       "quick_pair_callback_timeout": "未收到回跳确认，请确认外部页面已完成授权并返回 Home Assistant",
       "quick_pair_missing_context": "快速配对会话已丢失，请重新发起",
-      "invalid_mqtt_packet_size": "请输入 1–262144 范围内的整数（KiB），并确保不超过 Broker 的报文大小限制"
+      "invalid_mqtt_packet_size": "请输入 1–262144 范围内的整数（KiB），并确保不超过 Broker 的报文大小限制",
+      "mqtt_packet_size_too_small_for_topic": "此上限无法容纳当前 Topic 的最小离线消息，请提高上限或缩短 Topic / Bridge ID"
     },
     "abort": {
       "already_configured": "seenzus MQTT Bridge 已经配置过了，只允许添加一个实例",
@@ -154,7 +155,8 @@
       "quick_pair_code_exchange_failed": "回跳成功但兑换桥接配置失败，请检查后端服务状态",
       "quick_pair_callback_timeout": "未收到回跳确认，请确认外部页面已完成授权并返回 Home Assistant",
       "quick_pair_missing_context": "快速配对会话已丢失，请重新发起",
-      "invalid_mqtt_packet_size": "请输入 1–262144 范围内的整数（KiB），并确保不超过 Broker 的报文大小限制"
+      "invalid_mqtt_packet_size": "请输入 1–262144 范围内的整数（KiB），并确保不超过 Broker 的报文大小限制",
+      "mqtt_packet_size_too_small_for_topic": "此上限无法容纳当前 Topic 的最小离线消息，请提高上限或缩短 Topic / Bridge ID"
     },
     "abort": {
       "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"

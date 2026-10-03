@@ -10,6 +10,21 @@ from dataclasses import dataclass
 # version and from the ``seenzus/v2`` transport topic root.
 CATALOG_WIRE_VERSION = "2.1"
 
+# The App requires a non-empty status; absent mqttConnected means false.
+# Unlike an empty retained tombstone, this updates existing consumer caches.
+MINIMAL_OFFLINE_PRESENCE_PAYLOAD = '{"status":"offline"}'
+
+
+def mqtt_publish_packet_size(topic: str, payload: str, qos: int) -> int:
+    """Count the complete MQTT 3.1.1 PUBLISH, including its variable header."""
+    remaining = 2 + len(topic.encode("utf-8")) + (2 if qos else 0) + len(payload.encode("utf-8"))
+    length_bytes = 1
+    encoded_length = remaining
+    while encoded_length >= 128:
+        encoded_length //= 128
+        length_bytes += 1
+    return 1 + length_bytes + remaining
+
 
 @dataclass(slots=True)
 class BridgeTopics:

@@ -17,6 +17,112 @@ from tests.test_mqtt_io_guard import (
     _websocket_upgrade,
     guard_module,
 )
+from tests.test_mqtt_loop_behavior import HAPPY_ENTRY_DATA, _make_coordinator
+
+
+@pytest.mark.parametrize("error_type", [BrokenPipeError, ssl.SSLEOFError])
+def test_control_write_failure_reaches_reconnect_loop(monkeypatch, tmp_path, error_type):
+    """A failed PONG must recover through the coordinator on both MQTT pairs."""
+    loop = asyncio.SelectorEventLoop()
+
+    async def run():
+        server_context, client_context = _contexts(tmp_path)
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(2)
+        listener.settimeout(4)
+        release = threading.Event()
+        recovered = asyncio.Event()
+        server_errors = []
+        clients = []
+        backoffs = []
+        original_sleep = asyncio.sleep
+
+        async def fast_backoff(delay, *args, **kwargs):
+            if delay == 5:
+                backoffs.append(delay)
+                delay = 0
+            await original_sleep(delay, *args, **kwargs)
+
+        monkeypatch.setattr(asyncio, "sleep", fast_backoff)
+
+        def server():
+            try:
+                for attempt in range(2):
+                    connection, _ = listener.accept()
+                    with server_context.wrap_socket(connection, server_side=True) as tls:
+                        tls.settimeout(4)
+                        _websocket_upgrade(tls)
+                        assert _receive_frame(tls)[1][0] == 0x10
+                        tls.sendall(b"\x82\x04\x20\x02\x00\x00")
+                        if attempt == 0:
+                            assert release.wait(3)
+                            tls.sendall(b"\x89\x04ping")
+                            # Retirement closes the first socket after the
+                            # injected write failure; no binary traffic expected.
+                            assert not tls.recv(1)
+                        else:
+                            assert _receive_frame(tls)[1] == b"\xe0\x00"
+            except Exception as err:
+                server_errors.append(err)
+
+        class BrokenControlSocket:
+            def __init__(self, sock):
+                self.sock = sock
+
+            def __getattr__(self, name):
+                return getattr(self.sock, name)
+
+            def send(self, data):
+                if data[0] == 0x8A:
+                    raise error_type("peer closed while sending PONG")
+                return self.sock.send(data)
+
+        coordinator, _ = _make_coordinator(monkeypatch, data=dict(HAPPY_ENTRY_DATA))
+        coordinator._aiomqtt = aiomqtt
+
+        async def connect_and_serve(module, client_id):
+            client = module.Client(
+                "127.0.0.1", port=listener.getsockname()[1], identifier=client_id,
+                transport="websockets", tls_context=client_context, timeout=2,
+            )
+            clients.append(client)
+            async with guard_module.websocket_connection(client):
+                if len(clients) == 1:
+                    writer = client._client.socket()._socket
+                    writer._socket = BrokenControlSocket(writer._socket)
+                    release.set()
+                    await anext(client.messages)
+                else:
+                    recovered.set()
+                    await asyncio.Event().wait()
+
+        monkeypatch.setattr(coordinator, "_connect_and_serve", connect_and_serve)
+        worker = threading.Thread(target=server, daemon=True)
+        worker.start()
+        task = asyncio.create_task(coordinator._mqtt_loop())
+        recovery = asyncio.create_task(recovered.wait())
+        try:
+            await asyncio.wait({task, recovery}, timeout=4, return_when=asyncio.FIRST_COMPLETED)
+            if task.done():
+                task.result()  # Propagates the pre-fix fatal BrokenPipe/SSL error.
+            assert recovered.is_set(), "control write failure did not reconnect"
+            assert len(clients) == 2
+            assert backoffs == [5]
+        finally:
+            task.cancel()
+            recovery.cancel()
+            await asyncio.gather(task, recovery, return_exceptions=True)
+            release.set()
+            listener.close()
+            await asyncio.to_thread(worker.join, 5)
+        assert not server_errors, repr(server_errors)
+        assert all(client._client.socket() is None for client in clients)
+
+    try:
+        loop.run_until_complete(asyncio.wait_for(run(), 12))
+    finally:
+        loop.close()
 
 
 def _remaining_length(value):

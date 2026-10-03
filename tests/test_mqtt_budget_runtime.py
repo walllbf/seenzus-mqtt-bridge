@@ -22,6 +22,43 @@ KEY = "mqtt_max_packet_size_kib"
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("topic_root", ["x" * 950, "温" * 316], ids=["ascii", "utf8"])
+async def test_lower_budget_retracts_previous_online_on_long_topic(monkeypatch, topic_root):
+    coordinator, fake = _make_coordinator(monkeypatch, data={
+        **HAPPY_ENTRY_DATA, KEY: 2, "topic_root": topic_root,
+    })
+    coordinator._topics = coordinator._resolve_topics()
+    previous = AsyncFakeMQTTClient()
+    await coordinator._publish_presence("online", client=previous, required=True)
+    assert json.loads(previous.published[-1]["payload"])["status"] == "online"
+
+    coordinator._entry.options[KEY] = 1
+    coordinator._on_ha_started(None)
+    await asyncio.wait_for(coordinator._mqtt_loop(), timeout=1)
+
+    assert len(fake.clients) == 1
+    offline = fake.clients[0].published[-1]
+    assert offline["topic"] == previous.published[-1]["topic"]
+    assert offline["retain"] is True
+    assert json.loads(offline["payload"])["status"] == "offline"
+    assert len(_paho_packet(offline["topic"], offline["payload"], 1)) <= 1024
+    assert coordinator.status == "error"
+    assert not coordinator.mqtt_connected
+
+
+@pytest.mark.asyncio
+async def test_impossible_presence_budget_stops_before_connecting(monkeypatch):
+    coordinator, fake = _make_coordinator(monkeypatch, data={
+        **HAPPY_ENTRY_DATA, KEY: 1, "topic_root": "x" * 990,
+    })
+    coordinator._on_ha_started(None)
+    await asyncio.wait_for(coordinator._mqtt_loop(), timeout=1)
+    assert fake.clients == []
+    assert coordinator.status == "error"
+    assert "presence" in coordinator.last_error
+
+
+@pytest.mark.asyncio
 async def test_configured_two_mib_preserves_result_above_default_budget(monkeypatch):
     coordinator, _ = _make_coordinator(monkeypatch, data={**HAPPY_ENTRY_DATA, KEY: 1024})
     coordinator._entry.options[KEY] = 2048
