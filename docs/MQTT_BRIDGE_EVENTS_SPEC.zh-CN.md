@@ -244,6 +244,7 @@ seenzus/v2/bridge/ha-demo/state/light.living_room
 - 普通当前态和连续测量在内存积压中仍按实体合并；`event`、`button` 域逐条保序，不合并连续同类型触发
 - 桥启动及每次 MQTT 重连都补查 recorder 最近 30 分钟，以覆盖无法精确探测起点的网络分区和桥进程重启。每实体最多补 100 条、每轮最多补 2,000 条，取较新的记录；超限计入 `presence.droppedStateEventCount` 并记录警告
 - recorder 补录按 HA 原始时间发送，应用应按 `eventId` 幂等接收；补录不代表事实刚刚发生，也不应倒拨当前态
+- 快照与 recorder 补录的单条 state 若超过本地 MQTT 报文预算，记录实体、来源、字节数及上限，计入错误数和 `presence.droppedStateEventCount`，继续发送后续正常 state；批次完成日志分别报告成功数及超限跳过数，不代表漏送 state 已同步。实际传输故障或取消仍中断批次。每尝试 50 条短暂让出事件循环，包括所有报文均超限的情况。
 
 ## 5. catalog
 

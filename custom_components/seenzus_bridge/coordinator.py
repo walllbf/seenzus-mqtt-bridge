@@ -90,8 +90,8 @@ _LOGGER = logging.getLogger(__name__)
 PRESENCE_HEARTBEAT_INTERVAL_SECONDS = 30
 CATALOG_REFRESH_DELAY_SECONDS = 1.5
 MAX_INFLIGHT_COMMANDS = 8
-# The production broker accepts MQTT packets up to 1 MiB. MQTT 3.1.1 does
-# not negotiate this limit; reject locally before EMQX closes the connection.
+# Conservative budget for brokers with a 1 MiB default. MQTT 3.1.1 does not
+# negotiate this limit, even when an operator raises the broker's own limit.
 MAX_MQTT_PACKET_SIZE = 1024 * 1024
 # 全量快照分批发布并短暂让出事件循环，避免短时间内把上千条 QoS 0 消息压进
 # paho 队列，也给心跳、命令和连接维护任务稳定的调度机会。
@@ -1159,19 +1159,38 @@ class BridgeCoordinator:
         snapshot_qos = 0 if source in {"startup_snapshot", "full_snapshot"} else 1
         states = self.hass.states.async_all()
         published = 0
+        skipped = 0
         for state in states:
             entity_id = getattr(state, "entity_id", "")
             if not entity_id or self._is_own_entity(entity_id):
                 continue
             if self._is_model_marked_standalone_entity(state):
                 continue
-            await self._publish_state_for_entity(
-                client, entity_id, source=source, correlation_id=correlation_id, qos=snapshot_qos
-            )
-            published += 1
-            if published % SNAPSHOT_BATCH_SIZE == 0:
+            try:
+                await self._publish_state_for_entity(
+                    client, entity_id, source=source, correlation_id=correlation_id, qos=snapshot_qos
+                )
+            except _MqttPacketTooLarge as err:
+                self._record_oversized_state(entity_id, source, err)
+                skipped += 1
+            else:
+                published += 1
+            # Rejected packets never await network I/O. Count attempts so a
+            # batch of oversized entities still yields to live work/keepalive.
+            if (published + skipped) % SNAPSHOT_BATCH_SIZE == 0:
                 await asyncio.sleep(SNAPSHOT_BATCH_PAUSE_SECONDS)
-        _LOGGER.info("Published full HA state snapshot: %s entities", published)
+        _LOGGER.info(
+            "Published HA state snapshot: %s entities; skipped %s oversized entities",
+            published, skipped,
+        )
+
+    def _record_oversized_state(self, entity_id: str, source: str, error: _MqttPacketTooLarge) -> None:
+        """Expose the missing state while keeping the rest of the batch usable."""
+        self.err_count += 1
+        self.last_error = f"state_publish_failed:{source}:{entity_id}:{error}"
+        self._record_dropped_state_events(1, "MQTT state packet size limit")
+        self._fire()
+        _LOGGER.warning("Skipped oversized state: %s", self.last_error)
 
     async def _publish_device_catalog(self, client: Any, *, source: str, correlation_id: str | None = None) -> None:
         if self._topics is None:
@@ -1402,6 +1421,8 @@ class BridgeCoordinator:
         publish_client = client or self._mqtt_client
         if publish_client is None or self._topics is None:
             return
+        published = 0
+        skipped = 0
         try:
             states = await self._async_fetch_history_states(start_time, end_time)
             states.sort(
@@ -1416,12 +1437,20 @@ class BridgeCoordinator:
                     self._state_datetime(state, "last_changed")
                     or self._state_datetime(state, "last_updated")
                 )
-                await self._publish_state_object(
-                    publish_client,
-                    state,
-                    source="history_replay",
-                    observed_at=observed_at,
-                )
+                try:
+                    await self._publish_state_object(
+                        publish_client,
+                        state,
+                        source="history_replay",
+                        observed_at=observed_at,
+                    )
+                except _MqttPacketTooLarge as err:
+                    self._record_oversized_state(state.entity_id, "history_replay", err)
+                    skipped += 1
+                else:
+                    published += 1
+                if (published + skipped) % SNAPSHOT_BATCH_SIZE == 0:
+                    await asyncio.sleep(SNAPSHOT_BATCH_PAUSE_SECONDS)
         except asyncio.CancelledError:
             raise
         except Exception as err:  # noqa: BLE001
@@ -1431,9 +1460,10 @@ class BridgeCoordinator:
             return
         if states:
             _LOGGER.info(
-                "Replayed %s HA recorder state change(s) from %s",
-                len(states),
+                "Replayed %s HA recorder state change(s) from %s; skipped %s oversized states",
+                published,
                 start_time.isoformat(),
+                skipped,
             )
 
     @callback
