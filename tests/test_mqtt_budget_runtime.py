@@ -155,7 +155,7 @@ async def test_oversized_initial_presence_cannot_claim_ready(monkeypatch):
     await asyncio.wait_for(coordinator._mqtt_loop(), timeout=1)
 
     assert len(fake.clients) == 1
-    assert fake.clients[0].published == []
+    assert [json.loads(item["payload"])["status"] for item in fake.clients[0].published] == ["offline"]
     assert coordinator.status == "error"
     assert not coordinator.mqtt_connected
     assert not coordinator._initial_snapshot_attempted
@@ -186,8 +186,11 @@ async def test_initial_presence_transport_failure_retries_without_claiming_ready
 
 
 @pytest.mark.asyncio
-async def test_catalog_failure_retries_failed_offline_retraction_before_stopping(monkeypatch):
-    coordinator, fake = _make_coordinator(monkeypatch, data={**HAPPY_ENTRY_DATA, KEY: 1})
+@pytest.mark.parametrize("source_name_length", [0, 480, 500])
+async def test_catalog_failure_retries_failed_offline_retraction_before_stopping(monkeypatch, source_name_length):
+    coordinator, fake = _make_coordinator(monkeypatch, data={
+        **HAPPY_ENTRY_DATA, KEY: 1, "source_name": "x" * source_name_length,
+    })
     coordinator._on_ha_started(None)
     monkeypatch.setattr(coordinator, "_build_device_catalog_payload", lambda **_kwargs: {
         "devices": [], "entityCount": 0, "large": "x" * 1500,
@@ -211,7 +214,11 @@ async def test_catalog_failure_retries_failed_offline_retraction_before_stopping
     assert offline_attempts == 2
     assert len(fake.clients) == 2
     assert sleeps == [5]
-    assert [json.loads(item["payload"])["status"] for item in fake.clients[-1].published] == ["online", "offline"]
+    assert json.loads(fake.clients[-1].published[-1]["payload"])["status"] == "offline"
+    for client in fake.clients:
+        for item in client.published:
+            assert item["retain"] is True
+            assert len(_paho_packet(item["topic"], item["payload"], item["qos"])) <= 1024
     assert coordinator.status == "error"
     assert not coordinator.mqtt_connected
     assert not coordinator._initial_snapshot_attempted

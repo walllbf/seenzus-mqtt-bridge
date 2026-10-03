@@ -837,10 +837,6 @@ class BridgeCoordinator:
             # connection contract below (presence + retained catalog) is ready.
             # Otherwise a large pending-state backlog can race bootstrap and
             # starve or disconnect it before the catalog exists.
-            await self._publish_presence("online", client=client, required=True)
-            # Catalog + state snapshot both need HA fully started (entity registry
-            # populated); defer on the started event (no sleep-poll).
-            await self._ha_started_event.wait()
             # Device CATALOG: re-assert on EVERY (re)connect, mirroring presence. The
             # catalog is the durable topology truth every consumer depends on, yet the
             # broker's retained store can be wiped on broker restart — publishing it once
@@ -850,14 +846,18 @@ class BridgeCoordinator:
             # best-effort full state snapshot: a large HA can spend minutes in that loop,
             # and a disconnect used to restart it from zero forever without ever publishing
             # the catalog.
-            catalog_source = "startup_snapshot" if not self._initial_snapshot_attempted else "reconnect"
             try:
+                await self._publish_presence("online", client=client, required=True)
+                # Catalog + state snapshot both need HA fully started (entity
+                # registry populated); defer on the started event (no sleep-poll).
+                await self._ha_started_event.wait()
+                catalog_source = "startup_snapshot" if not self._initial_snapshot_attempted else "reconnect"
                 await self._publish_device_catalog(client, source=catalog_source)
             except _MqttPacketTooLarge as err:
                 self._mark_mqtt_error(str(err))
-                # Retract the bootstrap online announcement while the socket
-                # is still open. A partial bootstrap must not remain retained
-                # as an online bridge after we stop retrying.
+                # Retract online from this or an earlier connection. Retry
+                # diagnostics may make even initial presence exceed the budget;
+                # that must not bypass the outstanding offline announcement.
                 # A failed retraction is a transport failure: reconnect and
                 # retry it instead of leaving the retained online state behind.
                 await self._publish_presence("offline", client=client, required=True)
