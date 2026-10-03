@@ -342,6 +342,7 @@ class FakeAiomqttClient(AsyncFakeMQTTClient):
         self.connect_kwargs = dict(connect_kwargs)
         self.subscriptions: list[dict] = []
         self.connected = False
+        self._connected = asyncio.get_running_loop().create_future()
         self._connect_error = connect_error
         self.messages = _FakeMessageStream(messages, end)
         # Fake connection has no socket; real WSS behavior is tested separately.
@@ -349,6 +350,7 @@ class FakeAiomqttClient(AsyncFakeMQTTClient):
             socket=lambda: None,
             loop_read=lambda: 0,
             loop_write=lambda: 0,
+            _sock_close=lambda: None,
             on_socket_open=None,
         )
 
@@ -356,6 +358,8 @@ class FakeAiomqttClient(AsyncFakeMQTTClient):
         if self._connect_error is not None:
             raise self._connect_error
         self.connected = True
+        if not self._connected.done():
+            self._connected.set_result(None)
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
