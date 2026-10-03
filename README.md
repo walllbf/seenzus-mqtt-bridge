@@ -160,6 +160,17 @@ Payload:
 
 ### result 示例
 
+MQTT 消息使用紧凑 UTF-8 JSON，字段和值保持不变。发送前按完整 MQTT 3.1.1
+PUBLISH 报文（包括 topic、QoS packet ID 和长度头）检查 **1 MiB** 上限，
+避免生产 Broker 因 `frame_too_large` 主动断开整条桥接连接。
+
+如果命令结果无损编码后仍超限，同一个 `msgId` 会收到 `success: false`、
+`status: 413`、`error: "response_too_large"`，并附带 `packetSize` 和
+`maxPacketSize`；不会返回截断数据或多条未约定的分片。`GET /api/states`
+仍继续通过关联该请求的逐实体 `full_snapshot` 消息同步完整状态。单个实体、
+服务说明或 retained catalog 自身超过上限时会明确报错；任意大小的数据传输
+需要另行扩展协议，不能将“连接保持”理解为该超大响应已完整送达。
+
 Topic:
 
 ```text
