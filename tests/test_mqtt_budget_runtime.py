@@ -8,7 +8,7 @@ import pytest
 
 from seenzus_bridge.coordinator import _MqttPacketTooLarge
 from seenzus_bridge.sensor import BridgeStatusSensor
-from tests.helpers import AsyncFakeMQTTClient
+from tests.helpers import AsyncFakeMQTTClient, FakeMqttError
 from tests.test_mqtt_loop_behavior import (
     HAPPY_ENTRY_DATA,
     CATALOG_TOPIC,
@@ -120,3 +120,66 @@ async def test_invalid_budget_stops_before_opening_connection(monkeypatch):
     assert coordinator.status == "error"
     assert KEY in coordinator.last_error
     assert coordinator.mqtt_connected is False
+
+
+@pytest.mark.asyncio
+async def test_catalog_failure_retracts_online_when_offline_diagnostics_exceed_budget(monkeypatch):
+    coordinator, fake = _make_coordinator(
+        monkeypatch, data={**HAPPY_ENTRY_DATA, KEY: 1, "source_name": "x" * 500},
+    )
+    coordinator._on_ha_started(None)
+    monkeypatch.setattr(coordinator, "_build_device_catalog_payload", lambda **_kwargs: {
+        "devices": [], "entityCount": 0, "large": "x" * 1500,
+    })
+
+    await asyncio.wait_for(coordinator._mqtt_loop(), timeout=1)
+
+    assert len(fake.clients) == 1
+    publications = fake.clients[0].published
+    assert [json.loads(item["payload"])["status"] for item in publications] == ["online", "offline"]
+    for item in publications:
+        assert item["retain"] is True
+        assert len(_paho_packet(item["topic"], item["payload"], item["qos"])) <= 1024
+    assert json.loads(publications[-1]["payload"])["bridgeId"] == "ha-demo"
+    assert coordinator.status == "error"
+    assert "mqtt_packet_too_large" in coordinator.last_error
+
+
+@pytest.mark.asyncio
+async def test_oversized_initial_presence_cannot_claim_ready(monkeypatch):
+    coordinator, fake = _make_coordinator(
+        monkeypatch, data={**HAPPY_ENTRY_DATA, KEY: 1, "source_name": "x" * 550},
+    )
+    coordinator._on_ha_started(None)
+
+    await asyncio.wait_for(coordinator._mqtt_loop(), timeout=1)
+
+    assert len(fake.clients) == 1
+    assert fake.clients[0].published == []
+    assert coordinator.status == "error"
+    assert not coordinator.mqtt_connected
+    assert not coordinator._initial_snapshot_attempted
+    assert "mqtt_packet_too_large" in coordinator.last_error
+
+
+@pytest.mark.asyncio
+async def test_initial_presence_transport_failure_retries_without_claiming_ready(monkeypatch):
+    coordinator, fake = _make_coordinator(monkeypatch, data=dict(HAPPY_ENTRY_DATA))
+    coordinator._on_ha_started(None)
+    sleeps, _ = _install_recording_sleep(monkeypatch, cancel_on=5)
+
+    async def fail_publish(*_args, **_kwargs):
+        raise FakeMqttError("connection lost before online announcement")
+
+    monkeypatch.setattr(AsyncFakeMQTTClient, "publish", fail_publish)
+
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator._mqtt_loop()
+
+    assert len(fake.clients) == 1
+    assert fake.clients[0].published == []
+    assert sleeps == [5]
+    assert coordinator.status == "error"
+    assert not coordinator.mqtt_connected
+    assert not coordinator._initial_snapshot_attempted
+    assert "connection lost before online announcement" in coordinator.last_error

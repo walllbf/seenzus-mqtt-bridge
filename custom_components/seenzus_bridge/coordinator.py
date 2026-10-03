@@ -837,7 +837,7 @@ class BridgeCoordinator:
             # connection contract below (presence + retained catalog) is ready.
             # Otherwise a large pending-state backlog can race bootstrap and
             # starve or disconnect it before the catalog exists.
-            await self._publish_presence("online", client=client)
+            await self._publish_presence("online", client=client, required=True)
             # Catalog + state snapshot both need HA fully started (entity registry
             # populated); defer on the started event (no sleep-poll).
             await self._ha_started_event.wait()
@@ -1603,7 +1603,9 @@ class BridgeCoordinator:
             self.last_error = f"state_publish_failed:{err}"
             self._fire()
 
-    async def _publish_presence(self, status: str, *, client: Any | None = None) -> None:
+    async def _publish_presence(
+        self, status: str, *, client: Any | None = None, required: bool = False,
+    ) -> None:
         publish_client = client or self._mqtt_client
         if publish_client is None or self._topics is None:
             return
@@ -1638,14 +1640,35 @@ class BridgeCoordinator:
         if transport_ws_path is not None:
             payload["wsPath"] = transport_ws_path
         try:
-            await self._publish(
-                publish_client,
-                self._topics.presence_topic,
-                _mqtt_json(payload),
-                qos=1,
-                retain=True,
-            )
+            try:
+                await self._publish(
+                    publish_client,
+                    self._topics.presence_topic,
+                    _mqtt_json(payload),
+                    qos=1,
+                    retain=True,
+                )
+            except _MqttPacketTooLarge:
+                if status != "offline":
+                    raise
+                # Error diagnostics can make offline larger than the online
+                # announcement it retracts. Keep the status deliverable under
+                # the same budget; the full error remains in HA diagnostics.
+                await self._publish(
+                    publish_client,
+                    self._topics.presence_topic,
+                    _mqtt_json({
+                        "bridgeId": self._topics.bridge_id,
+                        "status": "offline",
+                        "mqttConnected": False,
+                        "ts": payload["ts"],
+                    }),
+                    qos=1,
+                    retain=True,
+                )
         except Exception as err:  # noqa: BLE001
+            if required:
+                raise
             _LOGGER.debug("Presence publish failed: %s", err)
 
     def _start_presence_heartbeat(self) -> None:

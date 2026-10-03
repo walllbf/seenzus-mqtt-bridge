@@ -3,8 +3,15 @@ from copy import deepcopy
 
 import pytest
 import voluptuous as vol
-import voluptuous_serialize
 from homeassistant.helpers.config_validation import custom_serializer
+
+# Match the installed Core's actual form serializer. New Core uses probatio;
+# older supported Core uses voluptuous_serialize, which is no longer installed
+# by the newer Core. Neither dependency belongs to the bridge itself.
+try:
+    from homeassistant.helpers.config_validation import to_field_list
+except ImportError:
+    from voluptuous_serialize import convert as to_field_list
 
 from seenzus_bridge.config_flow import SavanAIBridgeConfigFlow, SavanAIBridgeOptionsFlow
 from seenzus_bridge.const import CONF_MQTT_MAX_PACKET_SIZE_KIB
@@ -95,7 +102,7 @@ async def test_connection_settings_schema_roundtrips_ha_number_selector():
     form = await flow.async_step_connection_settings()
     validated = form["data_schema"]({})
     assert validated == {KEY: 2048}
-    serialized = voluptuous_serialize.convert(form["data_schema"], custom_serializer=custom_serializer)
+    serialized = to_field_list(form["data_schema"], custom_serializer=custom_serializer)
     assert serialized[0]["selector"]["number"] == {
         "min": 1.0, "max": 262144.0, "step": 1.0, "mode": "box",
     }
