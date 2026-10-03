@@ -77,10 +77,21 @@ config/custom_components/seenzus_bridge/
 | MQTT Broker 地址 | 手动配置时填写的公网 MQTT 地址 | - |
 | MQTT 端口 | Broker 端口 | `1883` |
 | MQTT 用户名/密码 | Broker 认证 | 空 |
+| MQTT 最大报文大小（KiB） | 本地发送预算，整数 1–262144；须不高于 Broker 限制 | `1024`（1 MiB） |
 | V2 Topic 根路径 | v2 协议根路径 | `seenzus/v2` |
 | Bridge ID | 留空自动生成稳定 ID | 自动 |
 | 启用实体状态事件推送 | 推送 `state` 通道 | `true` |
 
+已有配对可在集成的「配置 → MQTT 连接设置」修改报文预算，保存后自动重载；
+保留凭据、传输方式和 Bridge 身份，无需重新配对。确认 Broker 支持 2 MiB 时
+填写 `2048`；这不会修改 Broker 的服务器配置。状态实体的 `mqtt_max_packet_size`
+显示当前预算的字节数，配置无效时显示未知并在错误信息中说明原因。
+
+MQTT client ID 使用完整 HA 配置项 ID 的 128 位 SHA-256 摘要，避免相同时间创建
+的不同条目因截断 ULID 前缀而互相踢下线。升级后 client ID 会改变，之后重连和
+重启保持稳定；MQTT 3.1.1 使用 clean session，不迁移旧会话，配对和 topic 保持原样。
+自定义 Broker 若按旧 client ID 配置权限或路由，应同步更新；完全克隆同一个 HA
+配置项仍代表同一身份，不能将其作为两个独立实例同时运行。
 
 
 ---
@@ -161,7 +172,7 @@ Payload:
 ### result 示例
 
 MQTT 消息使用紧凑 UTF-8 JSON，字段和值保持不变。发送前按完整 MQTT 3.1.1
-PUBLISH 报文（包括 topic、QoS packet ID 和长度头）检查 **1 MiB** 保守预算，
+PUBLISH 报文（包括 topic、QoS packet ID 和长度头）检查可配置的本地预算，默认 **1 MiB**，
 避免默认限额的 Broker 因 `frame_too_large` 主动断开整条桥接连接。
 MQTT 3.1.1 不协商这个值；调高 Broker 限额不会自动调高插件的本地预算。
 
@@ -175,6 +186,12 @@ MQTT 3.1.1 不协商这个值；调高 Broker 限额不会自动调高插件的�
 真实传输故障或取消仍中断该批次；历史补录的 30 分钟恢复窗口及完整属性保持不变。
 单个实体、服务说明或 retained catalog 自身超过上限时会明确报错；任意大小的数据传输
 需要另行扩展协议，不能将“连接保持”理解为该超大响应已完整送达。
+启动时 catalog 超限会撤回在线声明并停止本次连接循环，留下明确的大小错误；
+修正预算或数据后重载集成再试，不会每 5 秒重复连接。无效预算在建立连接前被拒绝。
+
+WSS 控制帧回复按连接排队并掩码，在当前 TLS 写入完成后发送；读取保持运行，
+使双向大帧都能继续传输。写入重试保留原字节，控制队列有界并在连接关闭时清理。
+最终候选版本的实机配对验收见 [配对验收清单](docs/PAIRING_ACCEPTANCE.zh-CN.md)。
 
 Topic:
 

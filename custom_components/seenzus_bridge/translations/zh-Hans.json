@@ -39,7 +39,11 @@
               "enable_state_events": "启用实体状态事件推送",
               "allow_dangerous_services": "允许调用危险服务（hassio / shell_command / python_script 等，默认关闭）",
               "enable_template_api": "允许模板渲染 API /api/template（默认关闭）",
-              "expose_full_config": "返回完整 /api/config（含家庭位置坐标，默认关闭）"
+              "expose_full_config": "返回完整 /api/config（含家庭位置坐标，默认关闭）",
+              "mqtt_max_packet_size_kib": "MQTT 最大报文大小（KiB）"
+            },
+            "data_description": {
+              "mqtt_max_packet_size_kib": "本地发送上限，须不高于 Broker 允许的报文大小。1024 KiB = 1 MiB，2048 KiB = 2 MiB；不会自动修改 Broker 配置。"
             }
           }
         }
@@ -59,7 +63,8 @@
       "quick_pair_callback_state_mismatch": "回跳状态校验失败，请重新发起快速配对",
       "quick_pair_code_exchange_failed": "回跳成功但兑换桥接配置失败，请检查后端服务状态",
       "quick_pair_callback_timeout": "未收到回跳确认，请确认外部页面已完成授权并返回 Home Assistant",
-      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
+      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起",
+      "invalid_mqtt_packet_size": "请输入 1–262144 范围内的整数（KiB），并确保不超过 Broker 的报文大小限制"
     },
     "abort": {
       "already_configured": "seenzus MQTT Bridge 已经配置过了，只允许添加一个实例",
@@ -70,11 +75,11 @@
     "step": {
       "init": {
         "title": "修改 seenzus MQTT Bridge 配置",
-        "description": "先选择配对模式，再进入对应的配置表单。保存后自动重载集成立即生效。",
-        "data": {
-          "pairing_mode": "配对模式"
-        },
-        "sections": {}
+        "description": "调整 MQTT 连接设置，或重新进行配对。保存设置后自动重载集成。",
+        "menu_options": {
+          "connection_settings": "MQTT 连接设置",
+          "pairing": "重新配对或手动配置"
+        }
       },
       "seamless": {
         "title": "快速配对",
@@ -106,9 +111,31 @@
               "enable_state_events": "启用实体状态事件推送",
               "allow_dangerous_services": "允许调用危险服务（hassio / shell_command / python_script 等，默认关闭）",
               "enable_template_api": "允许模板渲染 API /api/template（默认关闭）",
-              "expose_full_config": "返回完整 /api/config（含家庭位置坐标，默认关闭）"
+              "expose_full_config": "返回完整 /api/config（含家庭位置坐标，默认关闭）",
+              "mqtt_max_packet_size_kib": "MQTT 最大报文大小（KiB）"
+            },
+            "data_description": {
+              "mqtt_max_packet_size_kib": "本地发送上限，须不高于 Broker 允许的报文大小。1024 KiB = 1 MiB，2048 KiB = 2 MiB；不会自动修改 Broker 配置。"
             }
           }
+        }
+      },
+      "pairing": {
+        "title": "重新配对或手动配置",
+        "description": "先选择配对模式，再进入对应的配置表单。保存后自动重载集成立即生效。",
+        "data": {
+          "pairing_mode": "配对模式"
+        },
+        "sections": {}
+      },
+      "connection_settings": {
+        "title": "MQTT 连接设置",
+        "description": "修改本地报文上限并重连，保留当前配对、凭据和传输方式，无需重新授权。",
+        "data": {
+          "mqtt_max_packet_size_kib": "MQTT 最大报文大小（KiB）"
+        },
+        "data_description": {
+          "mqtt_max_packet_size_kib": "本地发送上限，须不高于 Broker 允许的报文大小。1024 KiB = 1 MiB，2048 KiB = 2 MiB；不会自动修改 Broker 配置。"
         }
       }
     },
@@ -126,7 +153,8 @@
       "quick_pair_callback_state_mismatch": "回跳状态校验失败，请重新发起快速配对",
       "quick_pair_code_exchange_failed": "回跳成功但兑换桥接配置失败，请检查后端服务状态",
       "quick_pair_callback_timeout": "未收到回跳确认，请确认外部页面已完成授权并返回 Home Assistant",
-      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
+      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起",
+      "invalid_mqtt_packet_size": "请输入 1–262144 范围内的整数（KiB），并确保不超过 Broker 的报文大小限制"
     },
     "abort": {
       "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"

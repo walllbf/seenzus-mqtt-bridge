@@ -217,7 +217,7 @@ def test_control_reply_waits_for_large_tls_write_and_reader_recovers(control_opc
         loop.close()
 
 
-def test_aiomqtt_reader_pauses_without_spinning_and_keeps_exception_delivery():
+def test_aiomqtt_reader_remains_active_and_keeps_exception_delivery():
     """Use aiomqtt's real socket-open callback, including its SSL pending loop."""
     loop = asyncio.SelectorEventLoop()
 
@@ -236,12 +236,6 @@ def test_aiomqtt_reader_pauses_without_spinning_and_keeps_exception_delivery():
 
             def pending(self):
                 self.pending_calls += 1
-                if self._sendbuffer:
-                    # Bound the real aiomqtt while loop so a regression reports
-                    # a failure instead of hanging the event loop indefinitely.
-                    if self.pending_calls > 1:
-                        raise RuntimeError("reader spun while a TLS write was pending")
-                    return 1
                 return 0
 
         sock = PendingSocket()
@@ -266,8 +260,9 @@ def test_aiomqtt_reader_pauses_without_spinning_and_keeps_exception_delivery():
             await asyncio.sleep(0)
             peer.send(b"x")
             await asyncio.sleep(0.02)
-            assert not aio_client._disconnected.done(), "aiomqtt's reader spun while the frame was pending"
-            assert not consumed
+            assert not aio_client._disconnected.done()
+            assert consumed == [b"x"], "pending outgoing data blocked incoming traffic"
+            assert sock.pending_calls == 1, "reader spun after draining available input"
             sock._sendbuffer.clear()
             client.loop_write()
             await asyncio.sleep(0.02)
@@ -275,7 +270,7 @@ def test_aiomqtt_reader_pauses_without_spinning_and_keeps_exception_delivery():
             fail_read = True
             peer.send(b"y")
             await asyncio.sleep(0.02)
-            assert aio_client._disconnected.done(), "restored reader lost aiomqtt's disconnect exception handler"
+            assert aio_client._disconnected.done(), "reader lost aiomqtt's disconnect exception handler"
             assert isinstance(aio_client._disconnected.exception(), OSError)
         finally:
             if aio_client._disconnected.done():

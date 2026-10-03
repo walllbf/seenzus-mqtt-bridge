@@ -28,6 +28,7 @@ from homeassistant.helpers.recorder import DATA_INSTANCE as RECORDER_INSTANCE
 from .bridge_protocol import (
     BridgeTopics,
     build_bridge_id,
+    build_mqtt_client_id,
     build_topics,
     retained_topics_to_clear_on_reload,
 )
@@ -82,6 +83,7 @@ from .const import (
 from .entity_filters import looks_like_internal_bridge_entity_id, name_has_model_marker
 from .ha_dispatcher import DispatchPolicy, dispatch
 from .mqtt_io_guard import websocket_connection
+from .mqtt_settings import mqtt_packet_size_limit
 from .operation_store import PersistentOperationStore
 from .sensor_display import async_prepare_sensor_display, sensor_display_attributes, supports_entity_display
 
@@ -90,9 +92,6 @@ _LOGGER = logging.getLogger(__name__)
 PRESENCE_HEARTBEAT_INTERVAL_SECONDS = 30
 CATALOG_REFRESH_DELAY_SECONDS = 1.5
 MAX_INFLIGHT_COMMANDS = 8
-# Conservative budget for brokers with a 1 MiB default. MQTT 3.1.1 does not
-# negotiate this limit, even when an operator raises the broker's own limit.
-MAX_MQTT_PACKET_SIZE = 1024 * 1024
 # 全量快照分批发布并短暂让出事件循环，避免短时间内把上千条 QoS 0 消息压进
 # paho 队列，也给心跳、命令和连接维护任务稳定的调度机会。
 SNAPSHOT_BATCH_SIZE = 50
@@ -119,13 +118,18 @@ class _MqttPublishFailure(Exception):
     """A transport failure that cannot be reported over the same MQTT socket."""
 
 
+class _MqttConfigurationError(Exception):
+    """Configuration must be corrected before opening another connection."""
+
+
 class _MqttPacketTooLarge(_MqttPublishFailure):
     """A locally rejected publication; the MQTT connection remains usable."""
 
-    def __init__(self, packet_size: int) -> None:
+    def __init__(self, packet_size: int, max_packet_size: int) -> None:
         self.packet_size = packet_size
+        self.max_packet_size = max_packet_size
         super().__init__(
-            f"mqtt_packet_too_large: packet={packet_size} limit={MAX_MQTT_PACKET_SIZE}"
+            f"mqtt_packet_too_large: packet={packet_size} limit={max_packet_size}"
         )
 
 
@@ -294,6 +298,11 @@ class BridgeCoordinator:
 
     def _conf(self) -> dict[str, Any]:
         return {**self._entry.data, **self._entry.options}
+
+    @property
+    def mqtt_max_packet_size(self) -> int:
+        """Effective local byte budget; MQTT 3.1.1 does not negotiate it."""
+        return mqtt_packet_size_limit(self._conf())
 
     def _set_pairing_step(self, step: str, *, api_base: str | None = None) -> None:
         self.pairing_last_step = step
@@ -717,7 +726,7 @@ class BridgeCoordinator:
             aiomqtt = await self._async_import_aiomqtt()
             self._aiomqtt = aiomqtt
 
-        client_id = f"seenzus-bridge-{self._entry.entry_id[:8]}"
+        client_id = build_mqtt_client_id(self._entry.entry_id)
 
         while True:
             retry_delay = 0
@@ -725,6 +734,15 @@ class BridgeCoordinator:
                 if not await self._connect_and_serve(aiomqtt, client_id):
                     _LOGGER.warning("MQTT host missing, retry in 10s")
                     retry_delay = 10
+            except (_MqttConfigurationError, _MqttPacketTooLarge) as err:
+                # Reconnecting cannot repair invalid settings or a catalog
+                # exceeding the local budget. Options save/reload starts a new
+                # loop; keep the failure visible without flooding the broker.
+                self.err_count += 1
+                self._mark_mqtt_error(str(err))
+                self._fire()
+                _LOGGER.error("MQTT setup stopped: %s; correct connection settings and reload", err)
+                return
             except (aiomqtt.MqttError, _MqttPublishFailure) as err:
                 self._mark_mqtt_error(str(err))
                 self._fire()
@@ -769,6 +787,10 @@ class BridgeCoordinator:
         shell can back off; connection errors propagate to the shell.
         """
         conf = self._conf()
+        try:
+            mqtt_packet_size_limit(conf)
+        except ValueError as err:
+            raise _MqttConfigurationError(str(err)) from err
         self.pairing_mode = self._resolve_pairing_mode()
         self.config_source = self._resolve_config_source()
         self._sync_source_metadata()
@@ -829,7 +851,15 @@ class BridgeCoordinator:
             # and a disconnect used to restart it from zero forever without ever publishing
             # the catalog.
             catalog_source = "startup_snapshot" if not self._initial_snapshot_attempted else "reconnect"
-            await self._publish_device_catalog(client, source=catalog_source)
+            try:
+                await self._publish_device_catalog(client, source=catalog_source)
+            except _MqttPacketTooLarge as err:
+                self._mark_mqtt_error(str(err))
+                # Retract the bootstrap online announcement while the socket
+                # is still open. A partial bootstrap must not remain retained
+                # as an online bridge after we stop retrying.
+                await self._publish_presence("offline", client=client)
+                raise
             await self._try_pairing()
 
             self._mqtt_client = client
@@ -1096,8 +1126,9 @@ class BridgeCoordinator:
         the bounded, coalescing state backlog), not around this acknowledgement.
         """
         packet_size = _mqtt_publish_packet_size(topic, payload, qos)
-        if packet_size > MAX_MQTT_PACKET_SIZE:
-            raise _MqttPacketTooLarge(packet_size)
+        max_packet_size = self.mqtt_max_packet_size
+        if packet_size > max_packet_size:
+            raise _MqttPacketTooLarge(packet_size, max_packet_size)
         try:
             await client.publish(topic, payload, qos=qos, retain=retain)
         except Exception as err:  # noqa: BLE001
@@ -1132,11 +1163,11 @@ class BridgeCoordinator:
                     status=413,
                     error="response_too_large",
                     packetSize=err.packet_size,
-                    maxPacketSize=MAX_MQTT_PACKET_SIZE,
+                    maxPacketSize=err.max_packet_size,
                 )
                 await self._publish(client, topic, _mqtt_json(payload), qos=1)
                 self.err_count += 1
-                self.last_error = f"response_too_large: packet={err.packet_size} limit={MAX_MQTT_PACKET_SIZE}"
+                self.last_error = f"response_too_large: packet={err.packet_size} limit={err.max_packet_size}"
                 _LOGGER.warning("[%s] %s; sent size error and kept MQTT connected", msg_id, self.last_error)
         except Exception as err:  # noqa: BLE001
             # Count the failure here (once) instead of letting it escape the
@@ -1584,6 +1615,7 @@ class BridgeCoordinator:
             # 生效传输方式（issue #14 联调排查）：后端/运维凭 presence 即可确认
             # 桥走的是 wss 还是裸 TCP；wsPath 仅 ws/wss 时出现，与兑换响应对齐。
             "transport": transport_scheme,
+            "maxPacketSize": self.mqtt_max_packet_size,
             "mqttConnected": self.mqtt_connected,
             "pairingStatus": self.pairing_status,
             "configSource": self.config_source,

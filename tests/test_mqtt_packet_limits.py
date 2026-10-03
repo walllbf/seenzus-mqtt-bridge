@@ -26,9 +26,11 @@ def _mqtt_payload_offset(packet: bytes) -> int:
     return offset + 1
 
 
-@pytest.mark.parametrize("result_kind", ["irreducible", "compactable"])
+@pytest.mark.parametrize("result_kind", ["irreducible", "compactable", "configured_2m"])
 def test_oversized_result_keeps_real_wss_connection_for_the_next_command(tmp_path, result_kind):
-    """Replay EMQX's 1 MiB cutoff through the real result publish call site."""
+    """Enforce the default cutoff and use a configured budget on real WSS."""
+    broker_max_packet_size = BROKER_MAX_PACKET_SIZE * (2 if result_kind == "configured_2m" else 1)
+    entry_options = {"mqtt_max_packet_size_kib": 2048} if result_kind == "configured_2m" else {}
     loop = asyncio.SelectorEventLoop()
     callback_errors = []
     loop.set_exception_handler(lambda _loop, context: callback_errors.append(context))
@@ -58,7 +60,7 @@ def test_oversized_result_keeps_real_wss_connection_for_the_next_command(tmp_pat
                         if packet[0] >> 4 == 14:
                             return
                         assert packet[0] >> 4 == 3
-                        if len(packet) > BROKER_MAX_PACKET_SIZE:
+                        if len(packet) > broker_max_packet_size:
                             # MQTT 3.1.1 has no DISCONNECT reason packet: the
                             # broker closes WSS and aiomqtt reports connection
                             # loss, exactly as the production EMQX trace shows.
@@ -79,7 +81,7 @@ def test_oversized_result_keeps_real_wss_connection_for_the_next_command(tmp_pat
 
         worker = threading.Thread(target=server, daemon=True)
         worker.start()
-        coordinator = BridgeCoordinator(FakeHass(), FakeConfigEntry())
+        coordinator = BridgeCoordinator(FakeHass(), FakeConfigEntry(options=entry_options))
         coordinator._topics = build_topics("seenzus/v2", "packet-limit-regression")
         client = aiomqtt.Client(
             "127.0.0.1", port=listener.getsockname()[1], transport="websockets",
@@ -92,7 +94,7 @@ def test_oversized_result_keeps_real_wss_connection_for_the_next_command(tmp_pat
                 async with websocket_connection(client):
                     # A single large attribute reproduces the real aggregate
                     # /api/states reply without any production entity data.
-                    if result_kind == "irreducible":
+                    if result_kind != "compactable":
                         states = [{
                             "entity_id": "sensor.large_result",
                             "state": "on",
@@ -122,7 +124,7 @@ def test_oversized_result_keeps_real_wss_connection_for_the_next_command(tmp_pat
             await asyncio.to_thread(worker.join, 2)
 
         assert not rejected_packet_sizes, (
-            f"result exceeded broker's {BROKER_MAX_PACKET_SIZE}-byte packet limit: "
+            f"result exceeded broker's {broker_max_packet_size}-byte packet limit: "
             f"{rejected_packet_sizes}"
         )
         assert not server_errors, repr(server_errors)
@@ -131,7 +133,7 @@ def test_oversized_result_keeps_real_wss_connection_for_the_next_command(tmp_pat
         assert remained_connected, "oversized result disconnected the WSS session"
         assert small_result_sent, "the following command could not publish its result"
         assert len(publications) == 2
-        large_topic, large_result, _ = publications[0]
+        large_topic, large_result, large_packet_size = publications[0]
         small_topic, small_result, _ = publications[1]
         assert large_topic.endswith("/large-result")
         assert large_result["msgId"] == "large-result"
@@ -146,6 +148,8 @@ def test_oversized_result_keeps_real_wss_connection_for_the_next_command(tmp_pat
             assert large_result["success"] is True
             assert large_result["status"] == 200
             assert large_result["data"] == states, "compact JSON must preserve every state and attribute"
+            if result_kind == "configured_2m":
+                assert BROKER_MAX_PACKET_SIZE < large_packet_size <= broker_max_packet_size
         assert small_topic.endswith("/next-result")
         assert small_result["msgId"] == "next-result"
         assert small_result["success"] is True
