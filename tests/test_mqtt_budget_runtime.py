@@ -183,3 +183,36 @@ async def test_initial_presence_transport_failure_retries_without_claiming_ready
     assert not coordinator.mqtt_connected
     assert not coordinator._initial_snapshot_attempted
     assert "connection lost before online announcement" in coordinator.last_error
+
+
+@pytest.mark.asyncio
+async def test_catalog_failure_retries_failed_offline_retraction_before_stopping(monkeypatch):
+    coordinator, fake = _make_coordinator(monkeypatch, data={**HAPPY_ENTRY_DATA, KEY: 1})
+    coordinator._on_ha_started(None)
+    monkeypatch.setattr(coordinator, "_build_device_catalog_payload", lambda **_kwargs: {
+        "devices": [], "entityCount": 0, "large": "x" * 1500,
+    })
+    sleeps, _ = _install_recording_sleep(monkeypatch, cancel_on=10)
+    original_publish = AsyncFakeMQTTClient.publish
+    offline_attempts = 0
+
+    async def fail_first_offline(client, topic, payload, **kwargs):
+        nonlocal offline_attempts
+        if json.loads(payload).get("status") == "offline":
+            offline_attempts += 1
+            if offline_attempts == 1:
+                raise FakeMqttError("connection lost before offline retraction")
+        await original_publish(client, topic, payload, **kwargs)
+
+    monkeypatch.setattr(AsyncFakeMQTTClient, "publish", fail_first_offline)
+
+    await asyncio.wait_for(coordinator._mqtt_loop(), timeout=1)
+
+    assert offline_attempts == 2
+    assert len(fake.clients) == 2
+    assert sleeps == [5]
+    assert [json.loads(item["payload"])["status"] for item in fake.clients[-1].published] == ["online", "offline"]
+    assert coordinator.status == "error"
+    assert not coordinator.mqtt_connected
+    assert not coordinator._initial_snapshot_attempted
+    assert "mqtt_packet_too_large" in coordinator.last_error

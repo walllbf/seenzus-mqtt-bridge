@@ -858,7 +858,9 @@ class BridgeCoordinator:
                 # Retract the bootstrap online announcement while the socket
                 # is still open. A partial bootstrap must not remain retained
                 # as an online bridge after we stop retrying.
-                await self._publish_presence("offline", client=client)
+                # A failed retraction is a transport failure: reconnect and
+                # retry it instead of leaving the retained online state behind.
+                await self._publish_presence("offline", client=client, required=True)
                 raise
             await self._try_pairing()
 
