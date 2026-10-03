@@ -160,6 +160,22 @@ Payload:
 
 ### result 示例
 
+MQTT 消息使用紧凑 UTF-8 JSON，字段和值保持不变。发送前按完整 MQTT 3.1.1
+PUBLISH 报文（包括 topic、QoS packet ID 和长度头）检查 **1 MiB** 保守预算，
+避免默认限额的 Broker 因 `frame_too_large` 主动断开整条桥接连接。
+MQTT 3.1.1 不协商这个值；调高 Broker 限额不会自动调高插件的本地预算。
+
+如果命令结果无损编码后仍超限，同一个 `msgId` 会收到 `success: false`、
+`status: 413`、`error: "response_too_large"`，并附带 `packetSize` 和
+`maxPacketSize`；不会返回截断数据或多条未约定的分片。`GET /api/states`
+仍继续通过关联该请求的逐实体 `full_snapshot` 消息同步状态。快照与历史补录中，
+单个实体超限会明确记录实体、来源、包大小和上限，并计入错误数及
+`presence.droppedStateEventCount`，随后继续发送其他实体，成功计数不包含漏送实体。
+这类批次每尝试 50 条短暂让出事件循环，全部超限时也不会连续占住事件循环。
+真实传输故障或取消仍中断该批次；历史补录的 30 分钟恢复窗口及完整属性保持不变。
+单个实体、服务说明或 retained catalog 自身超过上限时会明确报错；任意大小的数据传输
+需要另行扩展协议，不能将“连接保持”理解为该超大响应已完整送达。
+
 Topic:
 
 ```text
@@ -334,7 +350,7 @@ entry 已包含 web_pair 写入的 mqtt + bridge 绑定上下文
 
 ## 运行要求
 
-- Home Assistant 2026.3+
+- Home Assistant 2025.1.4+
 - Python 3.11+（HA 内置）
 - 公网 MQTT Broker（推荐 EMQX Cloud / HiveMQ）
 
@@ -387,6 +403,12 @@ docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 ---
 
 ## 版本变更记录
+
+### 未发布
+
+- 集成依赖改为受限的兼容版本范围，由 HA 的运行时约束选择 MQTT 库：HA 2025.1.4 使用 aiomqtt 2.0.1 / Paho 1.6.1，新版 HA 使用 aiomqtt 2.5.x / Paho 2.1.0，修复 0.2.11 因依赖冲突加载失败、无法配对的问题；保留 WSS 写入保护
+- 启动时同时检查已安装库与 Core 约束、aiomqtt 的 Paho 依赖，不兼容时通过 HA 安装器修复；若旧库已被其他集成导入，日志会提示重启 HA 后加载已修复的版本
+- CI 使用所选 Core 的运行时约束安装 manifest 依赖，并在独立环境预装不兼容的 MQTT 库，通过真实 HA 安装器验证升级修复路径
 
 ### v0.2.11 (2026-09-30)
 
