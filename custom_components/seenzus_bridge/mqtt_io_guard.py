@@ -11,9 +11,20 @@ from typing import Any
 async def websocket_connection(client: Any) -> AsyncIterator[Any]:
     """Own one bridge connection, including a connect worker that outlives cancellation."""
     retire = guard_websocket_io(client)
+    cancellation: asyncio.CancelledError | None = None
     try:
         async with client as connected:
-            yield connected
+            try:
+                yield connected
+            except asyncio.CancelledError as err:
+                cancellation = err
+                raise
+    except Exception:
+        # aiomqtt 2.0 may replace body cancellation with an earlier disconnect
+        # error in __aexit__. Preserve the stop request so the retry loop exits.
+        if cancellation is not None:
+            raise cancellation from None
+        raise
     finally:
         retire()
 

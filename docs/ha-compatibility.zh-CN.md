@@ -57,6 +57,8 @@ Paho 在连接线程排队注册 writer 后，socket 可能先被关闭；aiomqt
 
 协调器通过 `websocket_connection` 管理连接的完整生命周期，退出时立即标记该客户端退役并关闭现有 socket。即使取消发生在阻塞的 WSS 握手线程中、此时尚无连接 Future 的取消信号，线程稍后创建的 socket 也会在安装回调时关闭，不会恢复旧连接。实际协调器回归分别在 HTTP upgrade 前和等待 CONNACK 时取消；服务端保持打开，验证清理不依赖下一次 EOF、就绪回调或 keepalive。
 
+aiomqtt 2.0 的退出方法还可能用已有的断线错误替换作用域收到的取消。适配层保留原始取消，避免协调器在卸载或重载时把停机当成 MQTT 故障并继续重连；没有取消时，原始连接错误仍然传播。`tests/test_mqtt_wss_shutdown.py` 完成真实 WSS/MQTT 握手、订阅及 presence 确认后，先让 Broker 断线，再取消正在等待 HA 启动的实际协调器，验证取消和资源清理。
+
 真实 Paho 回归覆盖连接线程中的 writer 回调尚未返回、reader/writer 已排队但 socket 已关闭，以及连接取消后收到 EOF 的场景。真实 TLS/WSS 握手分别验证 Broker 的鉴权拒绝继续上报、调用者取消继续传播，并检查没有事件循环回调异常。旧版 Paho 的鉴权拒绝码为 5，新版映射为 135；修复没有放宽 Broker 权限，也不恢复已吊销的凭证。
 
 ## 已安装 MQTT 库的升级检查（#66）
