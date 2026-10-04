@@ -97,6 +97,8 @@ MAX_MQTT_PACKET_SIZE = 1024 * 1024
 # paho 队列，也给心跳、命令和连接维护任务稳定的调度机会。
 SNAPSHOT_BATCH_SIZE = 50
 SNAPSHOT_BATCH_PAUSE_SECONDS = 0.05
+SNAPSHOT_STREAM_TIMEOUT_SECONDS = 120
+MAX_SNAPSHOT_ENTITIES = 100_000
 # 断线期间 HA 状态照常变化，_pending_state_events 按 entity 合并但不设上限时会
 # 无限增长；重连后 _state_worker 若整包以 QoS 1 回放，会长期占用带宽和在途
 # 窗口，拖慢刚恢复的连接。超出上限丢最旧的一条——按 entity 合并后，只有每个
@@ -283,6 +285,9 @@ class BridgeCoordinator:
         self._history_replay_task: asyncio.Task | None = None
         self._presence_heartbeat_task: asyncio.Task | None = None
         self._command_tasks: set[asyncio.Task] = set()
+        self._snapshot_request: tuple[Any, str] | None = None
+        self._snapshot_replies: dict[str, tuple[dict, dict]] = {}
+        self._snapshot_client: Any = None
         self._operation_store = PersistentOperationStore(hass, entry.entry_id)
 
     def register_update_listener(self, cb: Callable[[], None]) -> None:
@@ -1004,7 +1009,27 @@ class BridgeCoordinator:
         self.last_req = datetime.now(timezone.utc)
         self._fire()
 
+        snapshot_request = method.upper() == "GET" and path in {
+            "/api/states", "/api/seenzus/states/snapshot",
+        }
+        if snapshot_request:
+            if self._snapshot_request:
+                if self._snapshot_request != (client, effective_msg_id):
+                    await self._publish_result(client, effective_msg_id, success=False, status=409, error="snapshot_in_progress")
+                return
+            if self._snapshot_client is not client:
+                self._snapshot_client = client
+                self._snapshot_replies.clear()
+            if path == "/api/seenzus/states/snapshot" and effective_msg_id in self._snapshot_replies:
+                for reply in self._snapshot_replies[effective_msg_id]:
+                    await self._publish_result(client, effective_msg_id, **reply)
+                return
+            self._snapshot_request = (client, effective_msg_id)
+
         try:
+            if method.upper() == "GET" and path == "/api/seenzus/states/snapshot":
+                await self._publish_snapshot_stream(client, effective_msg_id)
+                return
             if method.upper() == "GET" and path.rstrip("/") in {
                 "/api/seenzus/device-catalog",
                 "/api/seenzus/devices",
@@ -1076,6 +1101,65 @@ class BridgeCoordinator:
             self._fire()
             _LOGGER.exception("[%s] Command handling error: %s", effective_msg_id, err)
             await self._publish_result(client, effective_msg_id, success=False, status=500, error=str(err))
+        finally:
+            if snapshot_request:
+                self._snapshot_request = None
+
+    async def _publish_snapshot_stream(self, client: Any, msg_id: str) -> None:
+        # HA State objects are immutable. Capture once, including the original
+        # attributes/timestamps; do not re-read a changing entity during the stream.
+        states = [state for state in self.hass.states.async_all()
+                  if state.entity_id and not self._is_own_entity(state.entity_id)
+                  and not self._is_model_marked_standalone_entity(state)]
+        if len(states) > MAX_SNAPSHOT_ENTITIES:
+            await self._publish_result(client, msg_id, success=False, status=413, error="snapshot_scope_too_large")
+            return
+        entity_ids = sorted(state.entity_id for state in states)
+        scope = {
+            "version": 1, "scope": "publishable_states", "expectedCount": len(states),
+            "entitiesSha256": hashlib.sha256("".join(f"{entity_id}\n" for entity_id in entity_ids).encode("utf-8")).hexdigest(),
+        }
+        accepted = {"success": True, "status": 202, "data": {**scope, "phase": "accepted"}}
+        if not await self._publish_result(client, msg_id, **accepted, require_full=True):
+            return
+        sent = oversized = 0
+        outcome, status = "complete", 200
+        try:
+            async with asyncio.timeout(SNAPSHOT_STREAM_TIMEOUT_SECONDS):
+                for state in states:
+                    try:
+                        await self._publish_state_object(
+                            client, state, source="full_snapshot", correlation_id=msg_id,
+                            qos=0, snapshot_version=1,
+                        )
+                    except _MqttPacketTooLarge as err:
+                        self._record_oversized_state(state.entity_id, "full_snapshot", err)
+                        oversized += 1
+                    else:
+                        sent += 1
+                    if (sent + oversized) % SNAPSHOT_BATCH_SIZE == 0:
+                        await asyncio.sleep(SNAPSHOT_BATCH_PAUSE_SECONDS)
+            if oversized:
+                outcome, status = "partial", 413
+        except asyncio.CancelledError:
+            # Disconnection/unload invalidates the request. Never manufacture a
+            # completion or keep the old connection alive to publish a receipt.
+            raise
+        except Exception:  # noqa: BLE001
+            outcome, status = "failed", 503
+            self.err_count += 1
+            self.last_error = f"snapshot_failed:{msg_id}"
+            self._fire()
+        finished = {"success": outcome == "complete", "status": status, "data": {
+            **scope, "phase": "finished", "outcome": outcome, "sentCount": sent,
+            "omittedCount": len(states) - sent, "oversizedCount": oversized,
+        }}
+        self._snapshot_replies[msg_id] = (accepted, finished)
+        if len(self._snapshot_replies) > 64:
+            del self._snapshot_replies[next(iter(self._snapshot_replies))]
+        await self._publish_result(client, msg_id, **finished)
+        _LOGGER.info("Snapshot stream %s: outcome=%s expected=%s sent=%s oversized=%s",
+                     msg_id, outcome, len(states), sent, oversized)
 
     async def _publish(
         self,
@@ -1103,7 +1187,7 @@ class BridgeCoordinator:
         except Exception as err:  # noqa: BLE001
             raise _MqttPublishFailure(str(err)) from err
 
-    async def _publish_result(self, client: Any, msg_id: str, *, success: bool, status: int, data: Any = None, error: str | None = None) -> bool:
+    async def _publish_result(self, client: Any, msg_id: str, *, success: bool, status: int, data: Any = None, error: str | None = None, require_full: bool = False) -> bool:
         if self._topics is None:
             return False
         payload: dict[str, Any] = {
@@ -1119,10 +1203,12 @@ class BridgeCoordinator:
             payload["data"] = data
 
         topic = f"{self._topics.result_prefix}/{msg_id}"
+        full_result = True
         try:
             try:
                 await self._publish(client, topic, _mqtt_json(payload), qos=1)
             except _MqttPacketTooLarge as err:
+                full_result = False
                 # One explicit failure result preserves the existing RPC wire
                 # contract. Splitting results would make old consumers accept
                 # the first fragment and silently discard the rest.
@@ -1148,7 +1234,7 @@ class BridgeCoordinator:
             return False
         self.result_count += 1
         self._fire()
-        return True
+        return full_result or not require_full
 
     async def _publish_states_for_entities(self, client: Any, entity_ids: list[str], *, correlation_id: str | None = None) -> None:
         dedup = list(dict.fromkeys(entity_ids))
@@ -1331,6 +1417,7 @@ class BridgeCoordinator:
         correlation_id: str | None = None,
         qos: int = 1,
         observed_at: datetime | None = None,
+        snapshot_version: int | None = None,
     ) -> None:
         entity_id = state.entity_id
         topic_entity = entity_id.replace("/", "_")
@@ -1342,6 +1429,8 @@ class BridgeCoordinator:
             correlation_id=correlation_id,
             observed_at=observed_at,
         )
+        if snapshot_version is not None:
+            payload["snapshotVersion"] = snapshot_version
         await self._publish(
             client,
             f"{self._topics.state_prefix}/{topic_entity}",
@@ -1601,6 +1690,8 @@ class BridgeCoordinator:
             "capabilities": {
                 "persistentOperationIdempotency": True,
                 "recorderHistoryReplay": True,
+                "serviceIndex": 1,
+                "snapshotStream": 1,
             },
         }
         if transport_ws_path is not None:
