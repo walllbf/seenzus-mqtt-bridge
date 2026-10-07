@@ -1,0 +1,97 @@
+{
+  "requestId": "fixture-request",
+  "messages": [
+    {
+      "topic": "seenzus/v2/bridge/ha-demo/result/fixture-request",
+      "payload": {
+        "msgId": "fixture-request",
+        "bridgeId": "ha-demo",
+        "success": true,
+        "status": 202,
+        "data": {
+          "version": 1,
+          "scope": "publishable_states",
+          "expectedCount": 2,
+          "entitiesSha256": "855946b87769d676121cc10dfc64a2e88de253113aa186c6a635a9878211f7b4",
+          "phase": "accepted"
+        }
+      },
+      "qos": 1,
+      "retain": false
+    },
+    {
+      "topic": "seenzus/v2/bridge/ha-demo/state/sensor.a",
+      "payload": {
+        "eventId": "73ee3c46-6f88-5d37-9532-9431da65ccb0",
+        "bridgeId": "ha-demo",
+        "entityId": "sensor.a",
+        "state": "23.4",
+        "attributes": {
+          "friendly_name": "温度",
+          "nested": {
+            "values": [
+              1,
+              2,
+              3
+            ]
+          }
+        },
+        "available": true,
+        "ts": "2026-10-05T00:00:00+00:00",
+        "source": "full_snapshot",
+        "correlationMsgId": "fixture-request",
+        "snapshotVersion": 1
+      },
+      "qos": 0,
+      "retain": false
+    },
+    {
+      "topic": "seenzus/v2/bridge/ha-demo/state/sensor.b",
+      "payload": {
+        "eventId": "7ec8eece-a3ee-5c86-92e8-3832862ee6a1",
+        "bridgeId": "ha-demo",
+        "entityId": "sensor.b",
+        "state": "23.4",
+        "attributes": {
+          "friendly_name": "温度",
+          "nested": {
+            "values": [
+              1,
+              2,
+              3
+            ]
+          }
+        },
+        "available": true,
+        "ts": "2026-10-05T00:00:00+00:00",
+        "source": "full_snapshot",
+        "correlationMsgId": "fixture-request",
+        "snapshotVersion": 1
+      },
+      "qos": 0,
+      "retain": false
+    },
+    {
+      "topic": "seenzus/v2/bridge/ha-demo/result/fixture-request",
+      "payload": {
+        "msgId": "fixture-request",
+        "bridgeId": "ha-demo",
+        "success": true,
+        "status": 200,
+        "data": {
+          "version": 1,
+          "scope": "publishable_states",
+          "expectedCount": 2,
+          "entitiesSha256": "855946b87769d676121cc10dfc64a2e88de253113aa186c6a635a9878211f7b4",
+          "phase": "finished",
+          "outcome": "complete",
+          "sentCount": 2,
+          "omittedCount": 0,
+          "oversizedCount": 0
+        }
+      },
+      "qos": 1,
+      "retain": false
+    }
+  ]
+}

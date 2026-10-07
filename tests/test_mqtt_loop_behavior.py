@@ -165,6 +165,13 @@ async def test_loop_happy_connect_subscribes_then_presence_catalog_and_snapshot(
         assert presence["retain"] is True
         assert json.loads(presence["payload"])["status"] == "online"
 
+        presences = [item for item in client.published if item["topic"] == PRESENCE_TOPIC]
+        assert [json.loads(item["payload"])["mqttConnected"] for item in presences] == [False, True]
+        ready_presence = presences[1]
+        assert ready_presence["retain"] is True
+        assert ready_presence["qos"] == 1
+        assert json.loads(ready_presence["payload"])["capabilities"]["snapshotStream"] == 1
+
         states = [item for item in client.published if "/state/" in item["topic"]]
         assert [item["topic"] for item in states] == [
             "seenzus/v2/bridge/ha-demo/state/light.living_room"
@@ -183,6 +190,11 @@ async def test_loop_happy_connect_subscribes_then_presence_catalog_and_snapshot(
         topics = [item["topic"] for item in client.published]
         assert topics.index(CATALOG_TOPIC) < topics.index(
             "seenzus/v2/bridge/ha-demo/state/light.living_room"
+        )
+        assert (
+            client.published.index(catalogs[0])
+            < client.published.index(ready_presence)
+            < client.published.index(states[0])
         )
 
         assert coordinator.status == "active"
@@ -392,6 +404,7 @@ async def test_loop_publishes_startup_snapshot_once_across_reconnect_cycles(monk
     assert [item["topic"] for item in first_cycle.published] == [
         PRESENCE_TOPIC,
         CATALOG_TOPIC,
+        PRESENCE_TOPIC,
         "seenzus/v2/bridge/ha-demo/state/light.living_room",
     ]
     # Reconnect re-asserts presence AND the retained catalog (durable topology truth —
@@ -400,6 +413,7 @@ async def test_loop_publishes_startup_snapshot_once_across_reconnect_cycles(monk
     assert [item["topic"] for item in second_cycle.published] == [
         PRESENCE_TOPIC,
         CATALOG_TOPIC,
+        PRESENCE_TOPIC,
     ]
     # The reconnect catalog is tagged source="reconnect" and sent at qos 1 (reliable).
     reconnect_catalog = next(

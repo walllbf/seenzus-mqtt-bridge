@@ -10,6 +10,10 @@
 
 本文档以当前插件实现为准。
 
+可选的精简读取扩展见 [MQTT 精简读取 v1](COMPACT_READS_V1.zh-CN.md)：
+`snapshotStream=1` 协商接受/逐实体/结束三阶段快照，`serviceIndex=1` 读取服务名称集合。
+原 `GET /api/states` 和 `GET /api/services` 的完整数据语义保留。
+
 ## 1. 通用约定
 
 默认约定：
