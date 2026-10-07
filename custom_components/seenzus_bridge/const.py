@@ -18,6 +18,7 @@ CONF_MQTT_PASSWORD  = "mqtt_password"
 # 旧 entry 无此键 → 按 DEFAULT_MQTT_SCHEME 走裸 TCP 现状路径。
 CONF_MQTT_SCHEME = "mqtt_scheme"
 CONF_MQTT_WS_PATH = "mqtt_ws_path"
+CONF_MQTT_MAX_PACKET_SIZE_KIB = "mqtt_max_packet_size_kib"
 CONF_TOPIC_ROOT = "topic_root"
 CONF_BRIDGE_ID = "bridge_id"
 CONF_SOURCE_ID = "source_id"
@@ -65,6 +66,8 @@ VALID_MQTT_SCHEMES = {MQTT_SCHEME_TCP, MQTT_SCHEME_TCP_TLS, MQTT_SCHEME_WS, MQTT
 DEFAULT_MQTT_PORT      = 1883
 DEFAULT_MQTT_SCHEME = MQTT_SCHEME_TCP
 DEFAULT_MQTT_WS_PATH = "/mqtt"
+DEFAULT_MQTT_MAX_PACKET_SIZE_KIB = 1024
+MAX_MQTT_PACKET_SIZE_KIB = 262144
 # 各 scheme 的惯例默认端口。后端契约总是显式下发 port，这里仅作缺省兜底：
 # wss/mqtts 响应缺 port 时若一律回退 1883，会拿 TLS 去连明文 TCP 端口。
 DEFAULT_PORT_BY_MQTT_SCHEME = {

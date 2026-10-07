@@ -350,6 +350,7 @@ class FakeAiomqttClient(AsyncFakeMQTTClient):
             socket=lambda: None,
             loop_read=lambda: 0,
             loop_write=lambda: 0,
+            want_write=lambda: False,
             _sock_close=lambda: None,
             on_socket_open=None,
         )

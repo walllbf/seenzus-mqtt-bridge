@@ -607,24 +607,18 @@ async def test_seamless_finish_creates_entry_with_web_pairing_mqtt(monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_options_init_shows_mode_selection_form() -> None:
+async def test_options_init_offers_connection_settings_without_repairing() -> None:
     config_entry = type(
         "Entry",
         (),
         {"data": {"mqtt_host": "old-broker"}, "options": {}, "entry_id": "entry-1"},
     )()
     flow = SavanAIBridgeOptionsFlow(config_entry)
-    flow.async_show_form = lambda *, step_id, data_schema, errors=None: {
-        "type": "form",
-        "step_id": step_id,
-        "data_schema": data_schema,
-        "errors": errors or {},
-    }
-
     result = await flow.async_step_init()
 
+    assert result["type"] == FlowResultType.MENU
     assert result["step_id"] == "init"
-    assert _schema_field_names(result["data_schema"]) == {CONF_PAIRING_MODE}
+    assert result["menu_options"] == ["connection_settings", "pairing"]
 
 
 @pytest.mark.asyncio
