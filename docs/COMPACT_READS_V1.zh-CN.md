@@ -3,8 +3,11 @@
 这是应用与 Bridge 的可选扩展；沿用 command/result/state Topic 和现有 ACL。
 仅当前连接收到的有效 online presence 中 `capabilities.snapshotStream === 1`、
 `capabilities.serviceIndex === 1` 各自启用对应能力，未知版本视为不支持。
-应用等待 presence 最多 250ms，缺失时使用旧读取；同代次得到明确 404/501 后不再探测该能力。
-断线清除协商、缓存与在途完整性证据；撤回能力使对应在途读取失效。
+应用等待 `mqttConnected=true` 的 online presence 最多 250ms，未就绪的启动通知和 Catalog
+不提前结束该等待；到期仍缺失时使用旧读取。同代次得到明确 404/501 后不再探测该能力。
+Bridge 在 Catalog 发布并就绪后立即重发 retained online presence，不等待下一次心跳。
+断线清除协商、缓存与在途完整性证据；撤回能力同步使对应在途读取失效，即使能力立即恢复，
+旧流的迟到 State/Result 也不能完成新读取。旧聚合 Result 的完成证据仅属于对应请求，不能复用于 v1。
 
 ## 服务名称索引
 
@@ -63,6 +66,7 @@ Entity ID 使用 HA 的 ASCII `domain.object_id`，空集合摘要为 SHA-256(em
 v1 最多尝试三次；413/无效协议失败后停止，传输超时/暂时失败退避重试。
 心跳和 Catalog 不会中断已经接受的 v1 流或并行启动另一条流。
 409 忙碌会等待 150 秒后再试，重复心跳不能提前唤醒该等待。
+能力撤回时清除旧 v1 的忙碌等待期限，允许单次就绪通知触发旧路径恢复，无需依赖后续心跳。
 旧 GET /api/states 保留聚合 Result 和逐实体 full_snapshot；并发请求在活动快照期间返回 409。
 
 ## 报文预算与升级

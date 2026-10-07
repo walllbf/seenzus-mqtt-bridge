@@ -846,6 +846,9 @@ class BridgeCoordinator:
                 self.pairing_status = PAIRING_STATUS_BRIDGE_READY
                 self.pairing_last_error = None
             self._fire()
+            # Announce readiness before starting the snapshot or command pump;
+            # consumers must negotiate capabilities without waiting for a heartbeat.
+            await self._publish_presence("online", client=client)
             self._start_presence_heartbeat()
             self._start_state_worker_if_ready()
             self._start_catalog_refresh_if_ready()
