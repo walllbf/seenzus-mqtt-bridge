@@ -6,10 +6,12 @@ This is a local transport contract, not a real HA pairing or production acceptan
 from __future__ import annotations
 
 import asyncio
+import base64
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
 import os
+import random
 from pathlib import Path
 import socket
 import threading
@@ -28,7 +30,7 @@ from tests.test_mqtt_io_guard import _contexts, _receive_exact, _receive_frame, 
 
 
 @contextmanager
-def wire_broker(directory, transport):
+def wire_broker(directory, transport, max_packet_size=1_048_576):
     server_context, client_context = _contexts(directory)
     listener = socket.socket()
     listener.settimeout(10)
@@ -69,7 +71,7 @@ def wire_broker(directory, transport):
                         if kind == 14:
                             return
                         assert kind == 3
-                        assert len(packet) <= 1_048_576
+                        assert len(packet) <= max_packet_size
                         offset = 1
                         while packet[offset] & 128:
                             offset += 1
@@ -97,6 +99,59 @@ def wire_broker(directory, transport):
         worker.join(5)
         assert not worker.is_alive()
         assert not errors, repr(errors)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["tcp", "wss"])
+@pytest.mark.parametrize("budget_kib", [1024, 2048])
+async def test_stream_uses_configured_budget_and_keeps_followup_command_working(
+    tmp_path, monkeypatch, transport, budget_kib,
+):
+    """The merged compact stream and configurable writer share one wire budget."""
+    monkeypatch.setattr(er, "async_get", lambda _hass: FakeEntityRegistry())
+    hass = FakeHass()
+    attributes = {"full": base64.b64encode(random.Random(0).randbytes(840_000)).decode("ascii")}
+    hass.states.set("sensor.large", attributes=attributes)
+    hass.states.set("sensor.small", attributes={"value": "完整属性"})
+    hass.services.async_services = lambda: {"light": {"turn_on": object()}}
+    coordinator = BridgeCoordinator(hass, FakeConfigEntry(options={"mqtt_max_packet_size_kib": budget_kib}))
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    coordinator._command_prefix = "seenzus/v2/bridge/ha-demo/command"
+    with wire_broker(tmp_path, transport, max_packet_size=2_097_152) as (port, tls, messages):
+        client = aiomqtt.Client(
+            "127.0.0.1", port=port, transport="websockets" if transport == "wss" else "tcp",
+            tls_context=tls if transport == "wss" else None, timeout=5,
+        )
+        async with websocket_connection(client):
+            await coordinator._publish_presence("online", client=client, required=True)
+            for msg_id, path in [("stream", "/api/seenzus/states/snapshot"),
+                                 ("followup", "/api/seenzus/services/index")]:
+                await coordinator._handle_message(
+                    f"{coordinator._command_prefix}/{msg_id}",
+                    json.dumps({"msgId": msg_id, "method": "GET", "path": path}), client,
+                )
+            await coordinator._publish_result(client, "fence", success=True, status=200)
+    parsed = [(message, json.loads(message["payload"])) for message in messages]
+    presence = next(value for message, value in parsed if message["topic"].endswith("/presence"))
+    assert presence["maxPacketSize"] == budget_kib * 1024
+    assert presence["capabilities"]["snapshotStream"] == 1
+    stream_results = [value for message, value in parsed if message["topic"].endswith("/result/stream")]
+    assert stream_results[0]["status"] == 202
+    finished = stream_results[-1]
+    states = {value["entityId"]: value for message, value in parsed if "/state/" in message["topic"]}
+    assert "sensor.small" in states
+    if budget_kib == 1024:
+        assert finished["status"] == 413 and finished["data"]["outcome"] == "partial"
+        assert finished["data"]["oversizedCount"] == 1
+        assert "sensor.large" not in states
+    else:
+        assert finished["status"] == 200 and finished["data"]["outcome"] == "complete"
+        assert finished["data"]["sentCount"] == 2
+        assert states["sensor.large"]["attributes"] == attributes
+        assert max(message["packetBytes"] for message in messages) > 1_048_576
+    followup = next(value for message, value in parsed if message["topic"].endswith("/result/followup"))
+    assert followup["success"] is True and followup["data"]["isComplete"] is True
+    assert all(message["packetBytes"] <= budget_kib * 1024 for message in messages)
 
 
 @pytest.mark.asyncio

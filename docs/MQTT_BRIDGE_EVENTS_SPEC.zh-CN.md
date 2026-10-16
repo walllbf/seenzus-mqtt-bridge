@@ -34,6 +34,8 @@ topic 模板如下：
 - `topicRoot` 会去掉首尾 `/`，空值回退为 `seenzus/v2`
 - `bridgeId` 来自配置；如果未配置，插件使用 `ha-{entry_id前12位}`；配置值会转小写，并把非法字符替换成 `-`
 - 插件订阅 command 时使用 `{topicRoot}/bridge/{bridgeId}/command/+`
+- MQTT client ID 是 `seenzus-bridge-` 加完整 HA `entry_id` 的 SHA-256 前 128 位十六进制摘要；与 topic 中的 `bridgeId` 分离，配置项重启/重连稳定，不截断 ULID 的时间前缀。升级会切换 client ID；默认 MQTT 3.1.1 clean session，不迁移旧会话或改配对凭据。
+- 完整 MQTT PUBLISH 的本地预算默认 1 MiB，可通过集成选项显式配置为 1–262144 KiB。`presence.maxPacketSize` 以字节报告此发送预算，仅用于诊断，不代表 MQTT 3.1.1 协商到的 Broker 限额。消费端不能据此假设 Broker 接收能力。
 - 当前实现里 `presence` 和 `catalog` 使用 `retain=true`
 - 当 `bridgeId` 或 `topicRoot` 变化时，插件当前只主动清理旧 `presence` retained 消息；旧 `catalog` retained 消息不会主动清理
 - `state` 是事件流，不是 retained 快照
@@ -461,6 +463,7 @@ seenzus/v2/bridge/ha-demo/presence
 ### 6.6 Retain 语义
 
 - `presence` 使用 `retain=true`
+- 初始在线声明发送失败时，桥不会进入就绪状态。若完整离线声明超过本地预算，桥退回只含 `bridgeId`、`status=offline`、`mqttConnected=false`、`ts` 的精简声明；长 Topic 导致仍超限时再退回 `{"status":"offline"}`。消费端须按 Topic 识别桥，容忍元数据缺省并将缺省 `mqttConnected` 视为 false，完整错误保留在 HA 本地。桥的配置校验会拒绝无法容纳最小离线消息的预算；空 retained 消息不代替有效离线声明。
 - 新订阅方会先收到该桥最后一次 retained `presence`
 
 ### 6.7 后端要求

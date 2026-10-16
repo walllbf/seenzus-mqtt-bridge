@@ -108,8 +108,8 @@ async def test_invalid_service_keys_reject_the_entire_index(coordinator, registr
 
 
 @pytest.mark.asyncio
-async def test_oversized_service_index_is_an_explicit_failure(coordinator, monkeypatch):
-    monkeypatch.setattr(coordinator_module, "MAX_MQTT_PACKET_SIZE", 1024)
+async def test_oversized_service_index_is_an_explicit_failure(coordinator):
+    coordinator._entry.options["mqtt_max_packet_size_kib"] = 1
     coordinator.hass.services.async_services = lambda: {"light": {f"service_{i}": object() for i in range(200)}}
     client = AsyncFakeMQTTClient()
     await request(coordinator, client, "/api/seenzus/services/index")
@@ -131,8 +131,8 @@ async def test_empty_snapshot_has_explicit_empty_scope_and_completion(coordinato
 
 
 @pytest.mark.asyncio
-async def test_oversized_entity_is_reported_missing_while_remaining_states_continue(coordinator, monkeypatch, caplog):
-    monkeypatch.setattr(coordinator_module, "MAX_MQTT_PACKET_SIZE", 1024)
+async def test_oversized_entity_is_reported_missing_while_remaining_states_continue(coordinator, caplog):
+    coordinator._entry.options["mqtt_max_packet_size_kib"] = 1
     for entity in ["sensor.a", "sensor.large", "sensor.c"]:
         coordinator.hass.states.set(entity, attributes={"value": "private-data" * (200 if entity == "sensor.large" else 1)})
     client = AsyncFakeMQTTClient()

@@ -92,7 +92,7 @@ def test_compact_json_keeps_lone_surrogates_encodable_without_losing_data():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("suffix,qos,retain", [("catalog", 0, True), ("state/light.demo", 1, False)])
 async def test_publish_checks_full_packet_boundary_before_client(coordinator, suffix, qos, retain):
-    assert coordinator_module.MAX_MQTT_PACKET_SIZE == PACKET_LIMIT
+    assert coordinator.mqtt_max_packet_size == PACKET_LIMIT
     topic = f"seenzus/v2/bridge/ha-demo/{suffix}"
     candidate = "x" * PACKET_LIMIT
     payload = candidate[:PACKET_LIMIT - (len(_paho_packet(topic, candidate, qos)) - PACKET_LIMIT)]

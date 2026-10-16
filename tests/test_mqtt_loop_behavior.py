@@ -154,7 +154,9 @@ async def test_loop_happy_connect_subscribes_then_presence_catalog_and_snapshot(
         client = fake.clients[0]
         assert client.connect_kwargs["hostname"] == "broker.example.com"
         assert client.connect_kwargs["port"] == 1883
-        assert client.connect_kwargs["identifier"] == "seenzus-bridge-01kpcrmg"
+        assert client.connect_kwargs["identifier"] == (
+            "seenzus-bridge-3a6f48fc1e61cd6d2b5e51496c676789"
+        )
         # 裸 TCP entry（无 scheme）绝不附加 wss 支持引入的传输参数（issue #14）。
         assert not {"transport", "websocket_path", "tls_context"} & set(client.connect_kwargs)
         assert client.subscriptions == [{"topic": COMMAND_SUB, "qos": 1}]

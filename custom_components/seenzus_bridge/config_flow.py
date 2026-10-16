@@ -33,6 +33,7 @@ from .const import (
     CONF_ENABLE_TEMPLATE_API,
     CONF_EXPOSE_FULL_CONFIG,
     CONF_MQTT_HOST,
+    CONF_MQTT_MAX_PACKET_SIZE_KIB,
     CONF_MQTT_PASSWORD,
     CONF_MQTT_PORT,
     CONF_MQTT_SCHEME,
@@ -51,11 +52,13 @@ from .const import (
     DEFAULT_ENABLE_TEMPLATE_API,
     DEFAULT_EXPOSE_FULL_CONFIG,
     DEFAULT_MQTT_SCHEME,
+    DEFAULT_MQTT_MAX_PACKET_SIZE_KIB,
     DEFAULT_PAIRING_API_BASE,
     DEFAULT_MQTT_PORT,
     DEFAULT_PORT_BY_MQTT_SCHEME,
     MQTT_SCHEME_WS,
     MQTT_SCHEME_WSS,
+    MAX_MQTT_PACKET_SIZE_KIB,
     VALID_MQTT_SCHEMES,
     DEFAULT_PAIRING_MODE,
     DEFAULT_TOPIC_ROOT,
@@ -66,6 +69,11 @@ from .const import (
     normalize_pairing_mode,
 )
 from .dev_override import DevOverrideError, resolve_dev_pairing_api_base
+from .mqtt_settings import (
+    MqttPresenceBudgetError,
+    mqtt_packet_size_limit,
+    validate_mqtt_presence_budget,
+)
 from .pairing_bootstrap import (
     create_web_pairing_session,
     exchange_web_pairing_callback_code,
@@ -175,6 +183,32 @@ def _mode_schema(default_mode: str = DEFAULT_PAIRING_MODE) -> vol.Schema:
     )
 
 
+class _PacketSizeSelector(NumberSelector):
+    """Keep HA's number control while rejecting lossy input coercion."""
+
+    def __call__(self, data: object) -> int:
+        try:
+            return mqtt_packet_size_limit({CONF_MQTT_MAX_PACKET_SIZE_KIB: data}) // 1024
+        except ValueError as err:
+            raise vol.Invalid(str(err)) from err
+
+
+def _packet_size_fields(defaults: dict) -> dict:
+    """Fields shared by manual setup and connection-only options."""
+    try:
+        default = mqtt_packet_size_limit(defaults) // 1024
+    except ValueError:
+        default = DEFAULT_MQTT_MAX_PACKET_SIZE_KIB
+    return {
+        vol.Optional(CONF_MQTT_MAX_PACKET_SIZE_KIB, default=default): _PacketSizeSelector(
+            NumberSelectorConfig(
+                min=1, max=MAX_MQTT_PACKET_SIZE_KIB, step=1,
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
+    }
+
+
 def _schema(pairing_mode: str, defaults: dict | None = None) -> vol.Schema:
     d = _flatten_form_input(defaults)
     schema_fields: dict = {}
@@ -225,6 +259,7 @@ def _schema(pairing_mode: str, defaults: dict | None = None) -> vol.Schema:
                     CONF_BRIDGE_ID,
                     default=d.get(CONF_BRIDGE_ID, ""),
                 ): TextSelector(),
+                **_packet_size_fields(d),
                 vol.Optional(
                     CONF_ENABLE_STATE_EVENTS,
                     default=d.get(CONF_ENABLE_STATE_EVENTS, DEFAULT_ENABLE_STATE_EVENTS),
@@ -248,8 +283,15 @@ def _schema(pairing_mode: str, defaults: dict | None = None) -> vol.Schema:
     return vol.Schema(schema_fields)
 
 
-def _validate(data: dict) -> dict[str, str]:
+def _validate(data: dict, *, entry_id: str = "000000000000") -> dict[str, str]:
+    # Before entry creation, reserve the full 12-character generated ID suffix.
     errors: dict[str, str] = {}
+    try:
+        validate_mqtt_presence_budget(data, entry_id)
+    except MqttPresenceBudgetError:
+        errors[CONF_MQTT_MAX_PACKET_SIZE_KIB] = "mqtt_packet_size_too_small_for_topic"
+    except ValueError:
+        errors[CONF_MQTT_MAX_PACKET_SIZE_KIB] = "invalid_mqtt_packet_size"
     pairing_mode = str(data.get(CONF_PAIRING_MODE, DEFAULT_PAIRING_MODE)).strip()
     if pairing_mode == PAIRING_MODE_SEAMLESS:
         # 快速配对无表单字段（API 地址走内置默认 / dev 覆盖文件），无需校验。
@@ -688,10 +730,12 @@ class _QuickPairFlowMixin:
             # _build_quick_pair_entry_data 的同款注释）。
             data[CONF_MQTT_SCHEME] = DEFAULT_MQTT_SCHEME
             data[CONF_MQTT_WS_PATH] = ""
-            errors = _validate(data)
+            entry = getattr(self, "_config_entry", None)
+            errors = _validate(data, entry_id=entry.entry_id if entry is not None else "000000000000")
             if not errors:
                 # Manual (re)config carries no return link; clear any stale
                 # return-link / failure notification from an earlier quick pair.
+                data[CONF_MQTT_MAX_PACKET_SIZE_KIB] = mqtt_packet_size_limit(data) // 1024
                 _clear_quick_pair_notifications(self.hass)
                 return self.async_create_entry(title=self._entry_title, data=data)
 
@@ -757,6 +801,48 @@ class SavanAIBridgeOptionsFlow(_QuickPairFlowMixin, config_entries.OptionsFlow):
         return {**self._config_entry.data, **self._config_entry.options}
 
     async def async_step_init(self, user_input: dict | None = None):
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["connection_settings", "pairing"],
+        )
+
+    async def async_step_connection_settings(self, user_input: dict | None = None):
+        """Change the local budget without touching pairing or transport fields."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                budget_kib = mqtt_packet_size_limit(user_input) // 1024
+                validate_mqtt_presence_budget(
+                    {**self._current_config(), CONF_MQTT_MAX_PACKET_SIZE_KIB: budget_kib},
+                    self._config_entry.entry_id,
+                )
+            except MqttPresenceBudgetError:
+                errors[CONF_MQTT_MAX_PACKET_SIZE_KIB] = "mqtt_packet_size_too_small_for_topic"
+            except ValueError:
+                errors[CONF_MQTT_MAX_PACKET_SIZE_KIB] = "invalid_mqtt_packet_size"
+            else:
+                return self.async_create_entry(
+                    title=self._entry_title,
+                    data={
+                        **self._config_entry.options,
+                        CONF_MQTT_MAX_PACKET_SIZE_KIB: budget_kib,
+                    },
+                )
+        return self.async_show_form(
+            step_id="connection_settings",
+            data_schema=vol.Schema(_packet_size_fields(self._current_config())),
+            errors=errors,
+        )
+
+    def _finish_quick_pair(self, data: dict) -> config_entries.ConfigFlowResult:
+        # The budget is a local operator choice, absent from the App exchange.
+        # Re-pairing must not discard a value saved in entry.options.
+        current = self._current_config()
+        if CONF_MQTT_MAX_PACKET_SIZE_KIB in current:
+            data = {**data, CONF_MQTT_MAX_PACKET_SIZE_KIB: mqtt_packet_size_limit(current) // 1024}
+        return super()._finish_quick_pair(data)
+
+    async def async_step_pairing(self, user_input: dict | None = None):
         if user_input is not None:
             self._selected_pairing_mode = _default_pairing_mode(user_input)
             if self._selected_pairing_mode == PAIRING_MODE_MANUAL:
@@ -765,7 +851,7 @@ class SavanAIBridgeOptionsFlow(_QuickPairFlowMixin, config_entries.OptionsFlow):
             return await self.async_step_seamless({})
 
         return self.async_show_form(
-            step_id="init",
+            step_id="pairing",
             data_schema=_mode_schema(self._selected_pairing_mode),
             errors={},
         )

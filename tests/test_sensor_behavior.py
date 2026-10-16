@@ -87,6 +87,7 @@ def test_status_sensor_pins_identity_attributes_and_device_info() -> None:
         "last_cleanup_diagnostic": None,
         "mqtt_transport": "mqtt",
         "mqtt_ws_path": None,
+        "mqtt_max_packet_size": 1024 * 1024,
         "topic_root": "seenzus/v2",
         "bridge_id": "ha-web-bridge",
         "source_id": "ha-bridge-ha-web-bridge",

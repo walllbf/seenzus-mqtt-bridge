@@ -131,7 +131,7 @@ async def test_history_skips_only_oversized_entity(coordinator, monkeypatch, cap
 async def test_all_oversized_batch_still_yields_to_other_tasks(coordinator, monkeypatch, source):
     # A smaller wire budget keeps this scheduling test cheap; the one-MiB
     # production boundary is exercised by the mixed-batch tests above.
-    monkeypatch.setattr(coordinator_module, "MAX_MQTT_PACKET_SIZE", 4096)
+    coordinator._entry.options["mqtt_max_packet_size_kib"] = 4
     count = coordinator_module.SNAPSHOT_BATCH_SIZE + 1
     for index in range(count):
         coordinator.hass.states.set(

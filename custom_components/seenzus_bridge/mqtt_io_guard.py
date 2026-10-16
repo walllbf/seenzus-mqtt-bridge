@@ -1,10 +1,84 @@
-"""Protect pending WebSocket TLS writes and retire stale socket callbacks."""
+"""Serialize WebSocket writes without blocking reads; retire stale callbacks."""
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+import ssl
 from typing import Any
+
+
+class _WebSocketWriter:
+    """Adapt one Paho WebSocket's two send paths to an ordered TLS writer.
+
+    Both supported Paho versions send binary frames through ``_sendbuffer``
+    and send control replies directly from their parser. Queue those replies
+    without interrupting the binary frame (or an SSL WANT_WRITE retry).
+    Paho still owns framing, parsing, MQTT delivery and QoS acknowledgements.
+    """
+
+    def __init__(self, wrapper: Any, request_write: Callable[[], None]) -> None:
+        self._wrapper = wrapper
+        self._socket = wrapper._socket
+        self._request_write = request_write
+        self._controls: deque[bytes] = deque()
+        self._native_frame = wrapper._create_frame
+        self._native_send = wrapper._send_impl
+        wrapper._socket = self
+        wrapper._create_frame = self._create_frame
+        wrapper._send_impl = self._send_binary
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._socket, name)
+
+    @property
+    def has_controls(self) -> bool:
+        return bool(self._controls)
+
+    def _create_frame(self, opcode: int, data: bytearray, do_masking: int = 1) -> bytearray:
+        # RFC 6455 requires masking for *all* client frames, including PONG
+        # and CLOSE. Paho 1.6/2.1 explicitly pass do_masking=0 for those.
+        return self._native_frame(opcode, data, 1)
+
+    def send(self, data: Any) -> int:
+        if data is self._wrapper._sendbuffer:
+            # Preserve Paho's exact buffer and partial-write accounting.
+            return self._socket.send(data)
+        # Installed after the HTTP upgrade: the only other native send path
+        # is a complete control reply. Bound memory if a peer floods PINGs
+        # while it refuses to read; closing is safer than an unbounded queue.
+        if len(self._controls) >= 128:
+            raise ConnectionError("WebSocket control reply queue is full")
+        self._controls.append(bytes(data))
+        self._request_write()
+        return len(data)
+
+    def flush(self) -> bool:
+        if self._wrapper._sendbuffer:
+            return False
+        while self._controls:
+            data = self._controls[0]
+            try:
+                written = self._socket.send(data)
+            except (BlockingIOError, ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                return False
+            if written == 0:
+                return False
+            if written < len(data):
+                self._controls[0] = data[written:]
+                return False
+            self._controls.popleft()
+        return True
+
+    def _send_binary(self, data: bytes) -> int:
+        if not self._wrapper._sendbuffer and not self.flush():
+            raise BlockingIOError
+        return self._native_send(data)
+
+    def close(self) -> None:
+        self._controls.clear()
+        self._socket.close()
 
 
 @asynccontextmanager
@@ -33,11 +107,10 @@ def guard_websocket_io(client: Any) -> Callable[[], None]:
     """Install connection-scoped I/O protection before connecting.
 
     Paho answers WebSocket PING/CLOSE frames from its receive path with a
-    direct socket.send(). That must not interrupt a pending SSL write: OpenSSL
-    requires the retry to contain the same data and length. Pause application
-    reads while the current WebSocket frame is still being written, then restore
-    them as soon as Paho's writer completes it. Acknowledgement waits remain
-    concurrent; there is no lock around client.publish().
+    direct socket.send(). Queue those replies behind the current frame so
+    OpenSSL retries keep the same bytes and length. Reads remain active during
+    backpressure, allowing both peers to drain each other's data. QoS waits
+    remain concurrent; there is no lock around client.publish().
 
     Deferred reader/writer registration must also check the live socket when
     it runs: Paho may close it before the event loop gets to that callback.
@@ -48,12 +121,22 @@ def guard_websocket_io(client: Any) -> Callable[[], None]:
     HA runtime constraints select either
     aiomqtt 2.0/Paho 1.6 or aiomqtt 2.5/Paho 2.1; both pairs are tested in CI.
     """
+    # Import only after HA has selected/installed its compatible MQTT pair.
+    from aiomqtt import MqttError
+
     loop = asyncio.get_running_loop()
     paho_client = client._client
-    original_read = paho_client.loop_read
     original_write = paho_client.loop_write
-    paused_socket: Any | None = None
+    original_want_write = paho_client.want_write
     retired = False
+
+    def writer_for(sock: Any) -> _WebSocketWriter | None:
+        writer = getattr(sock, "_socket", None)
+        return writer if isinstance(writer, _WebSocketWriter) else None
+
+    def adapt_socket(sock: Any) -> None:
+        if hasattr(sock, "_send_impl") and writer_for(sock) is None:
+            _WebSocketWriter(sock, paho_client._call_socket_register_write)
 
     def retire_connection() -> None:
         nonlocal retired
@@ -73,37 +156,30 @@ def guard_websocket_io(client: Any) -> Callable[[], None]:
             return False
         return True
 
-    def update_reader() -> None:
-        nonlocal paused_socket
-        sock = paho_client.socket()
-        if sock is None or not socket_is_active(sock):
-            paused_socket = None
+    def fail_connection(err: Exception) -> None:
+        if client._disconnected.done():
             return
-        if getattr(sock, "_sendbuffer", b""):
-            if paused_socket is not sock:
-                loop.remove_reader(sock.fileno())
-                paused_socket = sock
-        elif paused_socket is sock:
-            paused_socket = None
-            loop.add_reader(sock.fileno(), read_ready, sock)
-            # TLS can already have decrypted input even when the fd is no
-            # longer readable, so explicitly give the restored reader a turn.
-            loop.call_soon(read_ready, sock)
+        if isinstance(err, OSError):
+            # Control writes bypass Paho's normal OSError -> MQTT error path.
+            # aiomqtt 2.0 re-raises this future's exception on context exit,
+            # so keep transport faults recognizable by the reconnect loop.
+            failure = MqttError(str(err))
+            failure.__cause__ = err
+            client._disconnected.set_exception(failure)
+        else:
+            client._disconnected.set_exception(err)
 
     def read_ready(sock: Any) -> None:
-        # Preserve aiomqtt's SSL-buffer draining and disconnect notification,
-        # while yielding to the writer whenever a frame is pending. Returning
-        # 0 from loop_read alone would spin aiomqtt's SSL pending() while loop.
+        # Preserve aiomqtt's SSL-buffer draining and disconnect notification.
         try:
             while socket_is_active(sock):
                 paho_client.loop_read()
-                if paho_client.socket() is not sock or getattr(sock, "_sendbuffer", b""):
+                if paho_client.socket() is not sock:
                     break
                 if not hasattr(sock, "pending") or sock.pending() == 0:
                     break
         except Exception as err:  # noqa: BLE001
-            if not client._disconnected.done():
-                client._disconnected.set_exception(err)
+            fail_connection(err)
 
     def write_ready(sock: Any) -> None:
         if not socket_is_active(sock):
@@ -111,8 +187,7 @@ def guard_websocket_io(client: Any) -> Callable[[], None]:
         try:
             paho_client.loop_write()
         except Exception as err:  # noqa: BLE001
-            if not client._disconnected.done():
-                client._disconnected.set_exception(err)
+            fail_connection(err)
 
     def install_reader(sock: Any) -> None:
         if not socket_is_active(sock):
@@ -124,32 +199,41 @@ def guard_websocket_io(client: Any) -> Callable[[], None]:
         client._misc_task = loop.create_task(client._misc_loop())
 
     def install_writer(sock: Any) -> None:
-        if socket_is_active(sock):
+        if socket_is_active(sock) and paho_client.want_write():
             loop.add_writer(sock.fileno(), write_ready, sock)
 
     def socket_open(mqtt_client: Any, userdata: Any, sock: Any) -> None:
         # Paho invokes these hooks from its connect executor as well as the
         # event loop. Check identity and descriptor only after dispatching.
+        # This hook runs before Paho sends CONNECT, after WebSocket upgrade.
+        # Install the instance adapter before the connect worker can send.
+        adapt_socket(sock)
         loop.call_soon_threadsafe(install_reader, sock)
 
     def socket_register_write(mqtt_client: Any, userdata: Any, sock: Any) -> None:
         loop.call_soon_threadsafe(install_writer, sock)
 
-    def guarded_read(*args: Any, **kwargs: Any) -> Any:
-        sock = paho_client.socket()
-        if sock is not None and getattr(sock, "_sendbuffer", b""):
-            update_reader()
-            return 0  # MQTT_ERR_SUCCESS; the pending writer owns this turn.
-        return original_read(*args, **kwargs)
-
     def guarded_write(*args: Any, **kwargs: Any) -> Any:
         try:
             return original_write(*args, **kwargs)
         finally:
-            update_reader()
+            sock = paho_client.socket()
+            if sock is not None and socket_is_active(sock):
+                writer = writer_for(sock)
+                if writer is not None:
+                    writer.flush()
+                if not paho_client.want_write():
+                    paho_client._call_socket_unregister_write()
 
-    paho_client.loop_read = guarded_read
+    def want_write() -> bool:
+        writer = writer_for(paho_client.socket())
+        return original_want_write() or (writer is not None and writer.has_controls)
+
     paho_client.loop_write = guarded_write
+    paho_client.want_write = want_write
     paho_client.on_socket_open = socket_open
     paho_client.on_socket_register_write = socket_register_write
+    # Also support an already-open socket (used by transport-level fixtures).
+    if (sock := paho_client.socket()) is not None:
+        adapt_socket(sock)
     return retire_connection
