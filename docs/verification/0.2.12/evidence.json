@@ -1,0 +1,566 @@
+{
+  "environment": {
+    "capturedAt": "2026-10-16T14:01:38.681473+00:00",
+    "bridgeCommit": "62c0df3c3181583d5c7dd48b14cece6b141d7b2d",
+    "bridgeZipSha256": "e80cd51206c04b3e79594ad6166d43afcd85ec34a48c35798affa2274c705944",
+    "appCommit": "040a966d637a07a0fc62f40346a6917b5fe32ea8",
+    "ha": [
+      {
+        "ha": 1,
+        "versions": {
+          "python": "3.14.6",
+          "homeassistant": "2026.10.1",
+          "aiomqtt": "2.5.1",
+          "paho-mqtt": "2.1.0"
+        },
+        "integrationExactZipFiles": 26,
+        "entryDigest": "5d96368ef20d1363",
+        "budgetBytes": 2097152
+      },
+      {
+        "ha": 2,
+        "versions": {
+          "python": "3.14.6",
+          "homeassistant": "2026.10.1",
+          "aiomqtt": "2.5.1",
+          "paho-mqtt": "2.1.0"
+        },
+        "integrationExactZipFiles": 26,
+        "entryDigest": "bfd7cc2c7a06227b",
+        "budgetBytes": 2097152
+      },
+      {
+        "ha": 3,
+        "versions": {
+          "python": "3.14.6",
+          "homeassistant": "2026.10.1",
+          "aiomqtt": "2.5.1",
+          "paho-mqtt": "2.1.0"
+        },
+        "integrationExactZipFiles": 26,
+        "entryDigest": "5ddcde5168447bb2",
+        "budgetBytes": 1048576
+      }
+    ],
+    "broker": "5.8.8",
+    "brokerMaxPacketBytes": 2097152,
+    "transport": "WSS",
+    "path": "/mqtt",
+    "tlsVerificationEnabled": true,
+    "appWebContainer": "c5768124fa8651a13fadb8b6313a15f375610f7a22c6f0d4485da3b5d0fa5e36",
+    "appWorkerContainer": "e9bc815a52a66e979f086f4de68119fe0a7d4b1466790633064f4dd0e9811788",
+    "syntheticOnly": true
+  },
+  "appEndToEnd": {
+    "capturedAt": "2026-10-16T14:08:50.880314+00:00",
+    "sources": 3,
+    "allCatalogSynced": true,
+    "totalDeviceProjectionCount": 75,
+    "fixtures": [
+      {
+        "ha": 1,
+        "expectedSyntheticSensors": 20,
+        "actualSyntheticSensors": 20,
+        "catalogSynced": true
+      },
+      {
+        "ha": 2,
+        "expectedSyntheticSensors": 20,
+        "actualSyntheticSensors": 20,
+        "catalogSynced": true
+      },
+      {
+        "ha": 3,
+        "expectedSyntheticSensors": 20,
+        "actualSyntheticSensors": 20,
+        "catalogSynced": true
+      }
+    ],
+    "authenticatedHttpControl": {
+      "status": 202,
+      "authenticated": true,
+      "service": "fan.turn_on",
+      "stateBefore": "off",
+      "stateAfter": "on",
+      "realHAStateChanged": true
+    },
+    "appWebContainer": "c5768124fa8651a13fadb8b6313a15f375610f7a22c6f0d4485da3b5d0fa5e36",
+    "appWorkerContainer": "e9bc815a52a66e979f086f4de68119fe0a7d4b1466790633064f4dd0e9811788"
+  },
+  "freshPairingProbe": {
+    "ha": 3,
+    "transport": "wss",
+    "label": "fresh-first-pair",
+    "selectedCount": 22,
+    "catalogCount": 36,
+    "snapshotStateCount": 39,
+    "finished": {
+      "version": 1,
+      "scope": "publishable_states",
+      "expectedCount": 39,
+      "entitiesSha256": "5b8afe6390bcf7904c01f0dc4dc952f4d3d8e44a5fbeac1ed93fdc0bfac35203",
+      "phase": "finished",
+      "outcome": "complete",
+      "sentCount": 39,
+      "omittedCount": 0,
+      "oversizedCount": 0
+    },
+    "services": 244,
+    "maxPacketBytes": 14114,
+    "totalBytes": 91261,
+    "recoveryMs": 465,
+    "fullAttributesAndTimesEqual": true,
+    "controlVerified": true,
+    "requests": [
+      "/api/seenzus/states/snapshot",
+      "/api/seenzus/device-catalog",
+      "/api/seenzus/services/index",
+      "/api/services/input_boolean/turn_on"
+    ],
+    "expectedEntityDigest": "5067138b77bfac8b0d2c5a5ff24afe75a888ba57e39a59bd356399ec865d128e"
+  },
+  "completeScopeProbe": {
+    "ha": 2,
+    "transport": "tcp",
+    "label": "stable-scope",
+    "selectedCount": 22,
+    "catalogCount": 36,
+    "snapshotStateCount": 39,
+    "finished": {
+      "version": 1,
+      "scope": "publishable_states",
+      "expectedCount": 39,
+      "entitiesSha256": "5b8afe6390bcf7904c01f0dc4dc952f4d3d8e44a5fbeac1ed93fdc0bfac35203",
+      "phase": "finished",
+      "outcome": "complete",
+      "sentCount": 39,
+      "omittedCount": 0,
+      "oversizedCount": 0
+    },
+    "services": 244,
+    "maxPacketBytes": 14114,
+    "totalBytes": 91261,
+    "recoveryMs": 411,
+    "fullScopeIdsEqual": true,
+    "fullAttributesAndTimesEqual": true,
+    "controlVerified": true,
+    "requests": [
+      "/api/seenzus/states/snapshot",
+      "/api/seenzus/device-catalog",
+      "/api/seenzus/services/index",
+      "/api/services/input_boolean/turn_on"
+    ],
+    "expectedEntityDigest": "5067138b77bfac8b0d2c5a5ff24afe75a888ba57e39a59bd356399ec865d128e"
+  },
+  "largeState": {
+    "ha": 1,
+    "transport": "wss",
+    "label": "medium",
+    "selectedCount": 22,
+    "catalogCount": 36,
+    "snapshotStateCount": 39,
+    "finished": {
+      "version": 1,
+      "scope": "publishable_states",
+      "expectedCount": 39,
+      "entitiesSha256": "1794b84f5455fb40708b9285bc9271f54ead2b2638f9aeb2f6af6d9ba6a0f525",
+      "phase": "finished",
+      "outcome": "complete",
+      "sentCount": 39,
+      "omittedCount": 0,
+      "oversizedCount": 0
+    },
+    "services": 244,
+    "maxPacketBytes": 1121035,
+    "totalBytes": 1211576,
+    "recoveryMs": 240,
+    "fullScopeIdsEqual": true,
+    "fullAttributesAndTimesEqual": true,
+    "controlVerified": true,
+    "requests": [
+      "/api/seenzus/states/snapshot",
+      "/api/seenzus/device-catalog",
+      "/api/seenzus/services/index",
+      "/api/services/input_boolean/turn_on"
+    ],
+    "expectedEntityDigest": "54eb4a5b8ff6bd93d7a7df94cca167b9cb983e2ab1886927ce36b91bad3c6af3"
+  },
+  "oversizedState": {
+    "ha": 3,
+    "transport": "wss",
+    "label": "oversized",
+    "selectedCount": 22,
+    "catalogCount": 37,
+    "snapshotStateCount": 39,
+    "finished": {
+      "version": 1,
+      "scope": "publishable_states",
+      "expectedCount": 40,
+      "entitiesSha256": "8210511ad30fd76571b6b454f2bfa870c10cfdacca656dec1e4529f46c66d777",
+      "phase": "finished",
+      "outcome": "partial",
+      "sentCount": 39,
+      "omittedCount": 1,
+      "oversizedCount": 1
+    },
+    "services": 244,
+    "maxPacketBytes": 14287,
+    "totalBytes": 65920,
+    "recoveryMs": 2911,
+    "fullScopeIdsEqual": true,
+    "fullAttributesAndTimesEqual": true,
+    "controlVerified": true,
+    "requests": [
+      "/api/seenzus/states/snapshot",
+      "/api/seenzus/services/index",
+      "/api/states/sensor.acceptance_blob",
+      "/api/services/input_boolean/turn_off"
+    ],
+    "expectedEntityDigest": "54eb4a5b8ff6bd93d7a7df94cca167b9cb983e2ab1886927ce36b91bad3c6af3"
+  },
+  "catalogFailure": {
+    "at": "2026-10-16T14:00:51.053846+00:00",
+    "catalogFixtureNameBytes": 2200000,
+    "localBudgetBytes": 1048576,
+    "error": "mqtt_packet_too_large: packet=6613784 limit=1048576",
+    "retainedOffline": true,
+    "noRetryObservationSeconds": 16,
+    "extraPresenceDuringObservation": 0,
+    "bridgeDisconnected": true
+  },
+  "catalogRecovery": {
+    "ha": 3,
+    "transport": "tcp",
+    "label": "catalog-recovered",
+    "selectedCount": 21,
+    "catalogCount": 35,
+    "snapshotStateCount": 38,
+    "finished": {
+      "version": 1,
+      "scope": "publishable_states",
+      "expectedCount": 38,
+      "entitiesSha256": "355c79c3e4859fc3cc5e6493b900414608c80e8746673f15e8f6265c328a2794",
+      "phase": "finished",
+      "outcome": "complete",
+      "sentCount": 38,
+      "omittedCount": 0,
+      "oversizedCount": 0
+    },
+    "services": 244,
+    "maxPacketBytes": 13727,
+    "totalBytes": 88521,
+    "recoveryMs": 120,
+    "fullAttributesAndTimesEqual": true,
+    "controlVerified": true,
+    "requests": [
+      "/api/seenzus/states/snapshot",
+      "/api/seenzus/device-catalog",
+      "/api/seenzus/services/index",
+      "/api/services/input_boolean/turn_on"
+    ],
+    "expectedEntityDigest": "40241ae14c46bebf0be48291e0c4ef22d22985c07d012e01a51a7015c207ba97"
+  },
+  "networkRecovery": {
+    "startedAt": "2026-10-16T14:03:41.779886+00:00",
+    "partitionSeconds": 150.89,
+    "recoverySeconds": 6.03,
+    "sameClientId": true,
+    "newConnection": true,
+    "recorderRecoveredOfflineState": true,
+    "observedMessages": 172,
+    "clientDigest": "d4950621b83a285f"
+  },
+  "restartIdentity": {
+    "sameClientId": true,
+    "newConnection": true,
+    "clientDigest": "d4950621b83a285f",
+    "beforeConnectedAt": "2026-10-16T13:56:28.385+00:00",
+    "afterConnectedAt": "2026-10-16T14:03:40.557+00:00"
+  },
+  "stability": {
+    "samples": 41,
+    "durationSeconds": 600.03,
+    "sameConnection": true,
+    "queueZero": true,
+    "first": {
+      "at": "2026-10-16T13:56:58.218889+00:00",
+      "elapsed": 0.02,
+      "clientDigest": "41b16746165d05bd",
+      "connected": true,
+      "connected_at": "2026-10-16T13:56:30.700+00:00",
+      "recv_msg": 121,
+      "send_msg": 0,
+      "inflight_cnt": 0,
+      "mqueue_len": 0,
+      "recv_pkt": 123,
+      "send_pkt": 83
+    },
+    "last": {
+      "at": "2026-10-16T14:06:58.227761+00:00",
+      "elapsed": 600.03,
+      "clientDigest": "41b16746165d05bd",
+      "connected": true,
+      "connected_at": "2026-10-16T13:56:30.700+00:00",
+      "recv_msg": 235,
+      "send_msg": 8,
+      "inflight_cnt": 0,
+      "mqueue_len": 0,
+      "recv_pkt": 255,
+      "send_pkt": 137
+    }
+  },
+  "wireBenchmarks": {
+    "tcp-100-metrics.json": {
+      "transport": "tcp",
+      "entities": 100,
+      "budgetBytes": 1048576,
+      "fullResponseDataBytes": 84500,
+      "legacy": {
+        "totalPublishBytes": 189371,
+        "maxPublishBytes": 83471,
+        "packets": 101,
+        "parseMs": 0.96,
+        "publisherAndCapturePeakBytes": 619932,
+        "recoveryMs": 173.79,
+        "resultStatus": [
+          200
+        ]
+      },
+      "stream": {
+        "totalPublishBytes": 108641,
+        "maxPublishBytes": 1079,
+        "packets": 102,
+        "parseMs": 0.31,
+        "publisherAndCapturePeakBytes": 194990,
+        "recoveryMs": 177.72,
+        "resultStatus": [
+          202,
+          200
+        ]
+      }
+    },
+    "tcp-2000-metrics.json": {
+      "transport": "tcp",
+      "entities": 2000,
+      "budgetBytes": 1048576,
+      "fullResponseDataBytes": 1690000,
+      "legacy": {
+        "totalPublishBytes": 2118236,
+        "maxPublishBytes": 1059,
+        "packets": 2001,
+        "parseMs": 5.94,
+        "publisherAndCapturePeakBytes": 8833294,
+        "recoveryMs": 3485.64,
+        "resultStatus": [
+          413
+        ]
+      },
+      "stream": {
+        "totalPublishBytes": 2158744,
+        "maxPublishBytes": 1079,
+        "packets": 2002,
+        "parseMs": 6.75,
+        "publisherAndCapturePeakBytes": 3035237,
+        "recoveryMs": 3285.72,
+        "resultStatus": [
+          202,
+          200
+        ]
+      }
+    },
+    "tcp-services-metrics.json": {
+      "full": {
+        "totalPublishBytes": 407667,
+        "parseMs": 0.72,
+        "publisherAndCapturePeakBytes": 2758094,
+        "readMs": 3.96
+      },
+      "index": {
+        "totalPublishBytes": 8113,
+        "parseMs": 0.06,
+        "publisherAndCapturePeakBytes": 75589,
+        "readMs": 2.31
+      }
+    },
+    "wss-100-metrics.json": {
+      "transport": "wss",
+      "entities": 100,
+      "budgetBytes": 1048576,
+      "fullResponseDataBytes": 84500,
+      "legacy": {
+        "totalPublishBytes": 189371,
+        "maxPublishBytes": 83471,
+        "packets": 101,
+        "parseMs": 0.39,
+        "publisherAndCapturePeakBytes": 636897,
+        "recoveryMs": 323.2,
+        "resultStatus": [
+          200
+        ]
+      },
+      "stream": {
+        "totalPublishBytes": 108641,
+        "maxPublishBytes": 1079,
+        "packets": 102,
+        "parseMs": 0.47,
+        "publisherAndCapturePeakBytes": 195069,
+        "recoveryMs": 244.76,
+        "resultStatus": [
+          202,
+          200
+        ]
+      }
+    },
+    "wss-2000-metrics.json": {
+      "transport": "wss",
+      "entities": 2000,
+      "budgetBytes": 1048576,
+      "fullResponseDataBytes": 1690000,
+      "legacy": {
+        "totalPublishBytes": 2118236,
+        "maxPublishBytes": 1059,
+        "packets": 2001,
+        "parseMs": 5.93,
+        "publisherAndCapturePeakBytes": 8833302,
+        "recoveryMs": 5127.49,
+        "resultStatus": [
+          413
+        ]
+      },
+      "stream": {
+        "totalPublishBytes": 2158744,
+        "maxPublishBytes": 1079,
+        "packets": 2002,
+        "parseMs": 7.69,
+        "publisherAndCapturePeakBytes": 3032132,
+        "recoveryMs": 5032.84,
+        "resultStatus": [
+          202,
+          200
+        ]
+      }
+    },
+    "wss-services-metrics.json": {
+      "full": {
+        "totalPublishBytes": 407667,
+        "parseMs": 0.45,
+        "publisherAndCapturePeakBytes": 2807826,
+        "readMs": 379.24
+      },
+      "index": {
+        "totalPublishBytes": 8113,
+        "parseMs": 0.12,
+        "publisherAndCapturePeakBytes": 92522,
+        "readMs": 9.67
+      }
+    }
+  },
+  "localDriverHashes": [
+    {
+      "path": "output/WH/final-acceptance/probe.ts",
+      "sha256": "75ee83e6e8a8ac1ec85885f7b52b947498c548d50bbf66f4fbb7b21b02da6da5"
+    },
+    {
+      "path": "output/WH/final-acceptance/network-test.py",
+      "sha256": "9286f0e2742479e5ff867a32dc39968e1396a28396bc2b2ef6618fec8cbf4a40"
+    },
+    {
+      "path": "output/WH/final-acceptance/catalog-test.py",
+      "sha256": "95f676e88f3939b012f849e50d9b00623754b424b737df97814c6c4af4500e38"
+    },
+    {
+      "path": "output/WH/final-acceptance/observe.py",
+      "sha256": "8b8c7ee3e05eabc78245b8ccf1cb54c0796ab2115a8f56b39bd671ee6106311d"
+    },
+    {
+      "path": "output/WH/final-acceptance/seed.ts",
+      "sha256": "e8e0a9153ee270ade86abf5bde625f9b6a1aa0652ed39398e9bd467f4f9189c5"
+    }
+  ],
+  "productionReadOnlyDeploymentSnapshot": {
+    "appCommit": "040a966d637a07a0fc62f40346a6917b5fe32ea8",
+    "webDeployment": "4c23b69a-7b5c-47fd-8966-422d05539708",
+    "workerDeployment": "ecd5a775-f35e-46f3-8af0-47947c26fdb6",
+    "brokerDeployment": "5eb5b491-179f-4ec0-b812-11c199d5c0ee",
+    "status": "SUCCESS",
+    "note": "Read-only metadata, not execution of this test suite against production."
+  },
+  "validation": {
+    "bridgeCi": {
+      "run": 38908922934,
+      "eachCorePassed": 444,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "bridgeLocalWire": {
+      "passed": 10,
+      "failed": 0,
+      "skipped": 0
+    },
+    "appCheck": "passed",
+    "appPostgres17": {
+      "schemaProofPassed": 3,
+      "requiredSuiteFiles": 49,
+      "passed": 462,
+      "failed": 0,
+      "skipped": 0,
+      "semanticAnchors": 119
+    },
+    "appCi": {
+      "run": 38897629038,
+      "status": "not_started_billing_limit"
+    },
+    "mqtt-tests.json": {
+      "files": 3,
+      "passed": 224,
+      "failed": 0,
+      "skipped": 0,
+      "success": true,
+      "sha256": "2372a65d31e54fc9ed867c0c6148dc70a898ed10b488bc3cbb4f94dd87ff7606"
+    },
+    "failed-rerun.json": {
+      "files": 119,
+      "passed": 1355,
+      "failed": 0,
+      "skipped": 0,
+      "success": true,
+      "sha256": "ca37080e8f634bbdce0d377fa3111d97282184f4c42684878e80d0de7d5d3f91"
+    },
+    "assertion-rerun.json": {
+      "files": 11,
+      "passed": 134,
+      "failed": 37,
+      "skipped": 11,
+      "success": false,
+      "sha256": "8bc2210ab18ad952cd0ce1a0cb6de5fa9ce82a6c80cb8b86dbb4519aca6503c8"
+    },
+    "workflow-rerun.json": {
+      "files": 1,
+      "passed": 20,
+      "failed": 0,
+      "skipped": 0,
+      "success": true,
+      "sha256": "ed960c1b1fddca015fb35aca4876222744119defaa5b13da910b73574d038f22"
+    },
+    "linux-tests-final.json": {
+      "files": 3,
+      "passed": 19,
+      "failed": 0,
+      "skipped": 0,
+      "success": true,
+      "sha256": "a0b56e6d6dded313b332e4e63a2fef964a8cf2a503c87c4c77024e650a56ef46"
+    },
+    "fullUnitInitial": {
+      "passedFiles": 919,
+      "failedFiles": 130,
+      "skippedFiles": 112,
+      "passedTests": 10041,
+      "failedTests": 47,
+      "skippedTests": 867,
+      "uncaughtErrors": 1,
+      "result": "failed; environment-related failures rerun separately, see App runbook",
+      "logSha256": "c180bd4cf9407bef452a000cea77b3416e22aa2d88abeebfaffdc4202a48c941"
+    }
+  }
+}
