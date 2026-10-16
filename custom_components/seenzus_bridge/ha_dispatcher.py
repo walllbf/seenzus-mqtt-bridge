@@ -115,6 +115,19 @@ async def dispatch(
         descriptions = await service_helper.async_get_all_descriptions(hass)
         return DispatchResult(status=200, data=descriptions, touched_entities=[])
 
+    if method == "GET" and path == "/api/seenzus/services/index":
+        services = []
+        for domain, definitions in hass.services.async_services().items():
+            if not re.fullmatch(r"[a-z0-9_]+", domain):
+                return DispatchResult(status=500, data={"error": "invalid_service_registry"}, touched_entities=[])
+            for service in definitions:
+                if not re.fullmatch(r"[a-z0-9_]+", service):
+                    return DispatchResult(status=500, data={"error": "invalid_service_registry"}, touched_entities=[])
+                services.append(f"{domain}.{service}")
+        return DispatchResult(status=200, data={
+            "version": 1, "isComplete": True, "count": len(services), "services": sorted(services),
+        }, touched_entities=[])
+
     state_match = re.fullmatch(r"/api/states/(.+)", path)
     if method == "GET" and state_match:
         entity_id = state_match.group(1)

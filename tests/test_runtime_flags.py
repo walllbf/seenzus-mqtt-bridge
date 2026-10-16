@@ -96,6 +96,8 @@ async def test_publish_presence_includes_expected_payload(runtime_coordinator, b
     assert payload["capabilities"] == {
         "persistentOperationIdempotency": True,
         "recorderHistoryReplay": True,
+        "serviceIndex": 1,
+        "snapshotStream": 1,
     }
     assert payload["droppedStateEventCount"] == 0
 

@@ -158,7 +158,10 @@ async def test_real_registry_catalog_and_snapshot_preserve_identity_and_evidence
         "vendor_custom", "test", "custom-1", device_id=device.id,
         entity_category=EntityCategory.DIAGNOSTIC, suggested_object_id="attached",
     )
-    registry.async_update_entity(attached.entity_id, area_id=override_area.id)
+    # An entity needs its own name to override its device's area.
+    registry.async_update_entity(
+        attached.entity_id, name="Test entity", area_id=override_area.id,
+    )
     hass.states.async_set(attached.entity_id, "unknown", {"unit_of_measurement": "W"})
     hass.states.async_set("vendor_custom.orphan", "on")
     hass.states.async_set("input_boolean.helper", "off")

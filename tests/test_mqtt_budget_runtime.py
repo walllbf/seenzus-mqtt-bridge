@@ -162,7 +162,7 @@ async def test_invalid_budget_stops_before_opening_connection(monkeypatch):
 @pytest.mark.asyncio
 async def test_catalog_failure_retracts_online_when_offline_diagnostics_exceed_budget(monkeypatch):
     coordinator, fake = _make_coordinator(
-        monkeypatch, data={**HAPPY_ENTRY_DATA, KEY: 1, "source_name": "x" * 500},
+        monkeypatch, data={**HAPPY_ENTRY_DATA, KEY: 1, "source_name": "x" * 450},
     )
     coordinator._on_ha_started(None)
     monkeypatch.setattr(coordinator, "_build_device_catalog_payload", lambda **_kwargs: {
