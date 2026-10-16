@@ -9,7 +9,7 @@ from homeassistant.helpers.config_validation import custom_serializer
 # older supported Core uses voluptuous_serialize, which is no longer installed
 # by the newer Core. Neither dependency belongs to the bridge itself.
 try:
-    from homeassistant.helpers.config_validation import to_field_list
+    from probatio import to_field_list
 except ImportError:
     from voluptuous_serialize import convert as to_field_list
 
