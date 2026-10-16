@@ -24,6 +24,11 @@ Bridge #69 与 App JoeWu-explorer/Seenzus#2045，执行日期 2026-10-16（Asia/
 该元数据不表示本次测试在生产执行。模型配置使用无效测试 key 与拒绝连接的 loopback 端口；不依赖模型输出。
 账号先经真实 Auth API 建立已验证账号夹具，再通过正常密码登录、会话门和地点授权配对。
 
+首次配对阶段 Web 容器为 `ee106714ca5c9021843f01925ecc48abaca511e667c4112b0325c8e124495fee`，
+对应 JSON 的原始 `environment` 采样。最终 HTTP 风扇控制前，为补齐模型构造配置和 skills 资源重建 Web，
+该阶段容器为 `c5768124fa8651a13fadb8b6313a15f375610f7a22c6f0d4485da3b5d0fa5e36`，
+对应 `appEndToEnd`。两阶段源码和 Web 构建产物未变，Worker 未重建；分别保留部署证据，不将后者追溯用于首次配对。
+
 ## 实际结果
 
 | 用例 | 预期与实际 |

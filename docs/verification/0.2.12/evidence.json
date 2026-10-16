@@ -47,7 +47,7 @@
     "transport": "WSS",
     "path": "/mqtt",
     "tlsVerificationEnabled": true,
-    "appWebContainer": "c5768124fa8651a13fadb8b6313a15f375610f7a22c6f0d4485da3b5d0fa5e36",
+    "appWebContainer": "ee106714ca5c9021843f01925ecc48abaca511e667c4112b0325c8e124495fee",
     "appWorkerContainer": "e9bc815a52a66e979f086f4de68119fe0a7d4b1466790633064f4dd0e9811788",
     "syntheticOnly": true
   },
@@ -562,5 +562,18 @@
       "result": "failed; environment-related failures rerun separately, see App runbook",
       "logSha256": "c180bd4cf9407bef452a000cea77b3416e22aa2d88abeebfaffdc4202a48c941"
     }
-  }
+  },
+  "deploymentPhases": [
+    {
+      "scope": "first pairing and initial MQTT probes",
+      "webContainer": "ee106714ca5c9021843f01925ecc48abaca511e667c4112b0325c8e124495fee",
+      "environmentEvidence": "environment"
+    },
+    {
+      "scope": "authenticated App HTTP fan control and final projection counts",
+      "webContainer": "c5768124fa8651a13fadb8b6313a15f375610f7a22c6f0d4485da3b5d0fa5e36",
+      "environmentEvidence": "appEndToEnd",
+      "change": "model-construction test configuration and skills resources completed; source/build unchanged; Worker unchanged"
+    }
+  ]
 }
