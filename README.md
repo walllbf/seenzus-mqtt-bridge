@@ -75,7 +75,9 @@ config/custom_components/seenzus_bridge/
 | 配对模式 | `seamless` / `manual` | `seamless` |
 | 配对 API 地址（快速配对） | 界面无此项；走内置生产地址，联调用 `<config>/seenzus_bridge_dev.json` 覆盖 | 内置生产地址 |
 | MQTT Broker 地址 | 手动配置时填写的公网 MQTT 地址 | - |
-| MQTT 端口 | Broker 端口 | `1883` |
+| MQTT 传输协议 | 远程 Broker 仅允许 `mqtts` / `wss`；`mqtt` / `ws` 仅限明确的本地 IP | `mqtts` |
+| MQTT 端口 | 留空按协议选择；自定义端口请明确填写 | `mqtts:8883` / `wss:443` |
+| WebSocket 路径 | 仅 `ws` / `wss` 使用 | `/mqtt` |
 | MQTT 用户名/密码 | Broker 认证 | 空 |
 | MQTT 最大报文大小（KiB） | 本地发送预算，整数 1–262144；须不高于 Broker 限制 | `1024`（1 MiB） |
 | V2 Topic 根路径 | v2 协议根路径 | `seenzus/v2` |
@@ -102,7 +104,27 @@ MQTT client ID 使用完整 HA 配置项 ID 的 128 位 SHA-256 摘要，避免�
 
 - **专用 Broker + 强密码**：不要与不可信方共用 Broker；为本桥单独分配账号。
 - **按 bridge 配置 Topic ACL**：`{topicRoot}/bridge/{bridgeId}/command/+` 的 **publish 权限只授予可信后端**；`result / state / presence / catalog` 的 subscribe 权限也应限制到可信方。`bridgeId` 会通过 retained `presence`/`catalog` 广播，不可视为秘密。
-- **启用 TLS**：尽量使用 8883/TLS 连接 Broker，避免凭证与设备状态明文传输。
+- **远程连接强制 TLS**：使用 `mqtts`（通常 8883）或 `wss`（通常 443），使用系统 CA 验证证书及主机名，无跳过校验开关。不会在证书错误或连接失败时降级成明文。
+
+### v0.2.13 连接安全与升级
+
+快速配对返回的 `mqtt.scheme` 必须明确且有效；缺失、空值、未知协议或远程
+`mqtt` / `ws` 均拒绝保存。手动配置支持选择 `mqtts` / `wss`、端口和 WebSocket 路径。
+这一规则也在每次实际连接前执行，旧配置和 options 覆盖都不能绕过。
+
+已有 `mqtts` / `wss` 配置可继续使用。**旧的远程明文配置或没有协议字段的配置会停止连接**：
+在 HA 的「配置 → 重新配对或手动配置」选择安全协议及 Broker 的 TLS 端口，
+或者在服务端正确下发安全地址后重新快速配对。不会擅自把旧端口改为 8883，
+也不会清除原有凭据、Bridge ID 或 Topic。保存后重载，确认状态恢复在线。
+
+本地明文仅允许显式 `mqtt` / `ws` 和 IP 字面量：RFC1918、IPv4 回环/链路本地、
+IPv6 回环/ULA/链路本地地址。域名（包括 `localhost` / `.local`）一律需要 TLS，
+避免 DNS 解析与实际连接之间的地址变化绕过检查。公网、未指定、组播、保留、
+文档和 IPv4-mapped IPv6 地址不在明文允许范围内。本地明文仍可能被所在网络监听，
+优先使用 TLS；不要把公网转发入口当成本地地址。
+
+这取代早期部署说明中的“先用明文、TLS 后续配置”策略；服务端内部连接方式不由
+此插件修改，服务端下发给 HA 的公网地址必须独立配置为安全端点。
 
 ### 默认安全开关（v0.1.4+）
 
@@ -429,6 +451,12 @@ docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 ---
 
 ## 版本变更记录
+
+### v0.2.13 (2026-10-19)
+
+- 修复 HACS 收录审核指出的远程 MQTT 明文传输问题：配置、配对与实际连接统一强制 TLS，缺失或未知协议不再回退 TCP
+- 手动配置支持 MQTT over TLS / 安全 WebSocket、端口及路径，保留系统证书和主机名校验
+- 旧的不安全配置停止连接并提示重新配置；本地明文仅限显式选择的内网或回环 IP，见上方升级说明
 
 ### v0.2.12 (2026-10-16)
 

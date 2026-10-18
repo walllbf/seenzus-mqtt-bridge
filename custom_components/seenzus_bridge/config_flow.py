@@ -54,12 +54,10 @@ from .const import (
     DEFAULT_MQTT_SCHEME,
     DEFAULT_MQTT_MAX_PACKET_SIZE_KIB,
     DEFAULT_PAIRING_API_BASE,
-    DEFAULT_MQTT_PORT,
     DEFAULT_PORT_BY_MQTT_SCHEME,
     MQTT_SCHEME_WS,
     MQTT_SCHEME_WSS,
     MAX_MQTT_PACKET_SIZE_KIB,
-    VALID_MQTT_SCHEMES,
     DEFAULT_PAIRING_MODE,
     DEFAULT_TOPIC_ROOT,
     DOMAIN,
@@ -69,6 +67,7 @@ from .const import (
     normalize_pairing_mode,
 )
 from .dev_override import DevOverrideError, resolve_dev_pairing_api_base
+from .mqtt_transport import MqttTransportError, validate_mqtt_transport
 from .mqtt_settings import (
     MqttPresenceBudgetError,
     mqtt_packet_size_limit,
@@ -228,12 +227,25 @@ def _schema(pairing_mode: str, defaults: dict | None = None) -> vol.Schema:
                     CONF_MQTT_HOST,
                     default=d.get(CONF_MQTT_HOST, ""),
                 ): TextSelector(),
+                vol.Required(
+                    CONF_MQTT_SCHEME,
+                    default=d.get(CONF_MQTT_SCHEME) or DEFAULT_MQTT_SCHEME,
+                ): vol.In({
+                    "mqtts": "MQTT over TLS",
+                    "wss": "MQTT over secure WebSocket",
+                    "mqtt": "MQTT (local IP only)",
+                    "ws": "WebSocket (local IP only)",
+                }),
                 vol.Optional(
                     CONF_MQTT_PORT,
-                    default=d.get(CONF_MQTT_PORT, DEFAULT_MQTT_PORT),
+                    description={"suggested_value": d.get(CONF_MQTT_PORT)},
                 ): NumberSelector(
                     NumberSelectorConfig(min=1, max=65535, mode=NumberSelectorMode.BOX)
                 ),
+                vol.Optional(
+                    CONF_MQTT_WS_PATH,
+                    default=d.get(CONF_MQTT_WS_PATH) or "/mqtt",
+                ): TextSelector(),
                 vol.Optional(
                     CONF_MQTT_USERNAME,
                     default=d.get(CONF_MQTT_USERNAME, ""),
@@ -299,6 +311,11 @@ def _validate(data: dict, *, entry_id: str = "000000000000") -> dict[str, str]:
 
     if not str(data.get(CONF_MQTT_HOST, "")).strip():
         errors[CONF_MQTT_HOST] = "host_required"
+    else:
+        try:
+            validate_mqtt_transport(data)
+        except MqttTransportError as err:
+            errors[CONF_MQTT_SCHEME] = str(err)
     return errors
 
 
@@ -312,17 +329,9 @@ def _build_quick_pair_entry_data(
     if not host:
         raise ValueError("quick_pair_mqtt_missing")
 
-    # 传输 scheme（issue #14）：web-pair 兑换响应下发。`or ""` 归一显式 JSON
-    # null（str(None) 会变 "None"）；未知值按裸 TCP 回退并告警，避免坏值直接
-    # 炸掉连接层。
-    scheme = str(mqtt.get("scheme") or "").strip().lower()
-    if scheme and scheme not in VALID_MQTT_SCHEMES:
-        _LOGGER.warning(
-            "Quick pair returned unknown mqtt scheme %r; falling back to bare TCP",
-            scheme,
-        )
-        scheme = ""
-    scheme = scheme or DEFAULT_MQTT_SCHEME
+    scheme = validate_mqtt_transport({
+        CONF_MQTT_HOST: host, CONF_MQTT_SCHEME: mqtt.get("scheme"),
+    })
     ws_path = ""
     if scheme in (MQTT_SCHEME_WS, MQTT_SCHEME_WSS):
         raw_ws_path = str(mqtt.get("path") or "").strip()
@@ -341,11 +350,7 @@ def _build_quick_pair_entry_data(
         CONF_MQTT_PORT: int(mqtt.get("port") or DEFAULT_PORT_BY_MQTT_SCHEME[scheme]),
         CONF_MQTT_USERNAME: str(mqtt.get("username", "")).strip(),
         CONF_MQTT_PASSWORD: str(mqtt.get("password", "")).strip(),
-        # scheme/ws_path 总是显式落盘（裸 TCP 即 "mqtt"/""）：options 流重配对走
-        # {**entry.data, **entry.options} 合并，若裸 TCP 结果省略这两个键，旧
-        # entry.data 里残留的 wss/path 会穿透合并继续生效，把新的裸 TCP broker
-        # 拨成 websockets+TLS。旧 entry（升级前创建）无键 → coordinator 按缺省
-        # 走裸 TCP 现状路径。
+        # Always replace both keys so stale options cannot change the transport.
         CONF_MQTT_SCHEME: scheme,
         CONF_MQTT_WS_PATH: ws_path,
     }
@@ -528,6 +533,10 @@ class _QuickPairFlowMixin:
                 api_base=self._quick_pair_api_base,
                 status_result=status_result,
             )
+        except MqttTransportError as err:
+            self._quick_pair_diagnostic = {"error_code": str(err)}
+            _record_quick_pair_diagnostic(self.hass, str(err), self._quick_pair_diagnostic)
+            return self._reshow_seamless_form(str(err))
         except ValueError:
             _record_quick_pair_diagnostic(self.hass, "quick_pair_mqtt_missing", self._quick_pair_diagnostic)
             return self._reshow_seamless_form("quick_pair_mqtt_missing")
@@ -725,11 +734,15 @@ class _QuickPairFlowMixin:
             data = _flatten_form_input(user_input)
             data[CONF_PAIRING_MODE] = PAIRING_MODE_MANUAL
             data[CONF_CONFIG_SOURCE] = CONFIG_SOURCE_MANUAL
-            # 手动配置只支持裸 TCP（issue #14 明确不做 ws 的手动 UI）。显式落盘
-            # 以覆盖 options 合并里可能残留的旧 wss scheme/path（见
-            # _build_quick_pair_entry_data 的同款注释）。
-            data[CONF_MQTT_SCHEME] = DEFAULT_MQTT_SCHEME
-            data[CONF_MQTT_WS_PATH] = ""
+            # New manual forms default to TLS; saved/paired entries never do.
+            data.setdefault(CONF_MQTT_SCHEME, DEFAULT_MQTT_SCHEME)
+            scheme = str(data[CONF_MQTT_SCHEME] or "").strip().lower()
+            data[CONF_MQTT_SCHEME] = scheme
+            data.setdefault(CONF_MQTT_PORT, DEFAULT_PORT_BY_MQTT_SCHEME.get(scheme, 8883))
+            path = str(data.get(CONF_MQTT_WS_PATH) or "/mqtt").strip()
+            data[CONF_MQTT_WS_PATH] = (
+                "/" + path.lstrip("/") if scheme in ("ws", "wss") else ""
+            )
             entry = getattr(self, "_config_entry", None)
             errors = _validate(data, entry_id=entry.entry_id if entry is not None else "000000000000")
             if not errors:

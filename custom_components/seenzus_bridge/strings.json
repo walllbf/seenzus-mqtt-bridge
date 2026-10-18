@@ -22,12 +22,18 @@
         "sections": {
           "mqtt_settings": {
             "name": "MQTT 连接参数",
-            "description": "默认折叠。首次配置或更换 Broker 时展开填写。",
+            "description": "远程 Broker 必须使用 MQTT over TLS 或安全 WebSocket。明文连接仅允许明确的内网或回环 IP。",
             "data": {
               "mqtt_host": "MQTT Broker 地址",
               "mqtt_port": "MQTT 端口",
               "mqtt_username": "MQTT 用户名",
-              "mqtt_password": "MQTT 密码"
+              "mqtt_password": "MQTT 密码",
+              "mqtt_scheme": "MQTT 传输协议",
+              "mqtt_ws_path": "WebSocket 路径（仅 ws/wss）"
+            },
+            "data_description": {
+              "mqtt_port": "留空使用所选协议的标准端口：mqtts 8883、wss 443、mqtt 1883、ws 80。自定义端口请明确填写。",
+              "mqtt_ws_path": "安全 WebSocket 通常使用 /mqtt，按 Broker 配置填写。"
             }
           },
           "advanced_settings": {
@@ -65,7 +71,9 @@
       "quick_pair_callback_timeout": "未收到回跳确认，请确认外部页面已完成授权并返回 Home Assistant",
       "quick_pair_missing_context": "快速配对会话已丢失，请重新发起",
       "invalid_mqtt_packet_size": "请输入 1–262144 范围内的整数（KiB），并确保不超过 Broker 的报文大小限制",
-      "mqtt_packet_size_too_small_for_topic": "此上限无法容纳当前 Topic 的最小离线消息，请提高上限或缩短 Topic / Bridge ID"
+      "mqtt_packet_size_too_small_for_topic": "此上限无法容纳当前 Topic 的最小离线消息，请提高上限或缩短 Topic / Bridge ID",
+      "mqtt_transport_required": "MQTT 传输协议缺失或无效。请选择 mqtts/wss；快速配对时请联系服务端修正协议后重新配对，不会回退为明文连接。",
+      "mqtt_tls_required": "此 Broker 必须使用 TLS（mqtts 或 wss）。明文 MQTT/WebSocket 仅允许明确的内网或回环 IP，请检查协议与端口。"
     },
     "abort": {
       "already_configured": "seenzus MQTT Bridge 已经配置过了，只允许添加一个实例",
@@ -95,12 +103,18 @@
         "sections": {
           "mqtt_settings": {
             "name": "MQTT 连接参数",
-            "description": "默认折叠。修改 Broker 地址、端口或账号时展开。",
+            "description": "远程 Broker 必须使用 MQTT over TLS 或安全 WebSocket。明文连接仅允许明确的内网或回环 IP。",
             "data": {
               "mqtt_host": "MQTT Broker 地址",
               "mqtt_port": "MQTT 端口",
               "mqtt_username": "MQTT 用户名",
-              "mqtt_password": "MQTT 密码"
+              "mqtt_password": "MQTT 密码",
+              "mqtt_scheme": "MQTT 传输协议",
+              "mqtt_ws_path": "WebSocket 路径（仅 ws/wss）"
+            },
+            "data_description": {
+              "mqtt_port": "留空使用所选协议的标准端口：mqtts 8883、wss 443、mqtt 1883、ws 80。自定义端口请明确填写。",
+              "mqtt_ws_path": "安全 WebSocket 通常使用 /mqtt，按 Broker 配置填写。"
             }
           },
           "advanced_settings": {
@@ -156,10 +170,20 @@
       "quick_pair_callback_timeout": "未收到回跳确认，请确认外部页面已完成授权并返回 Home Assistant",
       "quick_pair_missing_context": "快速配对会话已丢失，请重新发起",
       "invalid_mqtt_packet_size": "请输入 1–262144 范围内的整数（KiB），并确保不超过 Broker 的报文大小限制",
-      "mqtt_packet_size_too_small_for_topic": "此上限无法容纳当前 Topic 的最小离线消息，请提高上限或缩短 Topic / Bridge ID"
+      "mqtt_packet_size_too_small_for_topic": "此上限无法容纳当前 Topic 的最小离线消息，请提高上限或缩短 Topic / Bridge ID",
+      "mqtt_transport_required": "MQTT 传输协议缺失或无效。请选择 mqtts/wss；快速配对时请联系服务端修正协议后重新配对，不会回退为明文连接。",
+      "mqtt_tls_required": "此 Broker 必须使用 TLS（mqtts 或 wss）。明文 MQTT/WebSocket 仅允许明确的内网或回环 IP，请检查协议与端口。"
     },
     "abort": {
       "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
+    }
+  },
+  "exceptions": {
+    "mqtt_transport_required": {
+      "message": "旧配置缺少有效的 MQTT 协议，连接已阻止。打开「配置 → 重新配对或手动配置」，选择 mqtts/wss 和正确的 TLS 端口，或重新快速配对。"
+    },
+    "mqtt_tls_required": {
+      "message": "远程 Broker 的明文连接已阻止。打开「配置 → 重新配对或手动配置」，选择 mqtts/wss 和正确的 TLS 端口，或重新快速配对。"
     }
   }
 }

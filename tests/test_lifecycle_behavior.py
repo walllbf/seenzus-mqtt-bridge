@@ -242,7 +242,7 @@ async def test_manual_reload_retained_cleanup_is_bounded_and_continues(monkeypat
 @pytest.mark.asyncio
 async def test_programming_error_ends_runtime_instead_of_retrying(monkeypatch) -> None:
     hass = FakeHass()
-    entry = FakeConfigEntry(data={"mqtt_host": "broker.example.com"})
+    entry = FakeConfigEntry(data={"mqtt_host": "broker.example.com", "mqtt_scheme": "mqtts"})
     coordinator = BridgeCoordinator(hass, entry)
     fake_aiomqtt = FakeAiomqttModule(
         [{"connect_error": RuntimeError("broken dependency")}]

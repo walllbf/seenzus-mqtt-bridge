@@ -9,6 +9,7 @@ import asyncio  # noqa: F401
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers import device_registry as dr  # noqa: F401
 from homeassistant.helpers import entity_registry as er  # noqa: F401
 from homeassistant.helpers import config_validation as cv
@@ -21,6 +22,7 @@ from .coordinator import (  # noqa: F401
     BridgeCoordinator,
 )
 from .mqtt_requirements import async_ensure_mqtt_requirements
+from .mqtt_transport import MqttTransportError, validate_mqtt_transport
 
 PLATFORMS = ["sensor"]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -41,6 +43,18 @@ async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up without converting programming or dependency failures into retries."""
+    conf = {**entry.data, **entry.options}
+    if conf.get("mqtt_host"):
+        try:
+            validate_mqtt_transport(conf)
+        except MqttTransportError as err:
+            raise ConfigEntryError(
+                "MQTT connection blocked: remote brokers require mqtts/wss with TLS. "
+                "Open Configure → Re-pair or manual setup and select the broker's "
+                "TLS protocol and port, or pair again. No connection was attempted.",
+                translation_domain=DOMAIN,
+                translation_key=str(err),
+            ) from err
     coordinator = BridgeCoordinator(hass, entry)
     await coordinator.async_start()
 

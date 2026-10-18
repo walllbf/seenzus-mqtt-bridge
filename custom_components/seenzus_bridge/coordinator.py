@@ -63,14 +63,12 @@ from .const import (
     DEFAULT_ENABLE_STATE_EVENTS,
     DEFAULT_ENABLE_TEMPLATE_API,
     DEFAULT_EXPOSE_FULL_CONFIG,
-    DEFAULT_MQTT_PORT,
-    DEFAULT_MQTT_SCHEME,
+    DEFAULT_PORT_BY_MQTT_SCHEME,
     DEFAULT_MQTT_WS_PATH,
     DEFAULT_TOPIC_ROOT,
     MQTT_SCHEME_TCP_TLS,
     MQTT_SCHEME_WS,
     MQTT_SCHEME_WSS,
-    VALID_MQTT_SCHEMES,
     PAIRING_MODE_MANUAL,
     PAIRING_MODE_SEAMLESS,
     PAIRING_STATUS_BOUND,
@@ -86,6 +84,7 @@ from .entity_filters import looks_like_internal_bridge_entity_id, name_has_model
 from .ha_dispatcher import DispatchPolicy, dispatch
 from .mqtt_io_guard import websocket_connection
 from .mqtt_settings import mqtt_packet_size_limit, validate_mqtt_presence_budget
+from .mqtt_transport import MqttTransportError, validate_mqtt_transport
 from .operation_store import PersistentOperationStore
 from .sensor_display import async_prepare_sensor_display, sensor_display_attributes, supports_entity_display
 
@@ -169,15 +168,8 @@ def _client_tls_context():
 
 
 def _effective_transport(conf: dict) -> tuple[str, str | None]:
-    """归一后的生效传输方式 ``(scheme, ws_path)``；非 ws/wss 时 ws_path 为 None。
-
-    scheme 缺失 / 空 / 未知值一律归一为裸 TCP "mqtt"。连接层
-    （_transport_connect_kwargs）与诊断展示（presence / 状态传感器）共用这
-    一份解析，保证「桥实际怎么连」和「界面显示怎么连」永远同源。
-    """
-    scheme = str(conf.get(CONF_MQTT_SCHEME, "") or "").strip().lower()
-    if scheme not in VALID_MQTT_SCHEMES:
-        scheme = DEFAULT_MQTT_SCHEME
+    """Resolve a validated transport; never downgrade a missing/unknown scheme."""
+    scheme = validate_mqtt_transport(conf)
     if scheme in (MQTT_SCHEME_WS, MQTT_SCHEME_WSS):
         ws_path = str(conf.get(CONF_MQTT_WS_PATH, "") or "").strip() or DEFAULT_MQTT_WS_PATH
         return scheme, ws_path
@@ -185,13 +177,7 @@ def _effective_transport(conf: dict) -> tuple[str, str | None]:
 
 
 def _transport_connect_kwargs(conf: dict) -> dict[str, Any]:
-    """Extra aiomqtt.Client kwargs derived from the entry's transport scheme.
-
-    裸 TCP（scheme 缺失 / "mqtt" / 任何未知值）返回空 dict——连接调用与
-    wss 支持落地前完全一致，绝不影响旧 entry。ws/wss 走 paho 原生
-    websockets transport（aiomqtt 的 ``websocket_path`` 即 paho
-    ``ws_set_options`` 的握手路径）；wss/mqtts 附加 TLS 上下文。
-    """
+    """Enforce remote TLS and use verified system CAs for mqtts/wss."""
     scheme, ws_path = _effective_transport(conf)
     kwargs: dict[str, Any] = {}
     if ws_path is not None:
@@ -314,7 +300,11 @@ class BridgeCoordinator:
         供诊断展示（presence / 状态传感器）使用，真机上一眼可确认桥走的是
         wss 还是裸 TCP（issue #14 联调排查）。
         """
-        return _effective_transport(self._conf())
+        try:
+            return _effective_transport(self._conf())
+        except MqttTransportError:
+            # Diagnostics must remain readable while an old entry is blocked.
+            return "invalid", None
 
     def _resolve_config_source(self) -> str:
         conf = self._conf()
@@ -800,7 +790,15 @@ class BridgeCoordinator:
             self._fire()
             return False
 
-        port = int(conf.get(CONF_MQTT_PORT, DEFAULT_MQTT_PORT))
+        try:
+            connect_kwargs = _transport_connect_kwargs(conf)
+        except MqttTransportError as err:
+            raise _MqttConfigurationError(
+                f"{err}: select mqtts/wss and the broker TLS port in Configure; "
+                "or pair again with a backend that supplies a secure endpoint"
+            ) from err
+        scheme, _ = _effective_transport(conf)
+        port = int(conf.get(CONF_MQTT_PORT, DEFAULT_PORT_BY_MQTT_SCHEME[scheme]))
         username = str(conf.get(CONF_MQTT_USERNAME, "")).strip() or None
         password = str(conf.get(CONF_MQTT_PASSWORD, "")).strip() or None
         if self.pairing_mode == PAIRING_MODE_SEAMLESS:
@@ -817,7 +815,7 @@ class BridgeCoordinator:
             username=username,
             password=password,
             identifier=client_id,
-            **_transport_connect_kwargs(conf),
+            **connect_kwargs,
         )
         connection = mqtt_client
         if _effective_transport(conf)[0] in (MQTT_SCHEME_WS, MQTT_SCHEME_WSS):
