@@ -195,7 +195,7 @@ async def test_seamless_authorize_consumes_stored_callback_payload(monkeypatch) 
                 "config_source": "web_pair",
                 "confirmed_at": "2026-04-20T12:01:22Z",
                 "mqtt": {
-                    "host": "broker.example.com",
+                    "host": "broker.example.com", "scheme": "mqtts",
                     "port": 1883,
                     "username": "user-1",
                     "password": "pass-1",
@@ -439,7 +439,7 @@ async def test_seamless_authorize_exchanges_callback_code(monkeypatch) -> None:
                 "config_source": "web_pair",
                 "confirmed_at": "2026-04-20T12:01:22Z",
                 "mqtt": {
-                    "host": "broker.example.com",
+                    "host": "broker.example.com", "scheme": "mqtts",
                     "port": 1883,
                     "username": "user-1",
                     "password": "pass-1",
@@ -537,7 +537,7 @@ async def test_seamless_finish_creates_entry_with_bootstrapped_mqtt(monkeypatch)
             "source_name": "MQTT Bridge 01",
             "confirmed_at": "2026-04-20T12:01:22Z",
             "mqtt": {
-                "host": "broker.example.com",
+                "host": "broker.example.com", "scheme": "mqtts",
                 "port": 1883,
                 "username": "user-1",
                 "password": "pass-1",
@@ -580,7 +580,7 @@ async def test_seamless_finish_creates_entry_with_web_pairing_mqtt(monkeypatch) 
             "config_source": "web_pair",
             "confirmed_at": "2026-04-20T12:01:22Z",
             "mqtt": {
-                "host": "broker.example.com",
+                "host": "broker.example.com", "scheme": "mqtts",
                 "port": 1883,
                 "username": "user-1",
                 "password": "pass-1",
@@ -742,7 +742,7 @@ async def test_options_seamless_finish_creates_entry_with_empty_title() -> None:
             "config_source": "web_pair",
             "confirmed_at": "2026-04-20T12:01:22Z",
             "mqtt": {
-                "host": "broker.example.com",
+                "host": "broker.example.com", "scheme": "mqtts",
                 "port": 1883,
                 "username": "user-1",
                 "password": "pass-1",
@@ -815,7 +815,7 @@ async def test_seamless_finish_polls_legacy_status_until_bound(monkeypatch) -> N
                 "config_source": "web_pair",
                 "confirmed_at": "2026-04-20T12:01:22Z",
                 "mqtt": {
-                    "host": "broker.example.com",
+                    "host": "broker.example.com", "scheme": "mqtts",
                     "port": 1883,
                     "username": "user-1",
                     "password": "pass-1",
@@ -1455,55 +1455,29 @@ def test_build_quick_pair_entry_data_stores_wss_scheme_and_path() -> None:
     assert data[CONF_MQTT_WS_PATH] == "/mqtt"
 
 
-def test_build_quick_pair_entry_data_bare_tcp_response_stores_default_transport_keys() -> None:
-    # 裸 TCP 下发（无 scheme/path 或显式 "mqtt"）也显式落盘 "mqtt"/""：options
-    # 流重配对走 {**entry.data, **entry.options} 合并，省略键会让旧 entry.data
-    # 里残留的 wss scheme/path 穿透合并、把新的裸 TCP broker 拨成 websockets+TLS。
-    for mqtt in ({}, {"scheme": "mqtt"}):
+def test_build_quick_pair_local_tcp_replaces_stale_websocket_path() -> None:
+    data = _build_quick_pair_entry_data(
+        api_base="https://api.example.com",
+        status_result=_pairing_result_with_mqtt({"host": "192.168.1.2", "scheme": "mqtt", "path": "/old"}),
+    )
+    assert data[CONF_MQTT_SCHEME] == "mqtt"
+    assert data[CONF_MQTT_WS_PATH] == ""
+
+
+def test_build_quick_pair_entry_data_normalizes_secure_transport_path() -> None:
+    for scheme, path in [("mqtts", "/stray"), ("wss", None)]:
         data = _build_quick_pair_entry_data(
-            api_base="https://api.seenzus.xxx/api",
-            status_result=_pairing_result_with_mqtt(mqtt),
+            api_base="https://api.example.com",
+            status_result=_pairing_result_with_mqtt({"scheme": scheme, "path": path}),
         )
-        assert data[CONF_MQTT_SCHEME] == "mqtt"
+        assert data[CONF_MQTT_SCHEME] == scheme
         assert data[CONF_MQTT_WS_PATH] == ""
-
-
-def test_build_quick_pair_entry_data_normalizes_unknown_scheme_null_and_stray_path() -> None:
-    # 未知 scheme 回退为显式 "mqtt"（连接层走裸 TCP）；非 ws/wss 的杂散 path 丢弃。
-    data = _build_quick_pair_entry_data(
-        api_base="https://api.seenzus.xxx/api",
-        status_result=_pairing_result_with_mqtt({"scheme": "quic", "path": "/mqtt"}),
-    )
-    assert data[CONF_MQTT_SCHEME] == "mqtt"
-    assert data[CONF_MQTT_WS_PATH] == ""
-
-    data = _build_quick_pair_entry_data(
-        api_base="https://api.seenzus.xxx/api",
-        status_result=_pairing_result_with_mqtt({"scheme": "mqtts", "path": "/mqtt"}),
-    )
-    assert data[CONF_MQTT_SCHEME] == "mqtts"
-    assert data[CONF_MQTT_WS_PATH] == ""
-
-    # 显式 JSON null 不得字符串化成 "None"/"none"（str(None) 陷阱）。
-    data = _build_quick_pair_entry_data(
-        api_base="https://api.seenzus.xxx/api",
-        status_result=_pairing_result_with_mqtt({"scheme": None, "path": None}),
-    )
-    assert data[CONF_MQTT_SCHEME] == "mqtt"
-    assert data[CONF_MQTT_WS_PATH] == ""
-
-    data = _build_quick_pair_entry_data(
-        api_base="https://api.seenzus.xxx/api",
-        status_result=_pairing_result_with_mqtt({"scheme": "wss", "path": None}),
-    )
-    assert data[CONF_MQTT_SCHEME] == "wss"
-    assert data[CONF_MQTT_WS_PATH] == ""
 
 
 def test_build_quick_pair_entry_data_defaults_port_by_scheme() -> None:
     # 响应缺 port 时按 scheme 取惯例端口，而不是一律 1883（wss 回退 1883 会拿
     # TLS websocket 去连明文 TCP 端口）；显式 port 始终优先。
-    cases = [({}, 1883), ({"scheme": "mqtts"}, 8883), ({"scheme": "ws"}, 80), ({"scheme": "wss"}, 443)]
+    cases = [({"host": "192.168.1.2", "scheme": "mqtt"}, 1883), ({"scheme": "mqtts"}, 8883), ({"host": "::1", "scheme": "ws"}, 80), ({"scheme": "wss"}, 443)]
     for mqtt, expected_port in cases:
         result = _pairing_result_with_mqtt(mqtt)
         result.mqtt.pop("port")
@@ -1595,7 +1569,7 @@ async def test_seamless_finish_creates_entry_with_return_link(monkeypatch) -> No
             "confirmed_at": "2026-04-20T12:01:22Z",
             "app_return_url": "seenzus://pairing/done?session=wps_1",
             "mqtt": {
-                "host": "broker.example.com",
+                "host": "broker.example.com", "scheme": "mqtts",
                 "port": 1883,
                 "username": "user-1",
                 "password": "pass-1",

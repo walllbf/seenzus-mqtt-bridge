@@ -29,7 +29,7 @@ def coordinator(monkeypatch):
     hass = FakeHass()
     entry = FakeConfigEntry(
         data={
-            "mqtt_host": "broker.example.com",
+            "mqtt_host": "broker.example.com", "mqtt_scheme": "mqtts",
             "topic_root": "seenzus/v2",
             "enable_state_events": True,
         }
@@ -275,6 +275,7 @@ async def test_presence_includes_mqtt_and_pairing_diagnostics() -> None:
                 "pairing_mode": "seamless",
                 "config_source": "web_pair",
                 "pairing_session_id": "wps_1",
+                "mqtt_scheme": "mqtts",
                 "source_id": "ha-bridge-ha-demo",
                 "source_type": "haos_bridge",
                 "source_name": "HA Bridge",
@@ -299,7 +300,7 @@ async def test_presence_includes_mqtt_and_pairing_diagnostics() -> None:
     assert payload["pairingStatus"] == "bridge_ready"
     assert payload["configSource"] == "web_pair"
     # 生效传输方式随 presence 上报（issue #14）；裸 TCP 不带 wsPath。
-    assert payload["transport"] == "mqtt"
+    assert payload["transport"] == "mqtts"
     assert "wsPath" not in payload
     assert payload["sourceId"] == "ha-bridge-ha-demo"
     assert payload["sourceType"] == "haos_bridge"
@@ -880,15 +881,12 @@ async def test_prepare_for_reload_clears_old_retained_presence_when_bridge_chang
 # ── MQTT 传输 scheme → aiomqtt 连接参数（issue #14 wss 支持） ──
 
 
-def test_transport_kwargs_empty_for_bare_tcp_and_unknown_scheme() -> None:
+def test_transport_kwargs_plaintext_requires_explicit_local_ip() -> None:
     from seenzus_bridge.coordinator import _transport_connect_kwargs
-
-    # 旧 entry（无 scheme 键）与显式 "mqtt" 都必须返回空 kwargs——连接调用
-    # 与 wss 支持落地前完全一致，绝不炸旧桥。
-    assert _transport_connect_kwargs({}) == {}
-    assert _transport_connect_kwargs({"mqtt_scheme": "mqtt"}) == {}
-    # 未知 scheme 一律按裸 TCP 回退，不往 aiomqtt 传坏参数。
-    assert _transport_connect_kwargs({"mqtt_scheme": "quic"}) == {}
+    assert _transport_connect_kwargs({"mqtt_scheme": "mqtt", "mqtt_host": "127.0.0.1"}) == {}
+    for conf in ({}, {"mqtt_scheme": "quic"}, {"mqtt_scheme": "mqtt", "mqtt_host": "example.com"}):
+        with pytest.raises(ValueError):
+            _transport_connect_kwargs(conf)
 
 
 def test_transport_kwargs_wss_sets_websockets_transport_path_and_tls() -> None:
@@ -907,7 +905,7 @@ def test_transport_kwargs_wss_sets_websockets_transport_path_and_tls() -> None:
 def test_transport_kwargs_ws_defaults_path_and_skips_tls() -> None:
     from seenzus_bridge.coordinator import _transport_connect_kwargs
 
-    kwargs = _transport_connect_kwargs({"mqtt_scheme": "ws"})
+    kwargs = _transport_connect_kwargs({"mqtt_scheme": "ws", "mqtt_host": "::1"})
     assert kwargs["transport"] == "websockets"
     assert kwargs["websocket_path"] == "/mqtt"
     assert "tls_context" not in kwargs

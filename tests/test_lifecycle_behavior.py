@@ -4,16 +4,19 @@ import asyncio
 import inspect
 import time
 from types import MappingProxyType
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from homeassistant.components import persistent_notification
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntries, ConfigEntry
 from homeassistant.core import CoreState, HomeAssistant
+from homeassistant.exceptions import ConfigEntryError
 
 import seenzus_bridge
 from seenzus_bridge import BridgeCoordinator
 from seenzus_bridge.bridge_protocol import build_topics
+from seenzus_bridge.config_flow import SavanAIBridgeOptionsFlow
 from tests.helpers import (
     AsyncFakeMQTTClient,
     FakeAiomqttModule,
@@ -45,6 +48,79 @@ def _make_core_config_entry() -> ConfigEntry:
     }
     parameters = inspect.signature(ConfigEntry).parameters
     return ConfigEntry(**{key: value for key, value in values.items() if key in parameters})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("already_loaded", [False, True])
+@pytest.mark.parametrize("method", ["manual", "quick_pair"])
+async def test_real_ha_options_save_reloads_once_after_tls_correction(
+    tmp_path, monkeypatch, already_loaded, method
+) -> None:
+    """Core must save before reload, even when blocked setup installed no listener."""
+    hass = HomeAssistant(str(tmp_path))
+    hass.config_entries = ConfigEntries(hass, {})
+    entry = _make_core_config_entry()
+    hass.config_entries._entries[entry.entry_id] = entry
+    monkeypatch.setattr(hass.config_entries, "_async_schedule_save", Mock())
+    hass.config_entries.async_update_entry(entry, data={
+        "mqtt_host": "broker.example.com",
+        "mqtt_scheme": "mqtts" if already_loaded else "mqtt",
+        "mqtt_port": 8883 if already_loaded else 1883,
+    })
+    coordinator = Mock(
+        async_start=AsyncMock(),
+        async_prepare_for_reload=AsyncMock(),
+    )
+    monkeypatch.setattr(seenzus_bridge, "BridgeCoordinator", Mock(return_value=coordinator))
+    monkeypatch.setattr(hass.config_entries, "async_forward_entry_setups", AsyncMock())
+    try:
+        if already_loaded:
+            await seenzus_bridge.async_setup_entry(hass, entry)
+            assert len(entry.update_listeners) == 1
+        else:
+            with pytest.raises(ConfigEntryError):
+                await seenzus_bridge.async_setup_entry(hass, entry)
+            assert not entry.update_listeners
+            coordinator.async_start.assert_not_awaited()
+
+        async def reload_saved_entry(entry_id):
+            assert entry_id == entry.entry_id
+            assert entry.options["mqtt_scheme"] == "wss"
+            assert entry.options["mqtt_port"] == 443
+            if already_loaded:
+                coordinator.async_prepare_for_reload.assert_awaited_once()
+            else:
+                # Exercise the setup guard again with the options Core just saved.
+                assert await seenzus_bridge.async_setup_entry(hass, entry)
+            return True
+
+        reload_entry = AsyncMock(side_effect=reload_saved_entry)
+        monkeypatch.setattr(hass.config_entries, "async_reload", reload_entry)
+        flow = SavanAIBridgeOptionsFlow(entry)
+        flow.hass = hass
+        flow.handler = entry.entry_id
+        corrected = {
+            "mqtt_host": "broker.example.com", "mqtt_scheme": "wss", "mqtt_port": 443,
+        }
+        if method == "manual":
+            result = await flow.async_step_manual({"mqtt_settings": corrected})
+        else:
+            result = flow._finish_quick_pair(corrected)
+        # Use Core's actual finish/save/notification machinery, not a flow stub.
+        await hass.config_entries.options.async_finish_flow(flow, result)
+        await hass.async_block_till_done()
+        reload_entry.assert_awaited_once_with(entry.entry_id)
+        coordinator.async_start.assert_awaited_once()
+        assert entry.update_listeners == [seenzus_bridge._async_reload_entry]
+        if not already_loaded:
+            coordinator.async_prepare_for_reload.assert_not_awaited()
+
+        # Saving identical options must not cause another reload.
+        await hass.config_entries.options.async_finish_flow(flow, result)
+        await hass.async_block_till_done()
+        reload_entry.assert_awaited_once()
+    finally:
+        await hass.async_stop(force=True)
 
 
 @pytest.mark.asyncio
@@ -242,7 +318,7 @@ async def test_manual_reload_retained_cleanup_is_bounded_and_continues(monkeypat
 @pytest.mark.asyncio
 async def test_programming_error_ends_runtime_instead_of_retrying(monkeypatch) -> None:
     hass = FakeHass()
-    entry = FakeConfigEntry(data={"mqtt_host": "broker.example.com"})
+    entry = FakeConfigEntry(data={"mqtt_host": "broker.example.com", "mqtt_scheme": "mqtts"})
     coordinator = BridgeCoordinator(hass, entry)
     fake_aiomqtt = FakeAiomqttModule(
         [{"connect_error": RuntimeError("broken dependency")}]

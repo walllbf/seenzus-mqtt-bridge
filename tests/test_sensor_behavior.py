@@ -85,7 +85,7 @@ def test_status_sensor_pins_identity_attributes_and_device_info() -> None:
         "last_request": None,
         "last_error": None,
         "last_cleanup_diagnostic": None,
-        "mqtt_transport": "mqtt",
+        "mqtt_transport": "invalid",
         "mqtt_ws_path": None,
         "mqtt_max_packet_size": 1024 * 1024,
         "topic_root": "seenzus/v2",
