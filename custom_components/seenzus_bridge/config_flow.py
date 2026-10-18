@@ -803,6 +803,22 @@ class SavanAIBridgeOptionsFlow(_QuickPairFlowMixin, config_entries.OptionsFlow):
     _flow_manager = FLOW_MANAGER_OPTIONS
     _entry_title = ""
 
+    @callback
+    def async_create_entry(self, *, data: dict, **kwargs) -> config_entries.ConfigFlowResult:
+        result = super().async_create_entry(data=data, **kwargs)
+        entry = self._config_entry
+        if data != entry.options and not entry.update_listeners:
+            # Blocked setup never installed the normal reload listener. Core
+            # 2025.1 has no OptionsFlowWithReload; use a one-shot listener so
+            # reload runs only after Core saves the corrected options. Loaded
+            # entries keep their existing retained-topic cleanup/reload path.
+            async def reload_once(hass, updated_entry):
+                remove_listener()
+                await hass.config_entries.async_reload(updated_entry.entry_id)
+
+            remove_listener = entry.add_update_listener(reload_once)
+        return result
+
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._config_entry = config_entry
         self._init_quick_pair_state()

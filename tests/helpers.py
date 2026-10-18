@@ -264,11 +264,13 @@ class FakeConfigEntry:
         self.entry_id = entry_id
         self.data = data or {}
         self.options = options or {}
+        self.update_listeners = []
         self.background_task_names: list[str] = []
         self.foreground_task_names: list[str] = []
 
     def add_update_listener(self, listener):
-        return listener
+        self.update_listeners.append(listener)
+        return lambda: self.update_listeners.remove(listener)
 
     def async_on_unload(self, listener):
         return listener

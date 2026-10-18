@@ -165,8 +165,10 @@ def test_real_tls_rejects_bad_certificates_before_mqtt_credentials(monkeypatch, 
                 try:
                     with server_context.wrap_socket(connection, server_side=True) as tls:
                         received.append(tls.recv(4096))
-                except ssl.SSLError:
-                    pass  # Client aborts the TLS handshake, before MQTT/HTTP.
+                except (ssl.SSLError, ConnectionResetError):
+                    # A rejected certificate can surface as a TCP reset on
+                    # Windows. The client must still prove verification failed.
+                    pass
         except Exception as err:
             errors.append(err)
 
