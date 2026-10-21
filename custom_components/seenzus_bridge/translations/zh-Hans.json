@@ -236,6 +236,8 @@
     "paired_title": "seenzus Bridge 配对完成",
     "paired_message": "seenzus MQTT Bridge 已成功绑定。\n\n## 👉 {link}",
     "return_label": "返回 seenzus 应用",
-    "manual_return": "若链接无法点击，请手动打开：`{url}`"
+    "manual_return": "若链接无法点击，请手动打开：`{url}`",
+    "opening_app": "正在打开 seenzus 应用…",
+    "return_fallback": "如未自动跳转，请点击这里"
   }
 }

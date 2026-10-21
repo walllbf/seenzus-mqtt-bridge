@@ -30,7 +30,7 @@ from homeassistant.helpers.config_entry_oauth2_flow import (
 from homeassistant.helpers.network import get_url
 
 from .const import DOMAIN, PRODUCT_NAME, QUICK_PAIR_LAST_DIAGNOSTIC
-from .ui_text import ui_text
+from .ui_text import async_prepare_ui_text, ui_text
 
 QUICK_PAIR_CALLBACK_PATH = "/api/seenzus_bridge/quick_pair/callback"
 QUICK_PAIR_CALLBACK_VIEW_REGISTERED = "quick_pair_callback_view_registered"
@@ -260,13 +260,18 @@ class SeenzusAppReturnView(http.HomeAssistantView):
         # 正常签发路径的 URL 已被 _sanitize_app_return_url 拒绝过 "<"，这里是
         # 对「任何持共享签名密钥的组件签出的 token」的纵深防御。
         js_target = json.dumps(target).replace("<", "\\u003c")
+        await async_prepare_ui_text(hass)
+        language = _html_escape(hass.config.language, quote=True)
+        title = _html_escape(ui_text(hass, "return_label"))
+        opening = _html_escape(ui_text(hass, "opening_app"))
+        fallback = _html_escape(ui_text(hass, "return_fallback"))
         return web.Response(
             content_type="text/html",
             text=(
-                '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
-                "<title>返回 seenzus 应用</title></head><body>"
-                "<p>正在打开 seenzus 应用…</p>"
-                f'<p><a href="{_html_escape(target, quote=True)}">如未自动跳转，请点击这里</a></p>'
+                f'<!DOCTYPE html><html lang="{language}"><head><meta charset="utf-8">'
+                f"<title>{title}</title></head><body>"
+                f"<p>{opening}</p>"
+                f'<p><a href="{_html_escape(target, quote=True)}">{fallback}</a></p>'
                 f"<script>window.location.href = {js_target};</script>"
                 "</body></html>"
             ),

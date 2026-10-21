@@ -251,6 +251,7 @@ class BridgeCoordinator:
         self._ha_started_unsub = None
         self._shutdown_unsub: Callable[[], None] | None = None
         self._mqtt_client = None
+        self._connected_client = None
         self._aiomqtt = None
         self._topics: BridgeTopics | None = None
         self._command_prefix = ""
@@ -560,6 +561,7 @@ class BridgeCoordinator:
         self._command_tasks.clear()
         self._pending_state_events.clear()
         self._mqtt_client = None
+        self._connected_client = None
         self._skip_offline_presence = False
         self._reload_cleanup_deadline = None
         self.status = "stopped"
@@ -606,12 +608,13 @@ class BridgeCoordinator:
         self._cleanup_stage = "heartbeat cancellation"
         await self._stop_presence_heartbeat()
         self._cleanup_stage = "offline presence"
+        cleanup_client = self._connected_client or self._mqtt_client
         if (
-            self._mqtt_client is not None
+            cleanup_client is not None
             and self._topics is not None
             and not self._skip_offline_presence
         ):
-            await self._publish_presence("offline")
+            await self._publish_presence("offline", client=cleanup_client)
 
         self._cancel_runtime_tasks()
         task_groups = (
@@ -765,6 +768,7 @@ class BridgeCoordinator:
                 raise
             finally:
                 self._mqtt_client = None
+                self._connected_client = None
                 await self._stop_connection_commands()
                 await self._stop_history_replay()
                 await self._stop_catalog_refresh()
@@ -821,7 +825,7 @@ class BridgeCoordinator:
             ) from err
         scheme, _ = _effective_transport(conf)
         port = int(conf.get(CONF_MQTT_PORT, DEFAULT_PORT_BY_MQTT_SCHEME[scheme]))
-        username = conf.get(CONF_MQTT_USERNAME) or None
+        username = conf.get(CONF_MQTT_USERNAME)
         password = conf.get(CONF_MQTT_PASSWORD)
         if self.pairing_mode == PAIRING_MODE_SEAMLESS:
             self._set_pairing_step("bridge_starting")
@@ -843,6 +847,9 @@ class BridgeCoordinator:
         if _effective_transport(conf)[0] in (MQTT_SCHEME_WS, MQTT_SCHEME_WSS):
             connection = websocket_connection(mqtt_client)
         async with connection as client:
+            # Cleanup needs the socket even while startup waits for HA/catalog.
+            # Keep _mqtt_client private to the ready state publisher until below.
+            self._connected_client = client
             if self._topics is None:
                 self._topics = self._resolve_topics()
                 self._command_prefix = self._topics.command_sub[:-2]

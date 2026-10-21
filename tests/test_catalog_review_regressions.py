@@ -20,7 +20,7 @@ from homeassistant.helpers.translation import async_get_translations
 from seenzus_bridge import BridgeCoordinator
 from seenzus_bridge.config_flow import SavanAIBridgeConfigFlow, _build_quick_pair_entry_data
 from seenzus_bridge.pairing_models import PairingStatusResult
-from seenzus_bridge.quick_pair import _notify_app_return, _record_quick_pair_diagnostic
+from seenzus_bridge.quick_pair import SeenzusAppReturnView, _notify_app_return, _record_quick_pair_diagnostic
 from seenzus_bridge.sensor import BridgeStatusSensor
 from tests.helpers import FakeAiomqttModule
 from tests.test_lifecycle_behavior import _make_core_config_entry
@@ -241,3 +241,70 @@ async def test_empty_password_is_distinct_from_missing_password(real_runtime, pa
     hass.config_entries.async_update_entry(entry, data=data)
     await start_connected(coordinator)
     assert fake.clients[0].connect_kwargs["password"] == password
+
+
+@pytest.mark.parametrize("username", [None, "", " "])
+async def test_empty_username_is_distinct_from_missing_username(real_runtime, username):
+    hass, entry, coordinator, fake = real_runtime
+    data = _build_quick_pair_entry_data(
+        api_base="https://example.com",
+        status_result=PairingStatusResult(ok=True, status="confirmed", mqtt={
+            "host": "broker.example.com", "scheme": "mqtts",
+            "username": username, "password": "password",
+        }),
+    )
+    assert data["mqtt_username"] == username
+    hass.config_entries.async_update_entry(entry, data=data)
+    await start_connected(coordinator)
+    assert fake.clients[0].connect_kwargs["username"] == username
+    assert fake.clients[0].connect_kwargs["password"] == "password"
+
+
+@pytest.mark.parametrize("stage", ["ha_start", "catalog"])
+@pytest.mark.parametrize("stop", ["shutdown", "unload"])
+async def test_stop_before_readiness_retracts_initial_online(
+    real_runtime, monkeypatch, stage, stop,
+):
+    hass, _, coordinator, fake = real_runtime
+    if stage == "ha_start":
+        hass.set_state(CoreState.starting)
+    else:
+        async def blocked_catalog(*_args, **_kwargs):
+            await asyncio.Event().wait()
+        monkeypatch.setattr(coordinator, "_publish_device_catalog", blocked_catalog)
+    await coordinator.async_start()
+    async with asyncio.timeout(2):
+        while not fake.clients or not fake.clients[0].published:
+            await asyncio.sleep(0)
+    client = fake.clients[0]
+    assert json.loads(client.published[0]["payload"])["status"] == "online"
+    assert not coordinator.mqtt_connected
+    assert coordinator._mqtt_client is None
+    if stop == "shutdown":
+        await hass.async_stop(force=True)
+    else:
+        await coordinator.async_stop()
+    presence = [json.loads(item["payload"])["status"] for item in client.published
+                if item["topic"].endswith("/presence")]
+    assert presence == ["online", "offline"]
+    assert not client.connected
+
+
+@pytest.mark.parametrize("language, expected", [
+    ("en", "Opening the seenzus app"), ("fr", "Opening the seenzus app"),
+    ("zh-Hans", "正在打开 seenzus 应用"),
+])
+async def test_app_return_html_is_localized(real_runtime, monkeypatch, language, expected):
+    hass, _, _, _ = real_runtime
+    hass.config.language = language
+    monkeypatch.setattr("seenzus_bridge.quick_pair._decode_jwt",
+                        lambda *_args: {"app_return_url": "seenzus://pairing/done"})
+    monkeypatch.setattr("seenzus_bridge.quick_pair.persistent_notification.async_dismiss",
+                        lambda *_args: None)
+    response = await SeenzusAppReturnView().get(SimpleNamespace(
+        app={"hass": hass}, query={"token": "test-token"},
+    ))
+    assert response.status == 200
+    assert f'lang="{language}"' in response.text
+    assert expected in response.text
+    assert "seenzus://pairing/done" in response.text

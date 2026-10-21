@@ -12,6 +12,8 @@ ENGLISH_TEXT = {
     "paired_message": "seenzus MQTT Bridge is paired.\n\n## 👉 {link}",
     "return_label": "Return to seenzus",
     "manual_return": "If the link does not open, open this address manually: `{url}`",
+    "opening_app": "Opening the seenzus app…",
+    "return_fallback": "If you are not redirected automatically, click here",
 }
 
 
