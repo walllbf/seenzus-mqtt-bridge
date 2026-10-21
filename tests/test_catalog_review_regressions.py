@@ -5,7 +5,7 @@ import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from voluptuous_serialize import convert
@@ -32,7 +32,7 @@ pytestmark = pytest.mark.timeout(10)
 
 
 @pytest.fixture
-async def real_runtime(tmp_path):
+async def real_runtime(tmp_path, monkeypatch):
     hass = HomeAssistant(str(tmp_path))
     loader.async_setup(hass)
     manifest = json.loads((INTEGRATION_PATH / "manifest.json").read_text(encoding="utf-8"))
@@ -55,6 +55,7 @@ async def real_runtime(tmp_path):
     hass.set_state(CoreState.running)
     coordinator = BridgeCoordinator(hass, entry)
     coordinator._aiomqtt = fake = FakeAiomqttModule()
+    monkeypatch.setattr(coordinator, "_async_import_aiomqtt", AsyncMock(return_value=fake))
     try:
         yield hass, entry, coordinator, fake
     finally:
