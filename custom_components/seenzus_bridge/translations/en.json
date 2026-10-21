@@ -1,0 +1,189 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up seenzus MQTT Bridge",
+        "description": "Choose a pairing mode to open its setup form.",
+        "data": {
+          "pairing_mode": "Pairing mode"
+        },
+        "sections": {}
+      },
+      "seamless": {
+        "title": "Quick pair",
+        "description": "The integration creates a web pairing session through the seenzus API and opens seenzus for authorization. Select Submit to continue; no fields are required.",
+        "data": {},
+        "sections": {}
+      },
+      "manual": {
+        "title": "Manual setup",
+        "description": "Enter the manual pairing settings. MQTT connection settings and advanced settings are collapsed by default.",
+        "data": {},
+        "sections": {
+          "mqtt_settings": {
+            "name": "MQTT connection settings",
+            "description": "Remote brokers require MQTT over TLS or secure WebSocket. Plaintext connections are allowed only for explicit local or loopback IP addresses.",
+            "data": {
+              "mqtt_host": "MQTT broker address",
+              "mqtt_port": "MQTT port",
+              "mqtt_username": "MQTT username",
+              "mqtt_password": "MQTT password",
+              "mqtt_scheme": "MQTT transport protocol",
+              "mqtt_ws_path": "WebSocket path (ws/wss only)"
+            },
+            "data_description": {
+              "mqtt_port": "Leave blank to use the standard port for the selected protocol: mqtts 8883, wss 443, mqtt 1883, or ws 80. Enter custom ports explicitly.",
+              "mqtt_ws_path": "Secure WebSocket commonly uses /mqtt. Use the path configured on your broker."
+            }
+          },
+          "advanced_settings": {
+            "name": "Advanced settings",
+            "description": "Collapsed by default. Change these only to customize protocol settings or state event publishing.",
+            "data": {
+              "topic_root": "V2 topic root",
+              "bridge_id": "Bridge ID (leave blank to generate automatically)",
+              "enable_state_events": "Publish entity state events",
+              "allow_dangerous_services": "Allow dangerous services (hassio, shell_command, python_script, etc.; off by default)",
+              "enable_template_api": "Allow the /api/template rendering API (off by default)",
+              "expose_full_config": "Expose full /api/config, including home coordinates (off by default)",
+              "mqtt_max_packet_size_kib": "Maximum MQTT packet size (KiB)"
+            },
+            "data_description": {
+              "mqtt_max_packet_size_kib": "Local sending limit; must not exceed the broker's packet size limit. 1024 KiB = 1 MiB; 2048 KiB = 2 MiB. This does not change the broker configuration."
+            }
+          }
+        }
+      }
+    },
+    "create_entry": {
+      "app_return": "seenzus MQTT Bridge is paired and the integration has been added.\n\n## [Return to seenzus]({app_return_url})\n\n&nbsp;"
+    },
+    "error": {
+      "host_required": "Enter the MQTT broker address.",
+      "dev_override_invalid": "The developer override file seenzus_bridge_dev.json is invalid: its JSON is malformed or pairing_api_base is not a valid HTTP(S) URL. Correct or remove the file and try again.",
+      "quick_pair_session_failed": "Could not create a quick pairing session. Check the seenzus API address, DNS, and service status.",
+      "quick_pair_bootstrap_failed": "Could not read the final web pairing status. Confirm that pairing was completed on the web page.",
+      "quick_pair_mqtt_missing": "The backend did not return MQTT bridge settings. Quick pairing cannot finish.",
+      "quick_pair_callback_unavailable": "Could not generate the Home Assistant callback URL. Check the current address or the instance URL settings.",
+      "quick_pair_authorization_failed": "External authorization did not finish. Start quick pairing again.",
+      "quick_pair_callback_state_mismatch": "Callback state validation failed. Start quick pairing again.",
+      "quick_pair_code_exchange_failed": "The callback succeeded, but exchanging the code for bridge settings failed. Check the backend service status.",
+      "quick_pair_callback_timeout": "No callback confirmation was received. Complete authorization on the external page and return to Home Assistant.",
+      "quick_pair_missing_context": "The quick pairing session was lost. Start again.",
+      "invalid_mqtt_packet_size": "Enter an integer from 1 to 262144 (KiB) that does not exceed the broker's packet size limit.",
+      "mqtt_packet_size_too_small_for_topic": "This limit cannot fit the minimum offline message for the current topic. Increase the limit or shorten the topic or Bridge ID.",
+      "mqtt_transport_required": "The MQTT transport protocol is missing or invalid. Select mqtts/wss. For quick pairing, have the backend supply a valid protocol and pair again. Plaintext fallback is not allowed.",
+      "mqtt_tls_required": "This broker requires TLS (mqtts or wss). Plaintext MQTT/WebSocket is allowed only for explicit local or loopback IP addresses. Check the protocol and port."
+    },
+    "abort": {
+      "already_configured": "seenzus MQTT Bridge is already configured. Only one instance is supported.",
+      "quick_pair_missing_context": "The quick pairing session was lost. Start again."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure seenzus MQTT Bridge",
+        "description": "Change MQTT connection settings or pair again. Saving settings automatically reloads the integration.",
+        "menu_options": {
+          "connection_settings": "MQTT connection settings",
+          "pairing": "Re-pair or manual setup"
+        }
+      },
+      "seamless": {
+        "title": "Quick pair",
+        "description": "Start external seenzus quick pairing again. Select Submit; no fields are required. The integration creates a web pairing session through the seenzus API. After authorization, the browser returns to Home Assistant and the MQTT bridge settings are updated automatically.",
+        "data": {},
+        "sections": {}
+      },
+      "manual": {
+        "title": "Manual setup",
+        "description": "Enter the manual pairing settings. MQTT connection settings and advanced settings are collapsed by default.",
+        "data": {},
+        "sections": {
+          "mqtt_settings": {
+            "name": "MQTT connection settings",
+            "description": "Remote brokers require MQTT over TLS or secure WebSocket. Plaintext connections are allowed only for explicit local or loopback IP addresses.",
+            "data": {
+              "mqtt_host": "MQTT broker address",
+              "mqtt_port": "MQTT port",
+              "mqtt_username": "MQTT username",
+              "mqtt_password": "MQTT password",
+              "mqtt_scheme": "MQTT transport protocol",
+              "mqtt_ws_path": "WebSocket path (ws/wss only)"
+            },
+            "data_description": {
+              "mqtt_port": "Leave blank to use the standard port for the selected protocol: mqtts 8883, wss 443, mqtt 1883, or ws 80. Enter custom ports explicitly.",
+              "mqtt_ws_path": "Secure WebSocket commonly uses /mqtt. Use the path configured on your broker."
+            }
+          },
+          "advanced_settings": {
+            "name": "Advanced settings",
+            "description": "Collapsed by default. Expand to change protocol settings or state event publishing.",
+            "data": {
+              "topic_root": "V2 topic root",
+              "bridge_id": "Bridge ID (leave blank to generate automatically)",
+              "enable_state_events": "Publish entity state events",
+              "allow_dangerous_services": "Allow dangerous services (hassio, shell_command, python_script, etc.; off by default)",
+              "enable_template_api": "Allow the /api/template rendering API (off by default)",
+              "expose_full_config": "Expose full /api/config, including home coordinates (off by default)",
+              "mqtt_max_packet_size_kib": "Maximum MQTT packet size (KiB)"
+            },
+            "data_description": {
+              "mqtt_max_packet_size_kib": "Local sending limit; must not exceed the broker's packet size limit. 1024 KiB = 1 MiB; 2048 KiB = 2 MiB. This does not change the broker configuration."
+            }
+          }
+        }
+      },
+      "pairing": {
+        "title": "Re-pair or manual setup",
+        "description": "Choose a pairing mode to open its setup form. Saving automatically reloads the integration to apply the settings.",
+        "data": {
+          "pairing_mode": "Pairing mode"
+        },
+        "sections": {}
+      },
+      "connection_settings": {
+        "title": "MQTT connection settings",
+        "description": "Change the local packet size limit and reconnect. Current pairing, credentials, and transport are preserved; no new authorization is required.",
+        "data": {
+          "mqtt_max_packet_size_kib": "Maximum MQTT packet size (KiB)"
+        },
+        "data_description": {
+          "mqtt_max_packet_size_kib": "Local sending limit; must not exceed the broker's packet size limit. 1024 KiB = 1 MiB; 2048 KiB = 2 MiB. This does not change the broker configuration."
+        }
+      }
+    },
+    "create_entry": {
+      "app_return": "seenzus MQTT Bridge is paired and the integration has been added.\n\n## [Return to seenzus]({app_return_url})\n\n&nbsp;"
+    },
+    "error": {
+      "host_required": "Enter the MQTT broker address.",
+      "dev_override_invalid": "The developer override file seenzus_bridge_dev.json is invalid: its JSON is malformed or pairing_api_base is not a valid HTTP(S) URL. Correct or remove the file and try again.",
+      "quick_pair_session_failed": "Could not create a quick pairing session. Check the seenzus API address, DNS, and service status.",
+      "quick_pair_bootstrap_failed": "Could not read the final web pairing status. Confirm that pairing was completed on the web page.",
+      "quick_pair_mqtt_missing": "The backend did not return MQTT bridge settings. Quick pairing cannot finish.",
+      "quick_pair_callback_unavailable": "Could not generate the Home Assistant callback URL. Check the current address or the instance URL settings.",
+      "quick_pair_authorization_failed": "External authorization did not finish. Start quick pairing again.",
+      "quick_pair_callback_state_mismatch": "Callback state validation failed. Start quick pairing again.",
+      "quick_pair_code_exchange_failed": "The callback succeeded, but exchanging the code for bridge settings failed. Check the backend service status.",
+      "quick_pair_callback_timeout": "No callback confirmation was received. Complete authorization on the external page and return to Home Assistant.",
+      "quick_pair_missing_context": "The quick pairing session was lost. Start again.",
+      "invalid_mqtt_packet_size": "Enter an integer from 1 to 262144 (KiB) that does not exceed the broker's packet size limit.",
+      "mqtt_packet_size_too_small_for_topic": "This limit cannot fit the minimum offline message for the current topic. Increase the limit or shorten the topic or Bridge ID.",
+      "mqtt_transport_required": "The MQTT transport protocol is missing or invalid. Select mqtts/wss. For quick pairing, have the backend supply a valid protocol and pair again. Plaintext fallback is not allowed.",
+      "mqtt_tls_required": "This broker requires TLS (mqtts or wss). Plaintext MQTT/WebSocket is allowed only for explicit local or loopback IP addresses. Check the protocol and port."
+    },
+    "abort": {
+      "quick_pair_missing_context": "The quick pairing session was lost. Start again."
+    }
+  },
+  "exceptions": {
+    "mqtt_transport_required": {
+      "message": "The connection was blocked because the saved configuration has no valid MQTT protocol. Open Configure → Re-pair or manual setup, select mqtts/wss and the correct TLS port, or run quick pairing again."
+    },
+    "mqtt_tls_required": {
+      "message": "The plaintext connection to the remote broker was blocked. Open Configure → Re-pair or manual setup, select mqtts/wss and the correct TLS port, or run quick pairing again."
+    }
+  }
+}

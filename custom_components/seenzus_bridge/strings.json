@@ -2,188 +2,188 @@
   "config": {
     "step": {
       "user": {
-        "title": "配置 seenzus MQTT Bridge",
-        "description": "先选择配对模式，再进入对应的配置表单。",
+        "title": "Set up seenzus MQTT Bridge",
+        "description": "Choose a pairing mode to open its setup form.",
         "data": {
-          "pairing_mode": "配对模式"
+          "pairing_mode": "Pairing mode"
         },
         "sections": {}
       },
       "seamless": {
-        "title": "快速配对",
-        "description": "集成会连接 seenzus API 创建网页配对会话并跳转到外部 seenzus 页面完成授权。直接点「提交」即可，无需填写任何内容。",
+        "title": "Quick pair",
+        "description": "The integration creates a web pairing session through the seenzus API and opens seenzus for authorization. Select Submit to continue; no fields are required.",
         "data": {},
         "sections": {}
       },
       "manual": {
-        "title": "手动配置",
-        "description": "填写手动配对参数，其余 MQTT 连接与高级参数默认折叠。",
+        "title": "Manual setup",
+        "description": "Enter the manual pairing settings. MQTT connection settings and advanced settings are collapsed by default.",
         "data": {},
         "sections": {
           "mqtt_settings": {
-            "name": "MQTT 连接参数",
-            "description": "远程 Broker 必须使用 MQTT over TLS 或安全 WebSocket。明文连接仅允许明确的内网或回环 IP。",
+            "name": "MQTT connection settings",
+            "description": "Remote brokers require MQTT over TLS or secure WebSocket. Plaintext connections are allowed only for explicit local or loopback IP addresses.",
             "data": {
-              "mqtt_host": "MQTT Broker 地址",
-              "mqtt_port": "MQTT 端口",
-              "mqtt_username": "MQTT 用户名",
-              "mqtt_password": "MQTT 密码",
-              "mqtt_scheme": "MQTT 传输协议",
-              "mqtt_ws_path": "WebSocket 路径（仅 ws/wss）"
+              "mqtt_host": "MQTT broker address",
+              "mqtt_port": "MQTT port",
+              "mqtt_username": "MQTT username",
+              "mqtt_password": "MQTT password",
+              "mqtt_scheme": "MQTT transport protocol",
+              "mqtt_ws_path": "WebSocket path (ws/wss only)"
             },
             "data_description": {
-              "mqtt_port": "留空使用所选协议的标准端口：mqtts 8883、wss 443、mqtt 1883、ws 80。自定义端口请明确填写。",
-              "mqtt_ws_path": "安全 WebSocket 通常使用 /mqtt，按 Broker 配置填写。"
+              "mqtt_port": "Leave blank to use the standard port for the selected protocol: mqtts 8883, wss 443, mqtt 1883, or ws 80. Enter custom ports explicitly.",
+              "mqtt_ws_path": "Secure WebSocket commonly uses /mqtt. Use the path configured on your broker."
             }
           },
           "advanced_settings": {
-            "name": "高级参数",
-            "description": "默认折叠。仅在需要自定义协议参数或状态事件推送时调整。",
+            "name": "Advanced settings",
+            "description": "Collapsed by default. Change these only to customize protocol settings or state event publishing.",
             "data": {
-              "topic_root": "V2 Topic 根路径",
-              "bridge_id": "Bridge ID（留空自动生成）",
-              "enable_state_events": "启用实体状态事件推送",
-              "allow_dangerous_services": "允许调用危险服务（hassio / shell_command / python_script 等，默认关闭）",
-              "enable_template_api": "允许模板渲染 API /api/template（默认关闭）",
-              "expose_full_config": "返回完整 /api/config（含家庭位置坐标，默认关闭）",
-              "mqtt_max_packet_size_kib": "MQTT 最大报文大小（KiB）"
+              "topic_root": "V2 topic root",
+              "bridge_id": "Bridge ID (leave blank to generate automatically)",
+              "enable_state_events": "Publish entity state events",
+              "allow_dangerous_services": "Allow dangerous services (hassio, shell_command, python_script, etc.; off by default)",
+              "enable_template_api": "Allow the /api/template rendering API (off by default)",
+              "expose_full_config": "Expose full /api/config, including home coordinates (off by default)",
+              "mqtt_max_packet_size_kib": "Maximum MQTT packet size (KiB)"
             },
             "data_description": {
-              "mqtt_max_packet_size_kib": "本地发送上限，须不高于 Broker 允许的报文大小。1024 KiB = 1 MiB，2048 KiB = 2 MiB；不会自动修改 Broker 配置。"
+              "mqtt_max_packet_size_kib": "Local sending limit; must not exceed the broker's packet size limit. 1024 KiB = 1 MiB; 2048 KiB = 2 MiB. This does not change the broker configuration."
             }
           }
         }
       }
     },
     "create_entry": {
-      "app_return": "seenzus MQTT Bridge 已成功绑定，集成已添加完成。\n\n## 👉 [返回 seenzus 应用]({app_return_url})\n\n&nbsp;"
+      "app_return": "seenzus MQTT Bridge is paired and the integration has been added.\n\n## [Return to seenzus]({app_return_url})\n\n&nbsp;"
     },
     "error": {
-      "host_required": "MQTT Broker 地址不能为空",
-      "dev_override_invalid": "开发者覆盖文件 seenzus_bridge_dev.json 内容无效（JSON 损坏或 pairing_api_base 不是合法的 http(s) 地址），请修正或删除该文件后重试",
-      "quick_pair_session_failed": "创建快速配对会话失败，请检查 seenzus API 地址、DNS 和服务状态",
-      "quick_pair_bootstrap_failed": "读取网页配对最终状态失败，请确认页面侧已经完成绑定",
-      "quick_pair_mqtt_missing": "后端未返回 MQTT 桥接配置，无法完成快速配对",
-      "quick_pair_callback_unavailable": "无法生成 Home Assistant 回跳地址，请检查当前访问地址或实例 URL 配置",
-      "quick_pair_authorization_failed": "外部授权未成功完成，请重新发起快速配对",
-      "quick_pair_callback_state_mismatch": "回跳状态校验失败，请重新发起快速配对",
-      "quick_pair_code_exchange_failed": "回跳成功但兑换桥接配置失败，请检查后端服务状态",
-      "quick_pair_callback_timeout": "未收到回跳确认，请确认外部页面已完成授权并返回 Home Assistant",
-      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起",
-      "invalid_mqtt_packet_size": "请输入 1–262144 范围内的整数（KiB），并确保不超过 Broker 的报文大小限制",
-      "mqtt_packet_size_too_small_for_topic": "此上限无法容纳当前 Topic 的最小离线消息，请提高上限或缩短 Topic / Bridge ID",
-      "mqtt_transport_required": "MQTT 传输协议缺失或无效。请选择 mqtts/wss；快速配对时请联系服务端修正协议后重新配对，不会回退为明文连接。",
-      "mqtt_tls_required": "此 Broker 必须使用 TLS（mqtts 或 wss）。明文 MQTT/WebSocket 仅允许明确的内网或回环 IP，请检查协议与端口。"
+      "host_required": "Enter the MQTT broker address.",
+      "dev_override_invalid": "The developer override file seenzus_bridge_dev.json is invalid: its JSON is malformed or pairing_api_base is not a valid HTTP(S) URL. Correct or remove the file and try again.",
+      "quick_pair_session_failed": "Could not create a quick pairing session. Check the seenzus API address, DNS, and service status.",
+      "quick_pair_bootstrap_failed": "Could not read the final web pairing status. Confirm that pairing was completed on the web page.",
+      "quick_pair_mqtt_missing": "The backend did not return MQTT bridge settings. Quick pairing cannot finish.",
+      "quick_pair_callback_unavailable": "Could not generate the Home Assistant callback URL. Check the current address or the instance URL settings.",
+      "quick_pair_authorization_failed": "External authorization did not finish. Start quick pairing again.",
+      "quick_pair_callback_state_mismatch": "Callback state validation failed. Start quick pairing again.",
+      "quick_pair_code_exchange_failed": "The callback succeeded, but exchanging the code for bridge settings failed. Check the backend service status.",
+      "quick_pair_callback_timeout": "No callback confirmation was received. Complete authorization on the external page and return to Home Assistant.",
+      "quick_pair_missing_context": "The quick pairing session was lost. Start again.",
+      "invalid_mqtt_packet_size": "Enter an integer from 1 to 262144 (KiB) that does not exceed the broker's packet size limit.",
+      "mqtt_packet_size_too_small_for_topic": "This limit cannot fit the minimum offline message for the current topic. Increase the limit or shorten the topic or Bridge ID.",
+      "mqtt_transport_required": "The MQTT transport protocol is missing or invalid. Select mqtts/wss. For quick pairing, have the backend supply a valid protocol and pair again. Plaintext fallback is not allowed.",
+      "mqtt_tls_required": "This broker requires TLS (mqtts or wss). Plaintext MQTT/WebSocket is allowed only for explicit local or loopback IP addresses. Check the protocol and port."
     },
     "abort": {
-      "already_configured": "seenzus MQTT Bridge 已经配置过了，只允许添加一个实例",
-      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
+      "already_configured": "seenzus MQTT Bridge is already configured. Only one instance is supported.",
+      "quick_pair_missing_context": "The quick pairing session was lost. Start again."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "修改 seenzus MQTT Bridge 配置",
-        "description": "调整 MQTT 连接设置，或重新进行配对。保存设置后自动重载集成。",
+        "title": "Configure seenzus MQTT Bridge",
+        "description": "Change MQTT connection settings or pair again. Saving settings automatically reloads the integration.",
         "menu_options": {
-          "connection_settings": "MQTT 连接设置",
-          "pairing": "重新配对或手动配置"
+          "connection_settings": "MQTT connection settings",
+          "pairing": "Re-pair or manual setup"
         }
       },
       "seamless": {
-        "title": "快速配对",
-        "description": "重新发起外部 seenzus 快速配对，直接点「提交」即可，无需填写任何内容。保存后会使用 seenzus API 创建网页配对会话，授权成功后浏览器会直接回跳到 Home Assistant 并自动刷新 MQTT 桥接配置。",
+        "title": "Quick pair",
+        "description": "Start external seenzus quick pairing again. Select Submit; no fields are required. The integration creates a web pairing session through the seenzus API. After authorization, the browser returns to Home Assistant and the MQTT bridge settings are updated automatically.",
         "data": {},
         "sections": {}
       },
       "manual": {
-        "title": "手动配置",
-        "description": "填写手动配对参数，其余 MQTT 连接与高级参数默认折叠。",
+        "title": "Manual setup",
+        "description": "Enter the manual pairing settings. MQTT connection settings and advanced settings are collapsed by default.",
         "data": {},
         "sections": {
           "mqtt_settings": {
-            "name": "MQTT 连接参数",
-            "description": "远程 Broker 必须使用 MQTT over TLS 或安全 WebSocket。明文连接仅允许明确的内网或回环 IP。",
+            "name": "MQTT connection settings",
+            "description": "Remote brokers require MQTT over TLS or secure WebSocket. Plaintext connections are allowed only for explicit local or loopback IP addresses.",
             "data": {
-              "mqtt_host": "MQTT Broker 地址",
-              "mqtt_port": "MQTT 端口",
-              "mqtt_username": "MQTT 用户名",
-              "mqtt_password": "MQTT 密码",
-              "mqtt_scheme": "MQTT 传输协议",
-              "mqtt_ws_path": "WebSocket 路径（仅 ws/wss）"
+              "mqtt_host": "MQTT broker address",
+              "mqtt_port": "MQTT port",
+              "mqtt_username": "MQTT username",
+              "mqtt_password": "MQTT password",
+              "mqtt_scheme": "MQTT transport protocol",
+              "mqtt_ws_path": "WebSocket path (ws/wss only)"
             },
             "data_description": {
-              "mqtt_port": "留空使用所选协议的标准端口：mqtts 8883、wss 443、mqtt 1883、ws 80。自定义端口请明确填写。",
-              "mqtt_ws_path": "安全 WebSocket 通常使用 /mqtt，按 Broker 配置填写。"
+              "mqtt_port": "Leave blank to use the standard port for the selected protocol: mqtts 8883, wss 443, mqtt 1883, or ws 80. Enter custom ports explicitly.",
+              "mqtt_ws_path": "Secure WebSocket commonly uses /mqtt. Use the path configured on your broker."
             }
           },
           "advanced_settings": {
-            "name": "高级参数",
-            "description": "默认折叠。修改协议参数或状态事件推送开关时展开。",
+            "name": "Advanced settings",
+            "description": "Collapsed by default. Expand to change protocol settings or state event publishing.",
             "data": {
-              "topic_root": "V2 Topic 根路径",
-              "bridge_id": "Bridge ID（留空自动生成）",
-              "enable_state_events": "启用实体状态事件推送",
-              "allow_dangerous_services": "允许调用危险服务（hassio / shell_command / python_script 等，默认关闭）",
-              "enable_template_api": "允许模板渲染 API /api/template（默认关闭）",
-              "expose_full_config": "返回完整 /api/config（含家庭位置坐标，默认关闭）",
-              "mqtt_max_packet_size_kib": "MQTT 最大报文大小（KiB）"
+              "topic_root": "V2 topic root",
+              "bridge_id": "Bridge ID (leave blank to generate automatically)",
+              "enable_state_events": "Publish entity state events",
+              "allow_dangerous_services": "Allow dangerous services (hassio, shell_command, python_script, etc.; off by default)",
+              "enable_template_api": "Allow the /api/template rendering API (off by default)",
+              "expose_full_config": "Expose full /api/config, including home coordinates (off by default)",
+              "mqtt_max_packet_size_kib": "Maximum MQTT packet size (KiB)"
             },
             "data_description": {
-              "mqtt_max_packet_size_kib": "本地发送上限，须不高于 Broker 允许的报文大小。1024 KiB = 1 MiB，2048 KiB = 2 MiB；不会自动修改 Broker 配置。"
+              "mqtt_max_packet_size_kib": "Local sending limit; must not exceed the broker's packet size limit. 1024 KiB = 1 MiB; 2048 KiB = 2 MiB. This does not change the broker configuration."
             }
           }
         }
       },
       "pairing": {
-        "title": "重新配对或手动配置",
-        "description": "先选择配对模式，再进入对应的配置表单。保存后自动重载集成立即生效。",
+        "title": "Re-pair or manual setup",
+        "description": "Choose a pairing mode to open its setup form. Saving automatically reloads the integration to apply the settings.",
         "data": {
-          "pairing_mode": "配对模式"
+          "pairing_mode": "Pairing mode"
         },
         "sections": {}
       },
       "connection_settings": {
-        "title": "MQTT 连接设置",
-        "description": "修改本地报文上限并重连，保留当前配对、凭据和传输方式，无需重新授权。",
+        "title": "MQTT connection settings",
+        "description": "Change the local packet size limit and reconnect. Current pairing, credentials, and transport are preserved; no new authorization is required.",
         "data": {
-          "mqtt_max_packet_size_kib": "MQTT 最大报文大小（KiB）"
+          "mqtt_max_packet_size_kib": "Maximum MQTT packet size (KiB)"
         },
         "data_description": {
-          "mqtt_max_packet_size_kib": "本地发送上限，须不高于 Broker 允许的报文大小。1024 KiB = 1 MiB，2048 KiB = 2 MiB；不会自动修改 Broker 配置。"
+          "mqtt_max_packet_size_kib": "Local sending limit; must not exceed the broker's packet size limit. 1024 KiB = 1 MiB; 2048 KiB = 2 MiB. This does not change the broker configuration."
         }
       }
     },
     "create_entry": {
-      "app_return": "seenzus MQTT Bridge 已成功绑定，集成已添加完成。\n\n## 👉 [返回 seenzus 应用]({app_return_url})\n\n&nbsp;"
+      "app_return": "seenzus MQTT Bridge is paired and the integration has been added.\n\n## [Return to seenzus]({app_return_url})\n\n&nbsp;"
     },
     "error": {
-      "host_required": "MQTT Broker 地址不能为空",
-      "dev_override_invalid": "开发者覆盖文件 seenzus_bridge_dev.json 内容无效（JSON 损坏或 pairing_api_base 不是合法的 http(s) 地址），请修正或删除该文件后重试",
-      "quick_pair_session_failed": "创建快速配对会话失败，请检查 seenzus API 地址、DNS 和服务状态",
-      "quick_pair_bootstrap_failed": "读取网页配对最终状态失败，请确认页面侧已经完成绑定",
-      "quick_pair_mqtt_missing": "后端未返回 MQTT 桥接配置，无法完成快速配对",
-      "quick_pair_callback_unavailable": "无法生成 Home Assistant 回跳地址，请检查当前访问地址或实例 URL 配置",
-      "quick_pair_authorization_failed": "外部授权未成功完成，请重新发起快速配对",
-      "quick_pair_callback_state_mismatch": "回跳状态校验失败，请重新发起快速配对",
-      "quick_pair_code_exchange_failed": "回跳成功但兑换桥接配置失败，请检查后端服务状态",
-      "quick_pair_callback_timeout": "未收到回跳确认，请确认外部页面已完成授权并返回 Home Assistant",
-      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起",
-      "invalid_mqtt_packet_size": "请输入 1–262144 范围内的整数（KiB），并确保不超过 Broker 的报文大小限制",
-      "mqtt_packet_size_too_small_for_topic": "此上限无法容纳当前 Topic 的最小离线消息，请提高上限或缩短 Topic / Bridge ID",
-      "mqtt_transport_required": "MQTT 传输协议缺失或无效。请选择 mqtts/wss；快速配对时请联系服务端修正协议后重新配对，不会回退为明文连接。",
-      "mqtt_tls_required": "此 Broker 必须使用 TLS（mqtts 或 wss）。明文 MQTT/WebSocket 仅允许明确的内网或回环 IP，请检查协议与端口。"
+      "host_required": "Enter the MQTT broker address.",
+      "dev_override_invalid": "The developer override file seenzus_bridge_dev.json is invalid: its JSON is malformed or pairing_api_base is not a valid HTTP(S) URL. Correct or remove the file and try again.",
+      "quick_pair_session_failed": "Could not create a quick pairing session. Check the seenzus API address, DNS, and service status.",
+      "quick_pair_bootstrap_failed": "Could not read the final web pairing status. Confirm that pairing was completed on the web page.",
+      "quick_pair_mqtt_missing": "The backend did not return MQTT bridge settings. Quick pairing cannot finish.",
+      "quick_pair_callback_unavailable": "Could not generate the Home Assistant callback URL. Check the current address or the instance URL settings.",
+      "quick_pair_authorization_failed": "External authorization did not finish. Start quick pairing again.",
+      "quick_pair_callback_state_mismatch": "Callback state validation failed. Start quick pairing again.",
+      "quick_pair_code_exchange_failed": "The callback succeeded, but exchanging the code for bridge settings failed. Check the backend service status.",
+      "quick_pair_callback_timeout": "No callback confirmation was received. Complete authorization on the external page and return to Home Assistant.",
+      "quick_pair_missing_context": "The quick pairing session was lost. Start again.",
+      "invalid_mqtt_packet_size": "Enter an integer from 1 to 262144 (KiB) that does not exceed the broker's packet size limit.",
+      "mqtt_packet_size_too_small_for_topic": "This limit cannot fit the minimum offline message for the current topic. Increase the limit or shorten the topic or Bridge ID.",
+      "mqtt_transport_required": "The MQTT transport protocol is missing or invalid. Select mqtts/wss. For quick pairing, have the backend supply a valid protocol and pair again. Plaintext fallback is not allowed.",
+      "mqtt_tls_required": "This broker requires TLS (mqtts or wss). Plaintext MQTT/WebSocket is allowed only for explicit local or loopback IP addresses. Check the protocol and port."
     },
     "abort": {
-      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
+      "quick_pair_missing_context": "The quick pairing session was lost. Start again."
     }
   },
   "exceptions": {
     "mqtt_transport_required": {
-      "message": "旧配置缺少有效的 MQTT 协议，连接已阻止。打开「配置 → 重新配对或手动配置」，选择 mqtts/wss 和正确的 TLS 端口，或重新快速配对。"
+      "message": "The connection was blocked because the saved configuration has no valid MQTT protocol. Open Configure → Re-pair or manual setup, select mqtts/wss and the correct TLS port, or run quick pairing again."
     },
     "mqtt_tls_required": {
-      "message": "远程 Broker 的明文连接已阻止。打开「配置 → 重新配对或手动配置」，选择 mqtts/wss 和正确的 TLS 端口，或重新快速配对。"
+      "message": "The plaintext connection to the remote broker was blocked. Open Configure → Re-pair or manual setup, select mqtts/wss and the correct TLS port, or run quick pairing again."
     }
   }
 }
