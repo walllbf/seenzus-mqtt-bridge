@@ -11,6 +11,7 @@ from homeassistant import config_entries
 from homeassistant import data_entry_flow as data_entry_flow_module
 from homeassistant.core import callback
 from homeassistant.helpers.network import NoURLAvailableError
+from homeassistant.helpers import entity_registry as er, device_registry as dr
 from homeassistant.helpers.selector import (
     BooleanSelector,
     NumberSelector,
@@ -19,6 +20,15 @@ from homeassistant.helpers.selector import (
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
+    DeviceSelector,
+    DeviceSelectorConfig,
+    EntitySelector,
+    EntitySelectorConfig,
+    AreaSelector,
+    AreaSelectorConfig,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
 )
 
 from .const import (
@@ -67,6 +77,8 @@ from .const import (
     normalize_pairing_mode,
 )
 from .dev_override import DevOverrideError, resolve_dev_pairing_api_base
+from .device_access import CONF_SCOPE, CONF_DEVICES, CONF_ENTITIES, SCOPE_KEYS
+from .environments import CONF_ENVIRONMENT, CONF_WORLD_ID, CONF_WORLD_NAME, ENVIRONMENTS, ENVIRONMENT_SLOTS, bootstrap_url, entry_environment, environment_for_api
 from .mqtt_transport import MqttTransportError, validate_mqtt_transport
 from .mqtt_settings import (
     MqttPresenceBudgetError,
@@ -97,6 +109,7 @@ from .quick_pair import (  # noqa: F401
     _clear_quick_pair_notifications,
     _format_quick_pair_diagnostic,
     _notify_app_return,
+    _mark_quick_pair_completed,
     _pop_quick_pair_callback_payload,
     _record_quick_pair_diagnostic,
 )
@@ -113,8 +126,7 @@ _LOGGER = logging.getLogger(__name__)
 def _backend_bridge_name(hass) -> str:
     """Bridge name POSTed to the backend, suffixed with the HA home name.
 
-    The integration is single-instance per HA, so every install would otherwise
-    register the same ``PLUGIN_NAME`` and be indistinguishable in the seenzus app
+    Without a home name each entry would register the same ``PLUGIN_NAME`` in the app
     when one account has several homes paired. Appending ``location_name`` (the
     home name the user set in HA) gives each bridge a human-meaningful label.
     Falls back to the bare plugin name when no home name is set or it would just
@@ -166,18 +178,20 @@ def _default_pairing_mode(data: dict) -> str:
     return normalize_pairing_mode(data.get(CONF_PAIRING_MODE, ""))
 
 
+# This is a setup route only; persisted pairing_mode remains seamless/manual.
+_PAIRING_MODE_CHOOSE_ENVIRONMENT = "choose_environment"
+
+
 def _mode_schema(default_mode: str = DEFAULT_PAIRING_MODE) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required(
                 CONF_PAIRING_MODE,
                 default=default_mode,
-            ): vol.In(
-                {
-                    PAIRING_MODE_SEAMLESS: "快速配对（推荐）",
-                    PAIRING_MODE_MANUAL: "手动配置（高级）",
-                }
-            ),
+            ): SelectSelector(SelectSelectorConfig(
+                options=[PAIRING_MODE_SEAMLESS, _PAIRING_MODE_CHOOSE_ENVIRONMENT, PAIRING_MODE_MANUAL],
+                mode=SelectSelectorMode.LIST, translation_key="pairing_mode",
+            )),
         }
     )
 
@@ -213,9 +227,7 @@ def _schema(pairing_mode: str, defaults: dict | None = None) -> vol.Schema:
     schema_fields: dict = {}
 
     if pairing_mode == PAIRING_MODE_SEAMLESS:
-        # 快速配对无任何输入字段——直接提交即可：配对 API 地址走内置生产默认
-        # （const.DEFAULT_PAIRING_API_BASE）。本地联调后端时，在 HA 配置目录放置
-        # <config>/seenzus_bridge_dev.json 覆盖（见 dev_override），不经 UI。
+        # 设备范围已在前置步骤确定，环境可由中转页识别；此空表单只用于失败后的重试。
         return vol.Schema({})
 
     schema_fields[
@@ -306,7 +318,7 @@ def _validate(data: dict, *, entry_id: str = "000000000000") -> dict[str, str]:
         errors[CONF_MQTT_MAX_PACKET_SIZE_KIB] = "invalid_mqtt_packet_size"
     pairing_mode = str(data.get(CONF_PAIRING_MODE, DEFAULT_PAIRING_MODE)).strip()
     if pairing_mode == PAIRING_MODE_SEAMLESS:
-        # 快速配对无表单字段（API 地址走内置默认 / dev 覆盖文件），无需校验。
+        # 环境和设备范围由前置步骤校验；重试表单没有连接参数。
         return errors
 
     if not str(data.get(CONF_MQTT_HOST, "")).strip():
@@ -369,6 +381,11 @@ def _build_quick_pair_entry_data(
     source_name = str(getattr(status_result, "source_name", "") or mqtt.get("sourceName", "") or "").strip()
     if source_name:
         data[CONF_SOURCE_NAME] = source_name
+    world_id = getattr(status_result, "world_id", None)
+    if world_id:
+        data[CONF_WORLD_ID] = world_id
+        data[CONF_WORLD_NAME] = getattr(status_result, "world_name", None) or world_id
+    data[CONF_ENVIRONMENT] = environment_for_api(api_base)
     return data
 
 
@@ -494,9 +511,50 @@ class _QuickPairFlowMixin:
     _flow_manager: str
     _entry_title: str
 
+    def _notification_scope(self) -> str:
+        return getattr(getattr(self, "_config_entry", None), "entry_id", None) or getattr(self, "flow_id", "")
+
     def _current_config(self) -> dict:
         """Existing config used to seed form defaults; the config flow has none."""
         return {}
+
+    def _configured_environments(self) -> set[str]:
+        own_entry_id = getattr(getattr(self, "_config_entry", None), "entry_id", None)
+        return {entry_environment({**entry.data, **entry.options})
+                for entry in self.hass.config_entries.async_entries(DOMAIN)
+                if entry.entry_id != own_entry_id}
+
+    def _claim_pairing_slot(self) -> bool:
+        """Serialize credential rotation across config and options flows on this HA."""
+        domain_data = self.hass.data.setdefault(DOMAIN, {})
+        owner = domain_data.get("pairing_flow_owner")
+        current = (self._flow_manager, self.flow_id)
+        if owner and owner != current:
+            manager = self.hass.config_entries.options if owner[0] == FLOW_MANAGER_OPTIONS else self.hass.config_entries.flow
+            if any(flow["flow_id"] == owner[1] for flow in manager.async_progress()):
+                if owner[1] not in domain_data.get("pairing_parked_flows", set()):
+                    return False
+                # 死路页面（中转页未部署、授权页无法回调）会把在位流程永远留在外部
+                # 授权步；新的主动配对接管槽位并终止僵尸流程，否则只能重启 HA 解锁。
+                try:
+                    manager.async_abort(owner[1])
+                except Exception:  # noqa: BLE001 — 在位流程已消失时直接接管
+                    pass
+                domain_data.get("pairing_parked_flows", set()).discard(owner[1])
+        domain_data["pairing_flow_owner"] = current
+        return True
+
+    def _mark_pairing_parked(self) -> None:
+        """Mark this flow as parked at the external authorize step awaiting the browser."""
+        self.hass.data.setdefault(DOMAIN, {}).setdefault("pairing_parked_flows", set()).add(
+            getattr(self, "flow_id", None)
+        )
+
+    def _clear_pairing_parked(self) -> None:
+        """Best-effort cleanup once the external phase ends for this flow."""
+        parked = self.hass.data.get(DOMAIN, {}).get("pairing_parked_flows")
+        if parked is not None:
+            parked.discard(getattr(self, "flow_id", None))
 
     def _init_quick_pair_state(self) -> None:
         """Reset the quick-pair handshake state attributes."""
@@ -513,6 +571,10 @@ class _QuickPairFlowMixin:
         # success page after the entry is committed (so the link can never abandon
         # the flow before it completes).
         self._quick_pair_app_return_url: str | None = None
+        self._selected_environment = entry_environment(self._current_config()) if self._current_config() else "auto"
+        self._scope = {key: self._current_config()[key] for key in SCOPE_KEYS if key in self._current_config()}
+        self._dev_api_base: str | None = None
+        self._scope_only = False
 
     def _reshow_seamless_form(self, error_key: str) -> config_entries.ConfigFlowResult:
         """Re-show the (field-less) seamless form after a failure, with the error."""
@@ -535,18 +597,35 @@ class _QuickPairFlowMixin:
             )
         except MqttTransportError as err:
             self._quick_pair_diagnostic = {"error_code": str(err)}
-            _record_quick_pair_diagnostic(self.hass, str(err), self._quick_pair_diagnostic)
+            _record_quick_pair_diagnostic(self.hass, str(err), self._quick_pair_diagnostic, self._notification_scope())
             return self._reshow_seamless_form(str(err))
         except ValueError:
-            _record_quick_pair_diagnostic(self.hass, "quick_pair_mqtt_missing", self._quick_pair_diagnostic)
+            _record_quick_pair_diagnostic(self.hass, "quick_pair_mqtt_missing", self._quick_pair_diagnostic, self._notification_scope())
             return self._reshow_seamless_form("quick_pair_mqtt_missing")
+        if not data.get(CONF_WORLD_ID):
+            return self._reshow_seamless_form("world_identity_missing")
+        existing = self._current_config()
+        if existing.get(CONF_WORLD_ID) and data[CONF_WORLD_ID] != existing[CONF_WORLD_ID]:
+            return self._reshow_seamless_form("world_mismatch")
+        if not existing.get(CONF_WORLD_ID) and existing.get(CONF_SOURCE_ID) and data.get(CONF_SOURCE_ID) != existing[CONF_SOURCE_ID]:
+            return self._reshow_seamless_form("world_mismatch")
+        data = {**existing, **data, **self._scope}
+        self._entry_title = f"{ENVIRONMENTS.get(data[CONF_ENVIRONMENT], ('开发环境', ''))[0]} · {data[CONF_WORLD_NAME]}"
+        # Checked before session creation / credential exchange as well. Keep a
+        # final guard so no alternate completion path can create a duplicate slot.
+        if data[CONF_ENVIRONMENT] in self._configured_environments():
+            return self.async_abort(reason="environment_already_configured")
+        if self._flow_manager == FLOW_MANAGER_CONFIG:
+            self.context["unique_id"] = data[CONF_ENVIRONMENT]
 
         # A confirmed return URL on the final result wins over the one captured
         # when the session was created; keep the latter as fallback.
         result_return_url = _sanitize_app_return_url(getattr(status_result, "app_return_url", None))
         if result_return_url:
             self._quick_pair_app_return_url = result_return_url
-        return self._finish_quick_pair(data)
+        result = self._finish_quick_pair(data)
+        _mark_quick_pair_completed(self.hass, self._quick_pair_callback_state)
+        return result
 
     def _finish_quick_pair(self, data: dict) -> config_entries.ConfigFlowResult:
         """Create the entry, attaching the app return link to the success page.
@@ -557,13 +636,16 @@ class _QuickPairFlowMixin:
         tapping the link cannot abandon the flow and strand a confirmed binding.
         On the manual / no-link path we create the entry plainly.
         """
+        if self._flow_manager == FLOW_MANAGER_OPTIONS and data.get(CONF_WORLD_ID):
+            self.hass.config_entries.async_update_entry(self._config_entry, title=self._entry_title,
+                unique_id=data[CONF_ENVIRONMENT])
         if self._quick_pair_app_return_url:
             # Durable, path-independent surface for the return link: the
             # create-entry success page shows it inline on the first-time config
             # flow, but that page is transient and the options / re-pair flow
             # doesn't render a create_entry description at all — the notification
             # covers both paths and survives the success dialog being closed.
-            _notify_app_return(self.hass, self._quick_pair_app_return_url)
+            _notify_app_return(self.hass, self._quick_pair_app_return_url, self._notification_scope())
             return self.async_create_entry(
                 title=self._entry_title,
                 data=data,
@@ -573,75 +655,108 @@ class _QuickPairFlowMixin:
         # No return link this time (manual / no-URL re-pair). Still a success, so
         # clear any stale return-link or failure notification from a prior attempt
         # — a leftover link would send the user back with an expired session.
-        _clear_quick_pair_notifications(self.hass)
+        _clear_quick_pair_notifications(self.hass, self._notification_scope())
         return self.async_create_entry(title=self._entry_title, data=data)
 
-    async def async_step_seamless(self, user_input: dict | None = None):
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            data = _flatten_form_input(user_input)
-            data[CONF_PAIRING_MODE] = PAIRING_MODE_SEAMLESS
-            errors = _validate(data)
-            if not errors:
-                config_data = self.hass.config.as_dict() if hasattr(self.hass.config, "as_dict") else {}
-                try:
-                    redirect_uri, callback_state, callback_state_token = _build_quick_pair_callback_context(
-                        self.hass,
-                        getattr(self, "flow_id", "seenzus-quick-pair"),
-                        self._flow_manager,
-                    )
-                except (NoURLAvailableError, RuntimeError, ValueError):
-                    errors["base"] = "quick_pair_callback_unavailable"
-                else:
-                    # 配对 API 地址（模型 A）：每次会话在此新鲜解析——有 dev 覆盖
-                    # 文件且合法则用它，否则用内置生产默认；文件存在但非法则
-                    # fail-loud 拦住配对（DevOverrideError），绝不静默连生产。
-                    # 全程不读 entry 存值，联调地址不会跨重配对残留。
-                    try:
-                        api_base = (
-                            await resolve_dev_pairing_api_base(self.hass)
-                            or DEFAULT_PAIRING_API_BASE
-                        )
-                    except DevOverrideError as err:
-                        _LOGGER.warning("Quick pair dev override rejected: %s", err)
-                        errors["base"] = "dev_override_invalid"
-                    else:
-                        result = await create_web_pairing_session(
-                            api_base=api_base,
-                            bridge_name=_backend_bridge_name(self.hass),
-                            bridge_version=BRIDGE_VERSION,
-                            ha_version=str(config_data.get("version", "")),
-                            redirect_uri=redirect_uri,
-                            state=callback_state_token,
-                            ha_instance_id=await _resolve_ha_instance_id(self.hass),
-                        )
-                        if not result.ok or not result.pairing_page_url or not result.session_id:
-                            errors["base"] = "quick_pair_session_failed"
-                            self._quick_pair_diagnostic = _diagnostic_from_result(result)
-                            _record_quick_pair_diagnostic(self.hass, "quick_pair_session_failed", self._quick_pair_diagnostic)
-                        else:
-                            self._quick_pair_api_base = api_base
-                            self._quick_pair_page_url = result.pairing_page_url
-                            self._quick_pair_session_id = result.session_id
-                            self._quick_pair_external_opened = False
-                            self._quick_pair_callback_state = callback_state
-                            self._quick_pair_callback_state_token = callback_state_token
-                            self._quick_pair_exchange_result = None
-                            self._quick_pair_finish_error = None
-                            self._quick_pair_app_return_url = _sanitize_app_return_url(
-                                getattr(result, "app_return_url", None)
-                            )
-                            self._quick_pair_diagnostic = _diagnostic_from_result(result)
-                            return await self.async_step_seamless_authorize()
+    async def _environment_choices(self) -> dict[str, str]:
+        choices = {"auto": "跟随应用（未识别时选择）", "cn": "国内 PRD", "global": "境外 PRD"}
+        self._dev_api_base = await resolve_dev_pairing_api_base(self.hass)
+        if self._dev_api_base:
+            choices["uat"] = "UAT（开发）"
+            choices["custom"] = "Dev Server（开发预设）"
+        return choices
 
-        # 快速配对表单无字段（直接提交），无需回填。
-        return _show_form_with_diagnostic(
-            self,
-            step_id="seamless",
-            data_schema=_schema(PAIRING_MODE_SEAMLESS),
-            errors=errors,
-            diagnostic=self._quick_pair_diagnostic,
-        )
+    async def async_step_environment(self, user_input: dict | None = None):
+        try:
+            choices = await self._environment_choices()
+        except DevOverrideError:
+            return self._reshow_seamless_form("dev_override_invalid")
+        choices.pop("auto", None)
+        if user_input is not None:
+            environment = user_input.get(CONF_ENVIRONMENT)
+            if environment not in choices:
+                return self.async_abort(reason="invalid_environment")
+            if environment in self._configured_environments():
+                return self.async_abort(reason="environment_already_configured")
+            self._selected_environment = environment
+            if CONF_SCOPE in self._scope:
+                return await self._after_scope()
+            return await self.async_step_scope()
+        return self.async_show_form(step_id="environment", data_schema=vol.Schema({
+            vol.Required(CONF_ENVIRONMENT): SelectSelector(SelectSelectorConfig(
+                options=list(choices), mode=SelectSelectorMode.LIST, translation_key="environment")),
+        }))
+
+    async def async_step_seamless(self, user_input: dict | None = None):
+        if user_input is None:
+            return self._reshow_seamless_form(self._quick_pair_finish_error or "quick_pair_missing_context")
+        if not self._claim_pairing_slot():
+            return self._reshow_seamless_form("pairing_in_progress")
+        existing = self._current_config()
+        if existing and not existing.get(CONF_WORLD_ID) and not existing.get(CONF_SOURCE_ID):
+            return self._reshow_seamless_form("world_identity_missing")
+        if self._selected_environment in self._configured_environments():
+            return self.async_abort(reason="environment_already_configured")
+        try:
+            redirect_uri, callback_state, token = _build_quick_pair_callback_context(
+                self.hass, getattr(self, "flow_id", "seenzus-quick-pair"), self._flow_manager)
+            # A stored endpoint is authoritative on re-pair. Developer presets only
+            # seed a NEW entry; editing the global file cannot retarget any entry.
+            api_base = existing.get(CONF_PAIRING_API_BASE)
+            if not api_base and self._selected_environment in ENVIRONMENTS:
+                api_base = ENVIRONMENTS[self._selected_environment][1]
+            if not api_base and self._selected_environment == "custom":
+                api_base = self._dev_api_base or await resolve_dev_pairing_api_base(self.hass)
+                if not api_base:
+                    raise DevOverrideError("missing preset")
+            if api_base and environment_for_api(api_base) in self._configured_environments():
+                return self.async_abort(reason="environment_already_configured")
+            ha_instance_id = await _resolve_ha_instance_id(self.hass)
+            if not ha_instance_id:
+                return self._reshow_seamless_form("ha_identity_unavailable")
+            self._quick_pair_api_base = api_base
+            self._quick_pair_session_id = None
+            self._quick_pair_callback_state = callback_state
+            self._quick_pair_callback_state_token = token
+            self._quick_pair_external_opened = False
+            self._quick_pair_exchange_result = None
+            self._quick_pair_finish_error = None
+            if api_base:
+                result = await create_web_pairing_session(api_base=api_base,
+                    bridge_name=_backend_bridge_name(self.hass), bridge_version=BRIDGE_VERSION,
+                    ha_version=str(self.hass.config.as_dict().get("version", "")),
+                    redirect_uri=redirect_uri, state=token, ha_instance_id=ha_instance_id,
+                    protocol_version=2, expected_world_id=existing.get(CONF_WORLD_ID),
+                    expected_source_id=existing.get(CONF_SOURCE_ID) if not existing.get(CONF_WORLD_ID) else None)
+                if not result.ok or not result.pairing_page_url or not result.session_id:
+                    self._quick_pair_diagnostic = _diagnostic_from_result(result)
+                    return self._reshow_seamless_form("quick_pair_session_failed")
+                self._quick_pair_page_url = result.pairing_page_url
+                self._quick_pair_session_id = result.session_id
+                self._quick_pair_app_return_url = _sanitize_app_return_url(getattr(result, "app_return_url", None))
+                return await self.async_step_seamless_authorize()
+            # This hint controls only the relay's recovery picker, never the
+            # environment of an existing app launch or the destination API.
+            try:
+                developer_preset = await resolve_dev_pairing_api_base(self.hass)
+            except DevOverrideError:
+                developer_preset = None
+            available_environments = ["cn", "global"]
+            if developer_preset:
+                available_environments.append("uat")
+            self._quick_pair_page_url = bootstrap_url(api_base, {
+                "state": token, "redirect_uri": redirect_uri,
+                "ha_instance_id": ha_instance_id, "bridge_name": _backend_bridge_name(self.hass),
+                "expected_world_id": existing.get(CONF_WORLD_ID),
+                "expected_source_id": existing.get(CONF_SOURCE_ID) if not existing.get(CONF_WORLD_ID) else None,
+                "configured_environments": ",".join(sorted(self._configured_environments())),
+                "available_environments": ",".join(available_environments),
+            })
+            return await self.async_step_seamless_authorize()
+        except DevOverrideError:
+            return self._reshow_seamless_form("dev_override_invalid")
+        except (NoURLAvailableError, RuntimeError, ValueError):
+            return self._reshow_seamless_form("quick_pair_callback_unavailable")
 
     async def async_step_seamless_authorize(self, user_input: dict | None = None):
         if not self._quick_pair_page_url:
@@ -654,18 +769,37 @@ class _QuickPairFlowMixin:
             )
 
         if user_input is not None:
+            self._clear_pairing_parked()
             try:
                 state_payload = user_input.get("state")
-                if user_input.get("error"):
-                    self._quick_pair_finish_error = "quick_pair_authorization_failed"
-                elif (
+                if (
                     not isinstance(state_payload, dict)
                     or str(state_payload.get("pairing_state", "")).strip() != self._quick_pair_callback_state
                 ):
                     self._quick_pair_finish_error = "quick_pair_callback_state_mismatch"
-                elif not self._quick_pair_api_base or not self._quick_pair_callback_state_token:
+                elif user_input.get("error"):
+                    if user_input["error"] == "environment_already_configured":
+                        return self.async_abort(reason="environment_already_configured")
+                    self._quick_pair_finish_error = "environment_required" if user_input["error"] == "environment_required" and not self._current_config() else "quick_pair_authorization_failed"
+                elif not self._quick_pair_callback_state_token:
                     self._quick_pair_finish_error = "quick_pair_missing_context"
                 else:
+                    environment = user_input.get("environment")
+                    if self._quick_pair_api_base:
+                        if environment is not None and environment != environment_for_api(self._quick_pair_api_base):
+                            raise ValueError("environment_mismatch")
+                    elif environment in ENVIRONMENTS:
+                        self._quick_pair_api_base = ENVIRONMENTS[environment][1]
+                    else:
+                        raise ValueError("invalid_environment")
+                    if environment_for_api(self._quick_pair_api_base) in self._configured_environments():
+                        return self.async_abort(reason="environment_already_configured")
+                    session_id = user_input.get("session_id", self._quick_pair_session_id)
+                    if self._quick_pair_session_id and session_id != self._quick_pair_session_id:
+                        raise ValueError("session_mismatch")
+                    if not isinstance(session_id, str) or not session_id.startswith("wps_") or len(session_id) > 256:
+                        raise ValueError("invalid_session")
+                    self._quick_pair_session_id = session_id
                     code = str(user_input.get("code", "")).strip()
                     result = await exchange_web_pairing_callback_code(
                         api_base=self._quick_pair_api_base,
@@ -676,7 +810,7 @@ class _QuickPairFlowMixin:
                     if not result.ok or not result.mqtt:
                         self._quick_pair_finish_error = "quick_pair_code_exchange_failed"
                         self._quick_pair_diagnostic = _diagnostic_from_result(result)
-                        _record_quick_pair_diagnostic(self.hass, "quick_pair_code_exchange_failed", self._quick_pair_diagnostic)
+                        _record_quick_pair_diagnostic(self.hass, "quick_pair_code_exchange_failed", self._quick_pair_diagnostic, self._notification_scope())
                     else:
                         self._quick_pair_exchange_result = result
                         self._quick_pair_finish_error = None
@@ -687,11 +821,12 @@ class _QuickPairFlowMixin:
                     "error_code": type(err).__name__,
                     "message": str(err),
                 }
-                _record_quick_pair_diagnostic(self.hass, "quick_pair_callback_exception", self._quick_pair_diagnostic)
+                _record_quick_pair_diagnostic(self.hass, "quick_pair_callback_exception", self._quick_pair_diagnostic, self._notification_scope())
             return self.async_external_step_done(next_step_id="seamless_finish")
 
         if not self._quick_pair_external_opened:
             self._quick_pair_external_opened = True
+            self._mark_pairing_parked()
             return self.async_external_step(
                 step_id="seamless_authorize",
                 url=self._quick_pair_page_url,
@@ -701,6 +836,13 @@ class _QuickPairFlowMixin:
         return self.async_external_step_done(next_step_id="seamless_finish")
 
     async def async_step_seamless_finish(self, user_input: dict | None = None):
+        self._clear_pairing_parked()
+        if self._quick_pair_finish_error == "environment_required":
+            return await self.async_step_environment()
+        # 中转路径（自动识别）没有可用回调时——中转页未部署或不可达——按中转页
+        # 「无记录或失效时补选」的同一口径回退到桥内环境选择，绝不默认境外 PRD。
+        if self._quick_pair_api_base is None and self._quick_pair_finish_error:
+            return await self.async_step_environment()
         if not self._quick_pair_page_url or not self._quick_pair_api_base or not self._quick_pair_session_id:
             return self.async_abort(reason="quick_pair_missing_context")
 
@@ -722,11 +864,71 @@ class _QuickPairFlowMixin:
 
         if not status_result or not status_result.ok or not status_result.bound:
             self._quick_pair_diagnostic = _diagnostic_from_result(status_result) if status_result else self._quick_pair_diagnostic
-            _record_quick_pair_diagnostic(self.hass, "quick_pair_bootstrap_failed", self._quick_pair_diagnostic)
+            _record_quick_pair_diagnostic(self.hass, "quick_pair_bootstrap_failed", self._quick_pair_diagnostic, self._notification_scope())
             return self._reshow_seamless_form("quick_pair_bootstrap_failed")
         self._quick_pair_diagnostic = _diagnostic_from_result(status_result)
 
         return self._entry_data_or_reshow(status_result)
+
+    async def async_step_scope(self, user_input: dict | None = None):
+        if user_input:
+            self._scope[CONF_SCOPE] = user_input[CONF_SCOPE]
+            if user_input[CONF_SCOPE] == "all":
+                self._scope.update({CONF_DEVICES: [], CONF_ENTITIES: []})
+                return await self._after_scope()
+            return await self.async_step_devices()
+        return self.async_show_form(step_id="scope", data_schema=vol.Schema({
+            vol.Required(CONF_SCOPE, default=self._scope.get(CONF_SCOPE, "all")): SelectSelector(SelectSelectorConfig(
+                options=["all", "selected"], mode=SelectSelectorMode.LIST, translation_key="device_scope")),
+        }))
+
+    async def async_step_devices(self, user_input: dict | None = None):
+        if user_input is not None:
+            device_ids = set(user_input.get(CONF_DEVICES, []))
+            area_ids = set(user_input.get("areas", []))
+            device_ids.update(device.id for device in dr.async_get(self.hass).devices.values() if device.area_id in area_ids)
+            self._scope[CONF_DEVICES] = sorted(device_ids)
+            return await self.async_step_entities()
+        return self.async_show_form(step_id="devices", data_schema=vol.Schema({
+            vol.Optional("areas", default=[]): AreaSelector(AreaSelectorConfig(multiple=True)),
+            vol.Optional(CONF_DEVICES, default=self._scope.get(CONF_DEVICES, [])): DeviceSelector(DeviceSelectorConfig(multiple=True)),
+        }))
+
+    async def async_step_entities(self, user_input: dict | None = None):
+        registry = er.async_get(self.hass)
+        eligible = [entry for entry in registry.entities.values()
+                    if not entry.device_id and getattr(entry, "platform", None) != DOMAIN]
+        errors = {}
+        if user_input is not None:
+            area_ids = set(user_input.get("areas", []))
+            entity_ids = set(user_input.get("entities", []))
+            entity_ids.update(entry.entity_id for entry in eligible if entry.area_id in area_ids)
+            selected = [registry.async_get(entity_id) for entity_id in entity_ids]
+            if any(entry is None or entry.device_id or getattr(entry, "platform", None) == DOMAIN for entry in selected):
+                errors["base"] = "stable_entity_required"
+            else:
+                self._scope[CONF_ENTITIES] = sorted(entry.id for entry in selected)
+                return await self._after_scope()
+        defaults = [entry.entity_id for entry in eligible if entry.id in self._scope.get(CONF_ENTITIES, [])]
+        fields = {}
+        if eligible:
+            fields = {
+                vol.Optional("areas", default=(user_input or {}).get("areas", [])): AreaSelector(AreaSelectorConfig(multiple=True)),
+                vol.Optional("entities", default=(user_input or {}).get("entities", defaults)): EntitySelector(
+                    EntitySelectorConfig(multiple=True, include_entities=[entry.entity_id for entry in eligible])),
+            }
+        # An empty include_entities list would remove the selector's filter, so
+        # show an empty confirmation form when no standalone entities exist.
+        return self.async_show_form(step_id="entities", data_schema=vol.Schema(fields), errors=errors)
+
+    async def _after_scope(self):
+        if self._scope_only:
+            return self.async_create_entry(title="", data={**self._current_config(), **self._scope})
+        if self._selected_pairing_mode == PAIRING_MODE_MANUAL:
+            if self._selected_environment == "auto":
+                return await self.async_step_environment()
+            return await self.async_step_manual()
+        return await self.async_step_seamless({})
 
     async def async_step_manual(self, user_input: dict | None = None):
         errors: dict[str, str] = {}
@@ -746,11 +948,21 @@ class _QuickPairFlowMixin:
             entry = getattr(self, "_config_entry", None)
             errors = _validate(data, entry_id=entry.entry_id if entry is not None else "000000000000")
             if not errors:
+                environment = self._current_config().get(CONF_ENVIRONMENT, self._selected_environment)
+                if environment not in ENVIRONMENT_SLOTS:
+                    return await self.async_step_environment()
+                if environment in self._configured_environments():
+                    return self.async_abort(reason="environment_already_configured")
+                if not self._claim_pairing_slot():
+                    return self.async_abort(reason="pairing_in_progress")
+                data[CONF_ENVIRONMENT] = environment
+                if self._flow_manager == FLOW_MANAGER_CONFIG:
+                    self.context["unique_id"] = environment
                 # Manual (re)config carries no return link; clear any stale
                 # return-link / failure notification from an earlier quick pair.
                 data[CONF_MQTT_MAX_PACKET_SIZE_KIB] = mqtt_packet_size_limit(data) // 1024
-                _clear_quick_pair_notifications(self.hass)
-                return self.async_create_entry(title=self._entry_title, data=data)
+                _clear_quick_pair_notifications(self.hass, self._notification_scope())
+                return self.async_create_entry(title=self._entry_title, data={**self._current_config(), **data, **self._scope})
 
         return self.async_show_form(
             step_id="manual",
@@ -763,7 +975,7 @@ class _QuickPairFlowMixin:
 # 首次添加集成
 # ──────────────────────────────────────────────
 class SavanAIBridgeConfigFlow(_QuickPairFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 1
+    VERSION = 2
 
     _flow_manager = FLOW_MANAGER_CONFIG
     _entry_title = PLUGIN_NAME
@@ -773,22 +985,18 @@ class SavanAIBridgeConfigFlow(_QuickPairFlowMixin, config_entries.ConfigFlow, do
         self._init_quick_pair_state()
 
     async def async_step_user(self, user_input: dict | None = None):
-        if self._async_current_entries():
-            return self.async_abort(reason="already_configured")
-
+        if self._configured_environments() == ENVIRONMENT_SLOTS:
+            return self.async_abort(reason="all_environments_configured")
         if user_input is not None:
+            if user_input.get(CONF_PAIRING_MODE) == _PAIRING_MODE_CHOOSE_ENVIRONMENT:
+                self._selected_pairing_mode = PAIRING_MODE_SEAMLESS
+                return await self.async_step_environment()
             self._selected_pairing_mode = _default_pairing_mode(user_input)
-            if self._selected_pairing_mode == PAIRING_MODE_MANUAL:
-                return await self.async_step_manual()
-            # 快速配对无表单字段，直接带空输入发起——选中即开始配对（成功→跳外部
-            # 授权；失败才回落到带错误提示的表单），省掉一屏"直接提交"确认页。
-            return await self.async_step_seamless({})
-
-        return self.async_show_form(
-            step_id="user",
-            data_schema=_mode_schema(),
-            errors={},
-        )
+            if self._selected_pairing_mode == PAIRING_MODE_SEAMLESS:
+                self._selected_environment = "auto"
+                return await self.async_step_scope()
+            return await self.async_step_environment()
+        return self.async_show_form(step_id="user", data_schema=_mode_schema(), errors={})
 
     @staticmethod
     @callback
@@ -823,17 +1031,23 @@ class SavanAIBridgeOptionsFlow(_QuickPairFlowMixin, config_entries.OptionsFlow):
         self._config_entry = config_entry
         self._init_quick_pair_state()
         self._selected_pairing_mode = _default_pairing_mode(self._current_config())
-        # 刻意不从 entry 预读 api_base（模型 A）：地址只在配对发起时由
-        # dev_override 解析并贯穿会话，重配对绝不沿用 entry 里残留的联调地址。
+        # 重配对始终沿用已保存的环境、API 和 World；开发预设只作用于新增条目。
 
     def _current_config(self) -> dict:
         return {**self._config_entry.data, **self._config_entry.options}
 
     async def async_step_init(self, user_input: dict | None = None):
+        if user_input is not None:
+            return await self.async_step_pairing(user_input)
         return self.async_show_menu(
             step_id="init",
-            menu_options=["connection_settings", "pairing"],
+            menu_options=["connection_settings", "device_access", "pairing"],
         )
+
+    async def async_step_device_access(self, user_input: dict | None = None):
+        """Change grants without rotating credentials or changing the World."""
+        self._scope_only = True
+        return await self.async_step_scope(user_input)
 
     async def async_step_connection_settings(self, user_input: dict | None = None):
         """Change the local budget without touching pairing or transport fields."""
@@ -872,15 +1086,20 @@ class SavanAIBridgeOptionsFlow(_QuickPairFlowMixin, config_entries.OptionsFlow):
         return super()._finish_quick_pair(data)
 
     async def async_step_pairing(self, user_input: dict | None = None):
+        self._scope_only = False
         if user_input is not None:
-            self._selected_pairing_mode = _default_pairing_mode(user_input)
-            if self._selected_pairing_mode == PAIRING_MODE_MANUAL:
+            action = user_input.get("action", "repair")
+            if action == "devices":
+                self._scope_only = True
+                return await self.async_step_scope()
+            if action == "manual" and not self._current_config().get(CONF_WORLD_ID):
+                self._selected_pairing_mode = PAIRING_MODE_MANUAL
                 return await self.async_step_manual()
-            # 同 config 流：选中快速配对即直接发起，跳过无字段的确认页。
             return await self.async_step_seamless({})
-
-        return self.async_show_form(
-            step_id="pairing",
-            data_schema=_mode_schema(self._selected_pairing_mode),
-            errors={},
-        )
+        actions = ["repair"]
+        if self._current_config().get(CONF_CONFIG_SOURCE) == CONFIG_SOURCE_MANUAL:
+            actions.append("manual")
+        return self.async_show_form(step_id="pairing", data_schema=vol.Schema({
+            vol.Required("action", default="repair"): SelectSelector(SelectSelectorConfig(
+                options=actions, mode=SelectSelectorMode.LIST, translation_key="pairing_action")),
+        }))

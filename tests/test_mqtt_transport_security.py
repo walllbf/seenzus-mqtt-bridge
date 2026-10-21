@@ -26,6 +26,8 @@ def test_runtime_rejects_legacy_or_insecure_remote_transport(scheme):
 async def test_manual_setup_preserves_explicit_tls():
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
+    flow._selected_environment = "global"
+    flow.context = {"source": "user"}
     flow.async_show_form = lambda **kw: {"type": "form", **kw}
     flow.async_create_entry = lambda **kw: {"type": "create_entry", **kw}
     result = await flow.async_step_manual({"mqtt_settings": {
@@ -68,6 +70,8 @@ async def test_manual_form_persists_secure_transport_and_scheme_port(options, sc
     entry = FakeConfigEntry(data={"mqtt_scheme": "mqtt", "mqtt_host": "old.example", "mqtt_port": 1883})
     flow = SavanAIBridgeOptionsFlow(entry) if options else SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
+    flow._selected_environment = "global"
+    flow.context = {"source": "user"}
     flow.async_show_form = lambda **kw: {"type": "form", **kw}
     flow.async_create_entry = lambda **kw: {"type": "create_entry", **kw}
     # Pass through the actual HA form schema, including number coercion.

@@ -177,6 +177,8 @@ async def test_number_selector_does_not_coerce_invalid_budget_into_valid_input(v
 async def test_manual_setup_validates_budget_and_stores_integer(value, valid):
     flow = SavanAIBridgeConfigFlow()
     flow.hass = FakeHass()
+    flow._selected_environment = "global"
+    flow.context = {"source": "user"}
     flow.async_show_form = lambda **kwargs: {"type": "form", **kwargs}
     flow.async_create_entry = lambda *, title, data: {"type": "create_entry", "data": data}
 
@@ -196,11 +198,11 @@ async def test_manual_setup_validates_budget_and_stores_integer(value, valid):
 
 @pytest.mark.asyncio
 async def test_options_pairing_menu_keeps_manual_and_quick_pair_routes(monkeypatch):
-    flow = SavanAIBridgeOptionsFlow(FakeConfigEntry())
+    flow = SavanAIBridgeOptionsFlow(FakeConfigEntry(data={"config_source": "manual"}))
     flow.async_show_form = lambda **kwargs: {"type": "form", **kwargs}
     mode_form = await flow.async_step_pairing()
     assert mode_form["step_id"] == "pairing"
-    assert set(key.schema for key in mode_form["data_schema"].schema) == {"pairing_mode"}
+    assert set(key.schema for key in mode_form["data_schema"].schema) == {"action"}
 
     async def manual():
         return {"step_id": "manual"}
@@ -211,8 +213,8 @@ async def test_options_pairing_menu_keeps_manual_and_quick_pair_routes(monkeypat
 
     monkeypatch.setattr(flow, "async_step_manual", manual)
     monkeypatch.setattr(flow, "async_step_seamless", seamless)
-    assert await flow.async_step_pairing({"pairing_mode": "manual"}) == {"step_id": "manual"}
-    assert await flow.async_step_pairing({"pairing_mode": "seamless"}) == {"step_id": "seamless_authorize"}
+    assert await flow.async_step_pairing({"action": "manual"}) == {"step_id": "manual"}
+    assert await flow.async_step_pairing({"action": "repair"}) == {"step_id": "seamless_authorize"}
 
 
 def test_quick_repair_preserves_explicit_local_packet_budget():

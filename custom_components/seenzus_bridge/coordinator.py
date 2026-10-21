@@ -36,6 +36,7 @@ from .bridge_protocol import (
 )
 from .catalog import build_device_catalog_payload, utc_now_iso
 from .const import (
+    DOMAIN,
     BRIDGE_VERSION,
     CONFIG_SOURCE_MANUAL,
     CONFIG_SOURCE_WEB_PAIR,
@@ -86,6 +87,7 @@ from .mqtt_io_guard import websocket_connection
 from .mqtt_settings import mqtt_packet_size_limit, validate_mqtt_presence_budget
 from .mqtt_transport import MqttTransportError, validate_mqtt_transport
 from .operation_store import PersistentOperationStore
+from .device_access import DeviceAccess
 from .sensor_display import async_prepare_sensor_display, sensor_display_attributes, supports_entity_display
 
 _LOGGER = logging.getLogger(__name__)
@@ -352,6 +354,7 @@ class BridgeCoordinator:
     def _dispatch_policy(self) -> DispatchPolicy:
         conf = self._conf()
         return DispatchPolicy(
+            access=DeviceAccess(self.hass, conf),
             allow_template=bool(conf.get(CONF_ENABLE_TEMPLATE_API, DEFAULT_ENABLE_TEMPLATE_API)),
             allow_dangerous_services=bool(
                 conf.get(CONF_ALLOW_DANGEROUS_SERVICES, DEFAULT_ALLOW_DANGEROUS_SERVICES)
@@ -378,7 +381,11 @@ class BridgeCoordinator:
             return True
 
         registry_entry = registry.async_get(entity_id)
-        return bool(registry_entry and registry_entry.config_entry_id == self._entry.entry_id)
+        return bool(registry_entry and (registry_entry.config_entry_id == self._entry.entry_id
+                                      or getattr(registry_entry, "platform", None) == DOMAIN))
+
+    def _is_excluded_entity(self, entity_id: str) -> bool:
+        return self._is_own_entity(entity_id) or not DeviceAccess(self.hass, self._conf()).allows(entity_id)
 
     @callback
     def _is_model_marked_standalone_entity(self, state: Any) -> bool:
@@ -1024,8 +1031,10 @@ class BridgeCoordinator:
         effective_msg_id = str(req.get("msgId", req.get("correlationId", msg_id))) or msg_id
         operation_key = req.get("operationKey")
         operation_key = operation_key.strip() if isinstance(operation_key, str) else None
+        scope_fingerprint = DeviceAccess(self.hass, self._conf()).fingerprint()
         fingerprint = hashlib.sha256(json.dumps(
-            {"method": method.upper(), "path": path, "body": body},
+            {"method": method.upper(), "path": path, "body": body,
+             **({"access": scope_fingerprint} if DeviceAccess(self.hass, self._conf()).restricted else {})},
             sort_keys=True, separators=(",", ":"),
         ).encode()).hexdigest() if operation_key else None
 
@@ -1041,8 +1050,10 @@ class BridgeCoordinator:
                 if self._snapshot_request != (client, effective_msg_id):
                     await self._publish_result(client, effective_msg_id, success=False, status=409, error="snapshot_in_progress")
                 return
-            if self._snapshot_client is not client:
+            if (self._snapshot_client is not client
+                    or getattr(self, "_snapshot_scope_fingerprint", None) != scope_fingerprint):
                 self._snapshot_client = client
+                self._snapshot_scope_fingerprint = scope_fingerprint
                 self._snapshot_replies.clear()
             if path == "/api/seenzus/states/snapshot" and effective_msg_id in self._snapshot_replies:
                 for reply in self._snapshot_replies[effective_msg_id]:
@@ -1074,6 +1085,8 @@ class BridgeCoordinator:
                 # instead of rebuilding (which would mint a fresh eventId/ts).
                 # Acceptable side effect: result.data and the retained catalog now
                 # share one eventId/ts.
+                if scope_fingerprint != DeviceAccess(self.hass, self._conf()).fingerprint():
+                    return
                 await self._publish_catalog_payload(
                     client,
                     catalog_payload,
@@ -1083,6 +1096,9 @@ class BridgeCoordinator:
 
             if operation_key and fingerprint:
                 claim_status, replay = await self._operation_store.claim(operation_key, fingerprint)
+                if scope_fingerprint != DeviceAccess(self.hass, self._conf()).fingerprint():
+                    await self._publish_result(client, effective_msg_id, success=False, status=409, error="device_grant_changed")
+                    return
                 if claim_status == "completed" and replay is not None:
                     await self._publish_result(client, effective_msg_id, **replay)
                     return
@@ -1098,7 +1114,13 @@ class BridgeCoordinator:
                 if not await self._operation_store.mark_dispatched(operation_key, fingerprint):
                     await self._publish_result(client, effective_msg_id, success=False, status=409, error="control_outcome_unknown")
                     return
+            if scope_fingerprint != DeviceAccess(self.hass, self._conf()).fingerprint():
+                await self._publish_result(client, effective_msg_id, success=False, status=409, error="device_grant_changed")
+                return
             result = await dispatch(self.hass, method, path, body, self._dispatch_policy())
+            if scope_fingerprint != DeviceAccess(self.hass, self._conf()).fingerprint():
+                await self._publish_result(client, effective_msg_id, success=False, status=409, error="device_grant_changed")
+                return
             result_payload = {
                 "success": result.status < 400,
                 "status": result.status,
@@ -1108,6 +1130,11 @@ class BridgeCoordinator:
                 if not await self._operation_store.complete(operation_key, fingerprint, result_payload):
                     await self._publish_result(client, effective_msg_id, success=False, status=409, error="control_outcome_unknown")
                     return
+            # Persisting the result yields to the event loop. A scope edit while
+            # writing must not release a state read under the previous grant.
+            if scope_fingerprint != DeviceAccess(self.hass, self._conf()).fingerprint():
+                await self._publish_result(client, effective_msg_id, success=False, status=409, error="device_grant_changed")
+                return
             if not await self._publish_result(client, effective_msg_id, **result_payload):
                 return
             if method.upper() == "GET" and path.rstrip("/") == "/api/states":
@@ -1133,8 +1160,9 @@ class BridgeCoordinator:
         # HA State objects are immutable. Capture once, including the original
         # attributes/timestamps; do not re-read a changing entity during the stream.
         states = [state for state in self.hass.states.async_all()
-                  if state.entity_id and not self._is_own_entity(state.entity_id)
+                  if state.entity_id and not self._is_excluded_entity(state.entity_id)
                   and not self._is_model_marked_standalone_entity(state)]
+        scope_fingerprint = DeviceAccess(self.hass, self._conf()).fingerprint()
         if len(states) > MAX_SNAPSHOT_ENTITIES:
             await self._publish_result(client, msg_id, success=False, status=413, error="snapshot_scope_too_large")
             return
@@ -1151,6 +1179,8 @@ class BridgeCoordinator:
         try:
             async with asyncio.timeout(SNAPSHOT_STREAM_TIMEOUT_SECONDS):
                 for state in states:
+                    if scope_fingerprint != DeviceAccess(self.hass, self._conf()).fingerprint():
+                        raise PermissionError("device_grant_changed")
                     try:
                         await self._publish_state_object(
                             client, state, source="full_snapshot", correlation_id=msg_id,
@@ -1169,6 +1199,8 @@ class BridgeCoordinator:
             # Disconnection/unload invalidates the request. Never manufacture a
             # completion or keep the old connection alive to publish a receipt.
             raise
+        except PermissionError:
+            outcome, status = "failed", 409
         except Exception:  # noqa: BLE001
             outcome, status = "failed", 503
             self.err_count += 1
@@ -1273,7 +1305,7 @@ class BridgeCoordinator:
         skipped = 0
         for state in states:
             entity_id = getattr(state, "entity_id", "")
-            if not entity_id or self._is_own_entity(entity_id):
+            if not entity_id or self._is_excluded_entity(entity_id):
                 continue
             if self._is_model_marked_standalone_entity(state):
                 continue
@@ -1334,6 +1366,7 @@ class BridgeCoordinator:
             source=source,
             correlation_id=correlation_id,
             is_own_entity=self._is_own_entity,
+            access=DeviceAccess(self.hass, self._conf()),
         )
 
     @staticmethod
@@ -1366,7 +1399,8 @@ class BridgeCoordinator:
         last_changed = self._state_datetime(state_obj, "last_changed") or last_updated
         original_attributes = dict(state_obj.attributes)
         published_attributes = sensor_display_attributes(
-            self.hass, entity_id, original_attributes
+            self.hass, entity_id,
+            DeviceAccess(self.hass, self._conf()).attributes(original_attributes),
         )
         # Recorder replay is a retry of the original HA state fact. Other
         # sources (command/snapshot/display) remain distinct evidence so they
@@ -1418,7 +1452,7 @@ class BridgeCoordinator:
     ) -> None:
         if self._topics is None:
             return
-        if self._is_own_entity(entity_id):
+        if self._is_excluded_entity(entity_id):
             return
         state = self.hass.states.get(entity_id)
         if state is None:
@@ -1447,6 +1481,8 @@ class BridgeCoordinator:
         entity_id = state.entity_id
         topic_entity = entity_id.replace("/", "_")
         await async_prepare_sensor_display(self.hass, [entity_id])
+        if self._is_excluded_entity(entity_id):
+            raise PermissionError("device_grant_changed")
         payload = self._build_state_payload(
             entity_id,
             state,
@@ -1477,7 +1513,7 @@ class BridgeCoordinator:
             state.entity_id
             for state in self.hass.states.async_all()
             if state.entity_id
-            and not self._is_own_entity(state.entity_id)
+            and not self._is_excluded_entity(state.entity_id)
             and not self._is_model_marked_standalone_entity(state)
         ]
         if not entity_ids:
@@ -1545,7 +1581,7 @@ class BridgeCoordinator:
                 or start_time
             )
             for state in states:
-                if self._is_own_entity(state.entity_id) or self._is_model_marked_standalone_entity(state):
+                if self._is_excluded_entity(state.entity_id) or self._is_model_marked_standalone_entity(state):
                     continue
                 observed_at = (
                     self._state_datetime(state, "last_changed")
@@ -1587,7 +1623,7 @@ class BridgeCoordinator:
             return
         new_state = event.data.get("new_state")
         entity_id = getattr(new_state, "entity_id", None) if new_state is not None else None
-        if not entity_id or self._is_own_entity(entity_id):
+        if not entity_id or self._is_excluded_entity(entity_id):
             return
         if self._is_model_marked_standalone_entity(new_state):
             return
@@ -1667,7 +1703,7 @@ class BridgeCoordinator:
         new_state = event.data.get("new_state")
         if new_state is None or not getattr(new_state, "entity_id", None):
             return
-        if self._is_own_entity(new_state.entity_id):
+        if self._is_excluded_entity(new_state.entity_id):
             return
         if self._is_model_marked_standalone_entity(new_state):
             return

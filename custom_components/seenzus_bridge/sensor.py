@@ -193,7 +193,7 @@ class BridgePairingStateSensor(_BridgeBaseSensor):
             # quick_pair 现同步写入 hass.data，这里读出来作为持久的 UI 面；
             # 配对成功时由 quick_pair 清除。coordinator 属性仅为形状兼容保留。
             "pairing_last_diagnostic": (
-                self._coordinator.hass.data.get(DOMAIN, {}).get(QUICK_PAIR_LAST_DIAGNOSTIC)
+                self._coordinator.hass.data.get(DOMAIN, {}).get(f"{QUICK_PAIR_LAST_DIAGNOSTIC}.{self._coordinator._entry.entry_id}")
                 or self._coordinator.pairing_last_diagnostic
             ),
         }

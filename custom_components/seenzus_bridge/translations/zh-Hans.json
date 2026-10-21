@@ -2,16 +2,16 @@
   "config": {
     "step": {
       "user": {
-        "title": "配置 seenzus MQTT Bridge",
-        "description": "先选择配对模式，再进入对应的配置表单。",
+        "title": "选择配对方式",
+        "description": "从 Seenzus 应用发起时，使用默认快速配对即可沿用应用环境，下一步设置设备授权范围。无法自动识别时会请你选择环境；也可主动选择环境后配对，开发服务器请使用此入口。",
         "data": {
-          "pairing_mode": "配对模式"
+          "pairing_mode": "配对方式"
         },
         "sections": {}
       },
       "seamless": {
         "title": "快速配对",
-        "description": "集成会连接 seenzus API 创建网页配对会话并跳转到外部 seenzus 页面完成授权。直接点「提交」即可，无需填写任何内容。",
+        "description": "继续配对，完成后自动保存。重新配对保留此条目的环境、世界和设备范围。",
         "data": {},
         "sections": {}
       },
@@ -22,7 +22,7 @@
         "sections": {
           "mqtt_settings": {
             "name": "MQTT 连接参数",
-            "description": "远程 Broker 必须使用 MQTT over TLS 或安全 WebSocket。明文连接仅允许明确的内网或回环 IP。",
+            "description": "默认折叠。首次配置或更换 Broker 时展开填写。",
             "data": {
               "mqtt_host": "MQTT Broker 地址",
               "mqtt_port": "MQTT 端口",
@@ -53,6 +53,36 @@
             }
           }
         }
+      },
+      "environment": {
+        "title": "选择配对环境",
+        "description": "请选择此条目连接的环境，每个环境最多一个条目。UAT 和 Dev Server 入口由开发配置启用。",
+        "data": {
+          "environment": "环境"
+        }
+      },
+      "scope": {
+        "title": "设备授权范围",
+        "description": "全部设备包含以后新增的设备。选择指定设备后，先选择设备，再单独选择独立实体。",
+        "data": {
+          "device_scope": "设备授权范围"
+        }
+      },
+      "devices": {
+        "title": "选择设备",
+        "description": "选择要授权的整台设备，将包含这些设备下的实体。也可按区域批量加入当前设备，以后新增设备不会自动加入。下一步单独选择未归属设备的实体；只授权独立实体时，本页可留空。",
+        "data": {
+          "areas": "按区域批量加入设备",
+          "allowed_device_ids": "设备"
+        }
+      },
+      "entities": {
+        "title": "选择独立实体（可选）",
+        "description": "这里只列出未归属任何设备的已注册实体，例如独立的辅助开关。上一步设备所包含的实体无需重复选择。没有可选项或不需要补充时，可直接提交；两页均留空表示不授权任何设备或实体。",
+        "data": {
+          "areas": "按区域批量加入独立实体",
+          "entities": "独立实体"
+        }
       }
     },
     "create_entry": {
@@ -73,26 +103,35 @@
       "invalid_mqtt_packet_size": "请输入 1–262144 范围内的整数（KiB），并确保不超过 Broker 的报文大小限制",
       "mqtt_packet_size_too_small_for_topic": "此上限无法容纳当前 Topic 的最小离线消息，请提高上限或缩短 Topic / Bridge ID",
       "mqtt_transport_required": "MQTT 传输协议缺失或无效。请选择 mqtts/wss；快速配对时请联系服务端修正协议后重新配对，不会回退为明文连接。",
-      "mqtt_tls_required": "此 Broker 必须使用 TLS（mqtts 或 wss）。明文 MQTT/WebSocket 仅允许明确的内网或回环 IP，请检查协议与端口。"
+      "mqtt_tls_required": "此 Broker 必须使用 TLS（mqtts 或 wss）。明文 MQTT/WebSocket 仅允许明确的内网或回环 IP，请检查协议与端口。",
+      "world_identity_missing": "无法确认世界身份，请先升级 Seenzus 服务端；旧条目缺少数据源身份时请先移除原条目，再重新接入。",
+      "world_mismatch": "重新配对只能连接原来的世界。同一环境只能有一个条目；更换世界请先移除原条目，再重新接入。",
+      "ha_identity_unavailable": "无法获取此 HA 的安装标识，请稍后重试。",
+      "stable_entity_required": "请只选择有稳定注册标识、且未关联设备的独立实体。有关联设备时请选择对应设备。",
+      "pairing_in_progress": "另一个条目正在配对。请完成或取消该配对后重试。"
     },
     "abort": {
-      "already_configured": "seenzus MQTT Bridge 已经配置过了，只允许添加一个实例",
-      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
+      "already_configured": "此环境已有条目，请管理已有条目。",
+      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起",
+      "invalid_environment": "环境无效，请重新选择。",
+      "pairing_in_progress": "已有配对正在进行，请先完成或取消。",
+      "environment_already_configured": "此环境已有条目。请进入原条目的配置进行管理或重新配对；同一环境不能重复添加，即使选择另一个世界。",
+      "all_environments_configured": "四种环境均已有条目，无法继续添加。请管理已有条目。"
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "修改 seenzus MQTT Bridge 配置",
-        "description": "调整 MQTT 连接设置，或重新进行配对。保存设置后自动重载集成。",
+        "title": "配置 seenzus MQTT Bridge",
         "menu_options": {
           "connection_settings": "MQTT 连接设置",
+          "device_access": "设备授权范围",
           "pairing": "重新配对或手动配置"
         }
       },
       "seamless": {
         "title": "快速配对",
-        "description": "重新发起外部 seenzus 快速配对，直接点「提交」即可，无需填写任何内容。保存后会使用 seenzus API 创建网页配对会话，授权成功后浏览器会直接回跳到 Home Assistant 并自动刷新 MQTT 桥接配置。",
+        "description": "继续配对，完成后自动保存。重新配对保留此条目的环境、世界和设备范围。",
         "data": {},
         "sections": {}
       },
@@ -103,7 +142,7 @@
         "sections": {
           "mqtt_settings": {
             "name": "MQTT 连接参数",
-            "description": "远程 Broker 必须使用 MQTT over TLS 或安全 WebSocket。明文连接仅允许明确的内网或回环 IP。",
+            "description": "默认折叠。修改 Broker 地址、端口或账号时展开。",
             "data": {
               "mqtt_host": "MQTT Broker 地址",
               "mqtt_port": "MQTT 端口",
@@ -137,11 +176,10 @@
       },
       "pairing": {
         "title": "重新配对或手动配置",
-        "description": "先选择配对模式，再进入对应的配置表单。保存后自动重载集成立即生效。",
+        "description": "重新配对保留原环境、世界和设备范围。手动配置的条目可以修改连接设置。",
         "data": {
-          "pairing_mode": "配对模式"
-        },
-        "sections": {}
+          "action": "操作"
+        }
       },
       "connection_settings": {
         "title": "MQTT 连接设置",
@@ -151,6 +189,36 @@
         },
         "data_description": {
           "mqtt_max_packet_size_kib": "本地发送上限，须不高于 Broker 允许的报文大小。1024 KiB = 1 MiB，2048 KiB = 2 MiB；不会自动修改 Broker 配置。"
+        }
+      },
+      "environment": {
+        "title": "选择配对环境",
+        "description": "请选择此条目连接的环境，每个环境最多一个条目。UAT 和 Dev Server 入口由开发配置启用。",
+        "data": {
+          "environment": "环境"
+        }
+      },
+      "scope": {
+        "title": "设备授权范围",
+        "description": "全部设备包含以后新增的设备。选择指定设备后，先选择设备，再单独选择独立实体。",
+        "data": {
+          "device_scope": "设备授权范围"
+        }
+      },
+      "devices": {
+        "title": "选择设备",
+        "description": "选择要授权的整台设备，将包含这些设备下的实体。也可按区域批量加入当前设备，以后新增设备不会自动加入。下一步单独选择未归属设备的实体；只授权独立实体时，本页可留空。",
+        "data": {
+          "areas": "按区域批量加入设备",
+          "allowed_device_ids": "设备"
+        }
+      },
+      "entities": {
+        "title": "选择独立实体（可选）",
+        "description": "这里只列出未归属任何设备的已注册实体，例如独立的辅助开关。上一步设备所包含的实体无需重复选择。没有可选项或不需要补充时，可直接提交；两页均留空表示不授权任何设备或实体。",
+        "data": {
+          "areas": "按区域批量加入独立实体",
+          "entities": "独立实体"
         }
       }
     },
@@ -172,10 +240,19 @@
       "invalid_mqtt_packet_size": "请输入 1–262144 范围内的整数（KiB），并确保不超过 Broker 的报文大小限制",
       "mqtt_packet_size_too_small_for_topic": "此上限无法容纳当前 Topic 的最小离线消息，请提高上限或缩短 Topic / Bridge ID",
       "mqtt_transport_required": "MQTT 传输协议缺失或无效。请选择 mqtts/wss；快速配对时请联系服务端修正协议后重新配对，不会回退为明文连接。",
-      "mqtt_tls_required": "此 Broker 必须使用 TLS（mqtts 或 wss）。明文 MQTT/WebSocket 仅允许明确的内网或回环 IP，请检查协议与端口。"
+      "mqtt_tls_required": "此 Broker 必须使用 TLS（mqtts 或 wss）。明文 MQTT/WebSocket 仅允许明确的内网或回环 IP，请检查协议与端口。",
+      "world_identity_missing": "无法确认世界身份，请先升级 Seenzus 服务端；旧条目缺少数据源身份时请先移除原条目，再重新接入。",
+      "world_mismatch": "重新配对只能连接原来的世界。同一环境只能有一个条目；更换世界请先移除原条目，再重新接入。",
+      "ha_identity_unavailable": "无法获取此 HA 的安装标识，请稍后重试。",
+      "stable_entity_required": "请只选择有稳定注册标识、且未关联设备的独立实体。有关联设备时请选择对应设备。",
+      "pairing_in_progress": "另一个条目正在配对。请完成或取消该配对后重试。"
     },
     "abort": {
-      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起"
+      "quick_pair_missing_context": "快速配对会话已丢失，请重新发起",
+      "invalid_environment": "环境无效，请重新选择。",
+      "pairing_in_progress": "已有配对正在进行，请先完成或取消。",
+      "environment_already_configured": "此环境已有条目。请进入原条目的配置进行管理或重新配对；同一环境不能重复添加，即使选择另一个世界。",
+      "all_environments_configured": "四种环境均已有条目，无法继续添加。请管理已有条目。"
     }
   },
   "exceptions": {
@@ -184,6 +261,35 @@
     },
     "mqtt_tls_required": {
       "message": "远程 Broker 的明文连接已阻止。打开「配置 → 重新配对或手动配置」，选择 mqtts/wss 和正确的 TLS 端口，或重新快速配对。"
+    }
+  },
+  "selector": {
+    "pairing_mode": {
+      "options": {
+        "seamless": "快速配对（自动识别环境，推荐）",
+        "choose_environment": "快速配对（手动选择环境）",
+        "manual": "手动配置（高级）"
+      }
+    },
+    "environment": {
+      "options": {
+        "cn": "国内 PRD",
+        "global": "境外 PRD",
+        "uat": "UAT（开发）",
+        "custom": "Dev Server（开发预设）"
+      }
+    },
+    "device_scope": {
+      "options": {
+        "all": "全部设备",
+        "selected": "指定设备"
+      }
+    },
+    "pairing_action": {
+      "options": {
+        "repair": "重新配对（保留环境、世界和设备范围）",
+        "manual": "手动连接设置"
+      }
     }
   }
 }

@@ -151,7 +151,7 @@ def test_pairing_sensor_reads_quick_pair_diagnostic_from_hass_data() -> None:
     entry = FakeConfigEntry(data={"bridge_id": "ha-web-bridge"})
     hass = FakeHass()
     hass.data["seenzus_bridge"] = {
-        "quick_pair_last_diagnostic": "quick_pair_session_failed | http_status=500 | message=boom"
+        f"quick_pair_last_diagnostic.{entry.entry_id}": "quick_pair_session_failed | http_status=500 | message=boom"
     }
     coordinator = BridgeCoordinator(hass, entry)
 

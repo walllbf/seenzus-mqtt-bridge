@@ -1,17 +1,8 @@
-"""开发者联调用的 MQTT 配对 API 地址覆盖。
+"""开发入口预设，仅供新条目选择。
 
-正常安装（Release 下载 / HAOS）不含此文件，快速配对一律走
-``const.DEFAULT_PAIRING_API_BASE``（内置生产地址）。仅当在 HA 配置目录放置
-``<config>/seenzus_bridge_dev.json`` 时，配对才改用其中的 ``pairing_api_base``
-连接本地联调后端。
-
-文件住在配置目录（不在插件包内）：重装 / 升级插件 zip 不会丢，也不会被打进
-发行包——因此联调包与上线包是逐字节同一份代码，靠这个文件区分环境。
-
-fail-loud：文件不存在或未填地址时静默走生产默认（普通用户的常态）；文件存在
-但内容非法（JSON 损坏 / 地址不是 http(s)）时抛 :class:`DevOverrideError` 拦住
-配对——普通用户永远没有此文件、碰不到该报错，而开发者写错时会被当场拦下，
-不会稀里糊涂把联调数据灌进生产。
+配置目录中的 seenzus_bridge_dev.json 提供 pairing_api_base 后，HA 添加流程显示
+UAT / 开发预设。选定后地址保存在条目；修改或删除本文件不改动既有条目，重配对
+始终使用原条目的环境。非法文件会阻止新配置，不回退到任何生产环境。
 """
 from __future__ import annotations
 
@@ -32,7 +23,7 @@ class DevOverrideError(Exception):
 def _is_valid_api_base(value: str) -> bool:
     """API base 合法性：仅接受带 host 的 http(s) 地址（与原 UI 校验同一把尺）。"""
     parsed = urlparse(value.strip())
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+    return parsed.scheme in {"http", "https"} and bool(parsed.hostname) and not (parsed.username or parsed.password or parsed.query or parsed.fragment)
 
 
 def _read_override_api_base(path: str) -> str | None:
@@ -69,7 +60,7 @@ async def resolve_dev_pairing_api_base(hass) -> str | None:
 
     文件存在但地址非法 → :class:`DevOverrideError`（fail-loud）。读文件放
     executor 避免阻塞事件循环；每次配对发起时新鲜读一次——删掉文件下次重配对
-    立即生效，无需重启 HA。
+    只影响新条目的可选预设，无需重启 HA。
     """
     path = hass.config.path(DEV_OVERRIDE_FILENAME)
     raw = await hass.async_add_executor_job(_read_override_api_base, path)

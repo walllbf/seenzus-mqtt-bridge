@@ -89,6 +89,10 @@ class FakeStates:
 
 
 class FakeConfig:
+    def path(self, filename):
+        import tempfile
+        from pathlib import Path
+        return str(Path(tempfile.gettempdir()) / "seenzus-empty-test-config" / filename)
     def __init__(self, data: dict | None = None) -> None:
         self._data = data or {"location_name": "Home"}
 
@@ -125,6 +129,9 @@ class FakeFlowManager:
         self.configure_calls: list[dict] = []
         self.configure_results: list[Any] = []
 
+    def async_progress(self):
+        return []
+
     async def async_configure(self, *, flow_id: str, user_input: dict):
         self.configure_calls.append(
             {"flow_id": flow_id, "user_input": dict(user_input) if user_input is not None else None}
@@ -139,10 +146,18 @@ class FakeConfigEntries:
         self.reload_calls: list[str] = []
         self.flow = FakeFlowManager()
         self.options = FakeFlowManager()
-        self.entries: dict[str, Any] = {}
+        self.entries = []
+
+    def async_entries(self, domain=None, *args, **kwargs):
+        return self.entries
+
+    def async_update_entry(self, entry, **kwargs):
+        for key, value in kwargs.items():
+            setattr(entry, key, value)
+        return True
 
     def async_get_entry(self, entry_id: str):
-        return self.entries.get(entry_id)
+        return next((entry for entry in self.entries if entry.entry_id == entry_id), None)
 
     async def async_reload(self, _entry_id: str) -> None:
         self.reload_calls.append(_entry_id)
@@ -155,6 +170,9 @@ class FakeEntityRegistryIndex:
 
     def get_entries_for_config_entry_id(self, config_entry_id: str):
         return [entry for entry in self._entries if entry.config_entry_id == config_entry_id]
+
+    def values(self):
+        return self._entries
 
 
 class FakeEntityRegistry:
@@ -204,6 +222,7 @@ class FakeEntityRegistry:
 class FakeDeviceRegistry:
     def __init__(self) -> None:
         self._entries: dict[str, SimpleNamespace] = {}
+        self.devices = self._entries
 
     def add(
         self,
@@ -231,6 +250,8 @@ class FakeDeviceRegistry:
 
 
 class FakeHass:
+    async def async_add_executor_job(self, func, *args):
+        return func(*args)
     def __init__(self) -> None:
         self.bus = FakeBus()
         self.states = FakeStates()
