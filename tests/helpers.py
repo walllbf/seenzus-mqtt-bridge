@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -8,10 +9,20 @@ from homeassistant.core import CoreState
 
 
 class FakeState:
-    def __init__(self, entity_id: str, *, state: str = "on", attributes: dict | None = None) -> None:
+    def __init__(
+        self,
+        entity_id: str,
+        *,
+        state: str = "on",
+        attributes: dict | None = None,
+        last_changed: datetime | None = None,
+        last_updated: datetime | None = None,
+    ) -> None:
         self.entity_id = entity_id
         self.state = state
         self.attributes = attributes or {}
+        self.last_changed = last_changed or datetime.now(timezone.utc)
+        self.last_updated = last_updated or self.last_changed
 
     def as_dict(self) -> dict:
         return {
@@ -31,13 +42,23 @@ class AsyncFakeMQTTClient:
         )
 
 
-def make_state_changed_event(entity_id: str, *, state: str = "on", attributes: dict | None = None):
+def make_state_changed_event(
+    entity_id: str,
+    *,
+    state: str = "on",
+    attributes: dict | None = None,
+    last_changed: datetime | None = None,
+    last_updated: datetime | None = None,
+):
+    changed_at = last_changed or datetime.now(timezone.utc)
     new_state = SimpleNamespace(
         entity_id=entity_id,
         state=state,
         attributes=attributes or {},
+        last_changed=changed_at,
+        last_updated=last_updated or changed_at,
     )
-    return SimpleNamespace(data={"new_state": new_state})
+    return SimpleNamespace(event_type="state_changed", data={"new_state": new_state})
 
 
 class FakeBus:
@@ -264,11 +285,13 @@ class FakeConfigEntry:
         self.entry_id = entry_id
         self.data = data or {}
         self.options = options or {}
+        self.update_listeners = []
         self.background_task_names: list[str] = []
         self.foreground_task_names: list[str] = []
 
     def add_update_listener(self, listener):
-        return listener
+        self.update_listeners.append(listener)
+        return lambda: self.update_listeners.remove(listener)
 
     def async_on_unload(self, listener):
         return listener
@@ -342,13 +365,25 @@ class FakeAiomqttClient(AsyncFakeMQTTClient):
         self.connect_kwargs = dict(connect_kwargs)
         self.subscriptions: list[dict] = []
         self.connected = False
+        self._connected = asyncio.get_running_loop().create_future()
         self._connect_error = connect_error
         self.messages = _FakeMessageStream(messages, end)
+        # Fake connection has no socket; real WSS behavior is tested separately.
+        self._client = SimpleNamespace(
+            socket=lambda: None,
+            loop_read=lambda: 0,
+            loop_write=lambda: 0,
+            want_write=lambda: False,
+            _sock_close=lambda: None,
+            on_socket_open=None,
+        )
 
     async def __aenter__(self):
         if self._connect_error is not None:
             raise self._connect_error
         self.connected = True
+        if not self._connected.done():
+            self._connected.set_result(None)
         return self
 
     async def __aexit__(self, exc_type, exc, tb):

@@ -6,7 +6,7 @@ import json
 import pytest
 
 import seenzus_bridge
-from seenzus_bridge import BridgeCoordinator, BRIDGE_VERSION, er
+from seenzus_bridge import BridgeCoordinator, er
 from seenzus_bridge.bridge_protocol import build_topics
 from tests.helpers import AsyncFakeMQTTClient, FakeConfigEntry, FakeEntityRegistry, FakeHass, make_state_changed_event
 
@@ -37,7 +37,10 @@ async def test_async_start_registers_state_listener_when_enabled(runtime_coordin
     await runtime_coordinator.async_start()
 
     assert runtime_coordinator._state_unsub is not None
-    assert runtime_coordinator.hass.bus.listen_calls[0]["event_type"] == "state_changed"
+    subscribed = [call["event_type"] for call in runtime_coordinator.hass.bus.listen_calls]
+    assert "state_changed" in subscribed
+    assert subscribed.count("device_registry_updated") == 1
+    await runtime_coordinator.async_stop()
 
 
 @pytest.mark.asyncio
@@ -57,7 +60,9 @@ async def test_async_start_skips_state_listener_when_disabled(monkeypatch) -> No
     await coordinator.async_start()
 
     assert coordinator._state_unsub is None
-    assert hass.bus.listen_calls == []
+    assert [call["event_type"] for call in hass.bus.listen_calls] == ["device_registry_updated"]
+    await coordinator.async_stop()
+    assert coordinator._device_registry_unsub is None
 
 
 @pytest.mark.asyncio
@@ -77,7 +82,7 @@ async def test_on_state_changed_ignores_events_when_state_push_disabled(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_publish_presence_includes_expected_payload(runtime_coordinator) -> None:
+async def test_publish_presence_includes_expected_payload(runtime_coordinator, bridge_manifest_version) -> None:
     runtime_coordinator._mqtt_client = AsyncFakeMQTTClient()
     runtime_coordinator._topics = build_topics("seenzus/v2", "ha-demo")
 
@@ -87,8 +92,14 @@ async def test_publish_presence_includes_expected_payload(runtime_coordinator) -
     payload = json.loads(runtime_coordinator._mqtt_client.published[0]["payload"])
     assert payload["bridgeId"] == "ha-demo"
     assert payload["status"] == "online"
-    assert payload["version"] == BRIDGE_VERSION
-    assert payload["capabilities"] == {"persistentOperationIdempotency": True}
+    assert payload["version"] == bridge_manifest_version
+    assert payload["capabilities"] == {
+        "persistentOperationIdempotency": True,
+        "recorderHistoryReplay": True,
+        "serviceIndex": 1,
+        "snapshotStream": 1,
+    }
+    assert payload["droppedStateEventCount"] == 0
 
 
 @pytest.mark.asyncio

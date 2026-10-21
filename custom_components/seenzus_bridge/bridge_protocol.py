@@ -1,6 +1,7 @@
 """MQTT topic helpers for v2 and legacy protocol."""
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 
@@ -8,6 +9,21 @@ from dataclasses import dataclass
 # Catalog payload schema. It evolves independently from the plugin release
 # version and from the ``seenzus/v2`` transport topic root.
 CATALOG_WIRE_VERSION = "2.1"
+
+# The App requires a non-empty status; absent mqttConnected means false.
+# Unlike an empty retained tombstone, this updates existing consumer caches.
+MINIMAL_OFFLINE_PRESENCE_PAYLOAD = '{"status":"offline"}'
+
+
+def mqtt_publish_packet_size(topic: str, payload: str, qos: int) -> int:
+    """Count the complete MQTT 3.1.1 PUBLISH, including its variable header."""
+    remaining = 2 + len(topic.encode("utf-8")) + (2 if qos else 0) + len(payload.encode("utf-8"))
+    length_bytes = 1
+    encoded_length = remaining
+    while encoded_length >= 128:
+        encoded_length //= 128
+        length_bytes += 1
+    return 1 + length_bytes + remaining
 
 
 @dataclass(slots=True)
@@ -41,6 +57,15 @@ def build_bridge_id(config_bridge_id: str, entry_id: str) -> str:
     if cleaned:
         return cleaned
     return f"ha-{entry_id[:12].lower()}"
+
+
+def build_mqtt_client_id(entry_id: str) -> str:
+    """Keep reconnect identity stable without truncating HA's ULID randomness."""
+    # ULIDs begin with a timestamp, so taking the first eight characters makes
+    # independently created entries share a session. Hash the complete entry ID
+    # to support both ULIDs and legacy identifiers with bounded ASCII output.
+    digest = hashlib.sha256(entry_id.encode("utf-8")).hexdigest()[:32]
+    return f"seenzus-bridge-{digest}"
 
 
 def build_topics(topic_root: str, bridge_id: str) -> BridgeTopics:

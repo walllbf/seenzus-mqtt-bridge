@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -27,7 +29,7 @@ def coordinator(monkeypatch):
     hass = FakeHass()
     entry = FakeConfigEntry(
         data={
-            "mqtt_host": "broker.example.com",
+            "mqtt_host": "broker.example.com", "mqtt_scheme": "mqtts",
             "topic_root": "seenzus/v2",
             "enable_state_events": True,
         }
@@ -51,6 +53,198 @@ def test_fire_notifies_listeners_without_async_add_job(coordinator) -> None:
     coordinator._fire()
 
     assert calls == ["updated"]
+
+
+@pytest.mark.asyncio
+async def test_display_options_refresh_uses_metadata_provenance(coordinator) -> None:
+    from homeassistant.core import Event
+
+    coordinator.hass.states.set("sensor.demo", state="12.345", attributes={"unit_of_measurement": "V"})
+    coordinator.hass.config.time_zone = "Asia/Shanghai"
+    coordinator._subscribe_state_events()
+    assert {call["event_type"] for call in coordinator.hass.bus.listen_calls} >= {"state_changed", "entity_registry_updated", "core_config_updated"}
+    coordinator._on_display_metadata_changed(Event("entity_registry_updated", {"action": "update", "entity_id": "sensor.demo", "changes": {"options": {}}}))
+    assert "sensor.demo" in coordinator._pending_state_events
+    event = coordinator._pending_state_events.pop("sensor.demo")
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    await coordinator._publish_state_from_event(event)
+    payload = json.loads(coordinator._mqtt_client.published[-1]["payload"])
+    assert payload["state"] == "12.345"
+    assert payload["source"] == "display_metadata"
+    assert payload["attributes"]["seenzus_display"]["time_zone"] == "Asia/Shanghai"
+    assert coordinator.hass.bus.fire_calls == []
+    coordinator.hass.states.set("select.mode", state="decoupled", attributes={"options": ["control_relay", "decoupled"]})
+    coordinator._on_display_metadata_changed(Event("entity_registry_updated", {"action": "update", "entity_id": "select.mode", "changes": {"name": None}}))
+    assert coordinator._pending_state_events["select.mode"].event_type == "seenzus_display_metadata_changed"
+    coordinator._unsubscribe_runtime_listeners()
+    assert coordinator._display_unsubs == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["电量清零", None])
+async def test_registry_rename_publishes_latest_naming_without_a_state_change(coordinator, name) -> None:
+    from homeassistant.core import Event
+
+    entity_id = "switch.meter"
+    coordinator.hass.states.set(entity_id, state="off", attributes={"friendly_name": "Meter state"})
+    registry = er.async_get(coordinator.hass)
+    registry.add(entity_id, name="旧名称")
+    entry = registry.async_get(entity_id)
+    entry.original_name = "State"
+    entry.platform = "mqtt"
+    entry.has_entity_name = True
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    coordinator._subscribe_state_events()
+    changed = next(call["callback"] for call in coordinator.hass.bus.listen_calls
+                   if call["event_type"] == "entity_registry_updated")
+
+    entry.name = name
+    changed(Event("entity_registry_updated", {"action": "update", "entity_id": entity_id, "changes": {"name": "旧名称"}}))
+    assert list(coordinator._pending_state_events) == [entity_id]
+    event = coordinator._pending_state_events.pop(entity_id)
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    await coordinator._publish_state_from_event(event)
+
+    published = coordinator._mqtt_client.published
+    assert len(published) == 1
+    assert published[0]["topic"].endswith("/state/switch.meter")
+    payload = json.loads(published[0]["payload"])
+    assert payload["state"] == "off"
+    assert payload["attributes"]["friendly_name"] == "Meter state"
+    assert payload["attributes"]["seenzus_display"]["naming"]["name"] == name
+    assert payload["source"] == "display_metadata"
+    assert coordinator.hass.services.calls == []
+    coordinator._unsubscribe_runtime_listeners()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["配电箱电表", None])
+async def test_device_rename_refreshes_retained_catalog_without_entity_rename(coordinator, monkeypatch, name) -> None:
+    from homeassistant.core import Event
+
+    monkeypatch.setattr(coordinator_module, "CATALOG_REFRESH_DELAY_SECONDS", 0.01, raising=False)
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    client = AsyncFakeMQTTClient()
+    coordinator._mqtt_client = client
+    coordinator.mqtt_connected = True
+    coordinator.hass.states.set("switch.meter", state="off", attributes={"friendly_name": "电量清零"})
+    er.async_get(coordinator.hass).add("switch.meter", device_id="meter", name="电量清零")
+    devices = dr.async_get(coordinator.hass)
+    devices.add("meter", name="单相互感器1", name_by_user="旧设备名")
+    coordinator._subscribe_device_registry()
+    listeners = [call["callback"] for call in coordinator.hass.bus.listen_calls
+                 if call["event_type"] == "device_registry_updated"]
+    assert len(listeners) == 1
+    changed = listeners[0]
+    try:
+        # A burst of edits must publish the final registry snapshot just once.
+        devices.async_get("meter").name_by_user = "中间名称"
+        changed(Event("device_registry_updated", {"action": "update", "device_id": "meter", "changes": {"name_by_user": "旧设备名"}}))
+        devices.async_get("meter").name_by_user = name
+        changed(Event("device_registry_updated", {"action": "update", "device_id": "meter", "changes": {"name_by_user": "中间名称"}}))
+        assert client.published == []
+        await coordinator._catalog_refresh_task
+        assert len(client.published) == 1
+        published = client.published[0]
+        assert published["topic"] == coordinator._topics.catalog_topic
+        assert published["retain"] is True
+        payload = json.loads(published["payload"])
+        assert payload["source"] == "registry_update"
+        assert payload["devices"][0]["name"] == (name or "单相互感器1")
+        assert payload["devices"][0]["entities"][0]["name"] == "电量清零"
+        assert coordinator._pending_state_events == {}
+        assert coordinator.hass.services.calls == []
+    finally:
+        coordinator._unsubscribe_runtime_listeners()
+
+
+@pytest.mark.asyncio
+async def test_device_catalog_refresh_ignores_unrelated_changes_and_cancels_on_stop(coordinator, monkeypatch) -> None:
+    from homeassistant.core import Event
+
+    monkeypatch.setattr(coordinator_module, "CATALOG_REFRESH_DELAY_SECONDS", 0.01, raising=False)
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    client = AsyncFakeMQTTClient()
+    coordinator._mqtt_client = client
+    coordinator.mqtt_connected = True
+    coordinator._subscribe_device_registry()
+    listeners = [call["callback"] for call in coordinator.hass.bus.listen_calls
+                 if call["event_type"] == "device_registry_updated"]
+    assert len(listeners) == 1
+    changed = listeners[0]
+    changed(Event("device_registry_updated", {"action": "update", "device_id": "meter", "changes": {"sw_version": "old"}}))
+    await asyncio.sleep(0.02)
+    assert client.published == []
+    changed(Event("device_registry_updated", {"action": "update", "device_id": "meter", "changes": {"name_by_user": None}}))
+    await coordinator.async_stop()
+    await asyncio.sleep(0.02)
+    assert not [item for item in client.published if item["topic"] == coordinator._topics.catalog_topic]
+
+
+@pytest.mark.asyncio
+async def test_device_catalog_refresh_preserves_edits_during_publish_and_while_offline(coordinator, monkeypatch) -> None:
+    from homeassistant.core import Event
+
+    monkeypatch.setattr(coordinator_module, "CATALOG_REFRESH_DELAY_SECONDS", 0.001)
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    coordinator.hass.states.set("switch.meter", state="off")
+    er.async_get(coordinator.hass).add("switch.meter", device_id="meter", name="电量清零")
+    devices = dr.async_get(coordinator.hass)
+    devices.add("meter", name="Meter")
+    coordinator._subscribe_device_registry()
+    changed = next(call["callback"] for call in coordinator.hass.bus.listen_calls
+                   if call["event_type"] == "device_registry_updated")
+    event = Event("device_registry_updated", {"action": "update", "device_id": "meter", "changes": {"name_by_user": None}})
+    devices.async_get("meter").name_by_user = "离线时改名"
+    changed(event)
+    assert coordinator._catalog_refresh_task is None
+
+    first_publish = asyncio.Event()
+    release_publish = asyncio.Event()
+    class PausedClient(AsyncFakeMQTTClient):
+        async def publish(self, *args, **kwargs):
+            await super().publish(*args, **kwargs)
+            if len(self.published) == 1:
+                first_publish.set()
+                await release_publish.wait()
+
+    client = PausedClient()
+    coordinator._mqtt_client = client
+    coordinator.mqtt_connected = True
+    coordinator._start_catalog_refresh_if_ready()
+    task = coordinator._catalog_refresh_task
+    try:
+        await asyncio.wait_for(first_publish.wait(), timeout=1)
+        devices.async_get("meter").name_by_user = "发送期间再次改名"
+        changed(event)
+        release_publish.set()
+        await asyncio.wait_for(task, timeout=1)
+        names = [json.loads(item["payload"])["devices"][0]["name"] for item in client.published]
+        assert names == ["离线时改名", "发送期间再次改名"]
+        assert coordinator._entry.foreground_task_names == ["seenzus catalog metadata refresh"]
+    finally:
+        release_publish.set()
+        coordinator._unsubscribe_runtime_listeners()
+        await coordinator._stop_catalog_refresh()
+
+
+@pytest.mark.parametrize("model_id", ["SPM01-U01", None])
+def test_catalog_transports_model_id_separately_from_description(coordinator, model_id) -> None:
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    coordinator.hass.states.set("switch.meter", state="off")
+    er.async_get(coordinator.hass).add("switch.meter", device_id="meter", name="电量清零")
+    registry = dr.async_get(coordinator.hass)
+    registry.add("meter", manufacturer="BITUO TECHNIK", model="Smart energy monitor for 1P+N system")
+    registry.async_get("meter").model_id = model_id
+
+    device = coordinator._build_device_catalog_payload(source="test")["devices"][0]
+    assert device["model"] == "Smart energy monitor for 1P+N system"
+    assert device["entities"][0]["name"] == "电量清零"
+    if model_id is None:
+        assert "modelId" not in device
+    else:
+        assert device["modelId"] == model_id
 
 
 def test_mqtt_auth_error_sets_pairing_status_for_web_pair_config() -> None:
@@ -81,6 +275,7 @@ async def test_presence_includes_mqtt_and_pairing_diagnostics() -> None:
                 "pairing_mode": "seamless",
                 "config_source": "web_pair",
                 "pairing_session_id": "wps_1",
+                "mqtt_scheme": "mqtts",
                 "source_id": "ha-bridge-ha-demo",
                 "source_type": "haos_bridge",
                 "source_name": "HA Bridge",
@@ -105,7 +300,7 @@ async def test_presence_includes_mqtt_and_pairing_diagnostics() -> None:
     assert payload["pairingStatus"] == "bridge_ready"
     assert payload["configSource"] == "web_pair"
     # 生效传输方式随 presence 上报（issue #14）；裸 TCP 不带 wsPath。
-    assert payload["transport"] == "mqtt"
+    assert payload["transport"] == "mqtts"
     assert "wsPath" not in payload
     assert payload["sourceId"] == "ha-bridge-ha-demo"
     assert payload["sourceType"] == "haos_bridge"
@@ -686,15 +881,12 @@ async def test_prepare_for_reload_clears_old_retained_presence_when_bridge_chang
 # ── MQTT 传输 scheme → aiomqtt 连接参数（issue #14 wss 支持） ──
 
 
-def test_transport_kwargs_empty_for_bare_tcp_and_unknown_scheme() -> None:
+def test_transport_kwargs_plaintext_requires_explicit_local_ip() -> None:
     from seenzus_bridge.coordinator import _transport_connect_kwargs
-
-    # 旧 entry（无 scheme 键）与显式 "mqtt" 都必须返回空 kwargs——连接调用
-    # 与 wss 支持落地前完全一致，绝不炸旧桥。
-    assert _transport_connect_kwargs({}) == {}
-    assert _transport_connect_kwargs({"mqtt_scheme": "mqtt"}) == {}
-    # 未知 scheme 一律按裸 TCP 回退，不往 aiomqtt 传坏参数。
-    assert _transport_connect_kwargs({"mqtt_scheme": "quic"}) == {}
+    assert _transport_connect_kwargs({"mqtt_scheme": "mqtt", "mqtt_host": "127.0.0.1"}) == {}
+    for conf in ({}, {"mqtt_scheme": "quic"}, {"mqtt_scheme": "mqtt", "mqtt_host": "example.com"}):
+        with pytest.raises(ValueError):
+            _transport_connect_kwargs(conf)
 
 
 def test_transport_kwargs_wss_sets_websockets_transport_path_and_tls() -> None:
@@ -713,7 +905,7 @@ def test_transport_kwargs_wss_sets_websockets_transport_path_and_tls() -> None:
 def test_transport_kwargs_ws_defaults_path_and_skips_tls() -> None:
     from seenzus_bridge.coordinator import _transport_connect_kwargs
 
-    kwargs = _transport_connect_kwargs({"mqtt_scheme": "ws"})
+    kwargs = _transport_connect_kwargs({"mqtt_scheme": "ws", "mqtt_host": "::1"})
     assert kwargs["transport"] == "websockets"
     assert kwargs["websocket_path"] == "/mqtt"
     assert "tls_context" not in kwargs
@@ -807,3 +999,235 @@ def test_pending_state_backlog_keeps_recent_update_for_existing_entity(
     retained = coordinator._pending_state_events["light.a"]
     assert retained.data["new_state"].state == "latest"
     assert coordinator._dropped_state_events == 1
+
+
+def test_pending_state_backlog_preserves_each_event_and_button_occurrence(coordinator) -> None:
+    first_ring = make_state_changed_event(
+        "event.front_door", state="2026-09-30T10:00:00+00:00", attributes={"event_type": "ring"}
+    )
+    second_ring = make_state_changed_event(
+        "event.front_door", state="2026-09-30T10:00:01+00:00", attributes={"event_type": "ring"}
+    )
+    first_press = make_state_changed_event("button.scene", state="unknown")
+    second_press = make_state_changed_event("button.scene", state="unknown")
+
+    for event in (first_ring, second_ring, first_press, second_press):
+        coordinator._on_state_changed(event)
+
+    assert list(coordinator._pending_state_events.values()) == [
+        first_ring,
+        second_ring,
+        first_press,
+        second_press,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_state_event_uses_ha_observation_time_full_attributes_and_stable_identity(
+    coordinator,
+) -> None:
+    observed_at = datetime(2026, 9, 30, 10, 20, 30, 123456, tzinfo=timezone.utc)
+    event = make_state_changed_event(
+        "light.living_room",
+        state="on",
+        attributes={
+            "brightness": 180,
+            "color_temp": 300,
+            "effect": "reading",
+            "device_class": "light",
+            "vendor_nested": {"kept": [1, 2]},
+        },
+        last_updated=observed_at,
+    )
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+
+    await coordinator._publish_state_from_event(event)
+    await coordinator._publish_state_from_event(event)
+
+    payloads = [json.loads(item["payload"]) for item in coordinator._mqtt_client.published]
+    assert payloads[0]["attributes"] == event.data["new_state"].attributes
+    assert payloads[0]["ts"] == "2026-09-30T10:20:30.123456+00:00"
+    assert payloads[0]["eventId"] == payloads[1]["eventId"]
+
+
+@pytest.mark.asyncio
+async def test_attribute_only_changes_get_distinct_stable_event_ids(coordinator) -> None:
+    observed_at = datetime(2026, 9, 30, 10, 20, 30, tzinfo=timezone.utc)
+    dim = make_state_changed_event(
+        "light.living_room",
+        state="on",
+        attributes={"brightness": 80},
+        last_changed=observed_at,
+        last_updated=observed_at,
+    )
+    bright = make_state_changed_event(
+        "light.living_room",
+        state="on",
+        attributes={"brightness": 180},
+        last_changed=observed_at,
+        last_updated=observed_at,
+    )
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+
+    await coordinator._publish_state_from_event(dim)
+    await coordinator._publish_state_from_event(bright)
+    await coordinator._publish_state_from_event(bright)
+
+    payloads = [json.loads(item["payload"]) for item in coordinator._mqtt_client.published]
+    assert payloads[0]["eventId"] != payloads[1]["eventId"]
+    assert payloads[1]["eventId"] == payloads[2]["eventId"]
+
+
+@pytest.mark.asyncio
+async def test_replayed_fact_matches_live_event_id_after_recorder_round_trip(
+    coordinator,
+) -> None:
+    """Recorder stores attributes as JSON (datetime -> ISO string).
+
+    The identity material must canonicalize the same way, so a fact delivered
+    live (datetime object) and replayed from history (ISO string) keeps one ID.
+    """
+    observed_at = datetime(2026, 9, 30, 10, 20, 30, tzinfo=timezone.utc)
+    live = make_state_changed_event(
+        "sensor.next_dawn",
+        state="2026-10-01",
+        attributes={"next_dawn": observed_at, "tags": {"b", "a"}},
+        last_changed=observed_at,
+        last_updated=observed_at,
+    )
+    replayed = make_state_changed_event(
+        "sensor.next_dawn",
+        state="2026-10-01",
+        attributes={"next_dawn": observed_at.isoformat(), "tags": ["a", "b"]},
+        last_changed=observed_at,
+        last_updated=observed_at,
+    )
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+
+    await coordinator._publish_state_from_event(live)
+    replay_payload = coordinator._build_state_payload(
+        "sensor.next_dawn",
+        replayed.data["new_state"],
+        source="history_replay",
+        observed_at=observed_at,
+    )
+
+    live_payload = json.loads(coordinator._mqtt_client.published[0]["payload"])
+    assert replay_payload["eventId"] == live_payload["eventId"]
+
+
+def test_history_replay_respects_disabled_state_events(coordinator) -> None:
+    coordinator._entry.options = {"enable_state_events": False}
+
+    coordinator._start_history_replay(AsyncFakeMQTTClient())
+
+    assert coordinator._history_replay_task is None
+
+
+@pytest.mark.asyncio
+async def test_history_replay_publishes_original_states_in_order_with_stable_ids(
+    coordinator, monkeypatch
+) -> None:
+    start = datetime(2026, 9, 30, 10, 0, tzinfo=timezone.utc)
+    old = SimpleNamespace(
+        entity_id="binary_sensor.door",
+        state="on",
+        attributes={"device_class": "door"},
+        last_changed=start + timedelta(seconds=1),
+        last_updated=start + timedelta(seconds=1),
+    )
+    new = SimpleNamespace(
+        entity_id="binary_sensor.door",
+        state="off",
+        attributes={"device_class": "door"},
+        last_changed=start + timedelta(seconds=2),
+        last_updated=start + timedelta(seconds=2),
+    )
+
+    async def _history_states(_start, _end):
+        return [new, old]
+
+    monkeypatch.setattr(coordinator, "_async_fetch_history_states", _history_states)
+    coordinator._mqtt_client = AsyncFakeMQTTClient()
+    coordinator._topics = build_topics("seenzus/v2", "ha-demo")
+    coordinator.mqtt_connected = True
+
+    await coordinator._run_history_replay(start, start + timedelta(minutes=1))
+    first_payloads = [json.loads(item["payload"]) for item in coordinator._mqtt_client.published]
+    await coordinator._run_history_replay(start, start + timedelta(minutes=1))
+    second_payloads = [
+        json.loads(item["payload"])
+        for item in coordinator._mqtt_client.published[len(first_payloads):]
+    ]
+
+    assert [payload["state"] for payload in first_payloads] == ["on", "off"]
+    assert all(payload["source"] == "history_replay" for payload in first_payloads)
+    assert [payload["ts"] for payload in first_payloads] == [
+        "2026-09-30T10:00:01+00:00",
+        "2026-09-30T10:00:02+00:00",
+    ]
+    assert [payload["eventId"] for payload in first_payloads] == [
+        payload["eventId"] for payload in second_payloads
+    ]
+
+    await coordinator._publish_state_object(
+        coordinator._mqtt_client, old, source="ha_state_changed"
+    )
+    await coordinator._publish_state_object(
+        coordinator._mqtt_client, old, source="command"
+    )
+    live_payload, command_payload = [
+        json.loads(item["payload"])
+        for item in coordinator._mqtt_client.published[-2:]
+    ]
+    assert live_payload["eventId"] == first_payloads[0]["eventId"]
+    assert command_payload["eventId"] != first_payloads[0]["eventId"]
+
+
+@pytest.mark.asyncio
+async def test_history_fetch_uses_recorder_with_full_attributes_and_reports_limits(
+    coordinator, monkeypatch
+) -> None:
+    from homeassistant.components.recorder import history
+    from homeassistant.helpers.recorder import DATA_INSTANCE
+
+    start = datetime(2026, 9, 30, 10, 0, tzinfo=timezone.utc)
+    coordinator.hass.states.set("binary_sensor.door", state="off")
+    rows = [
+        SimpleNamespace(
+            entity_id="binary_sensor.door",
+            state=state,
+            attributes={"device_class": "door", "sequence": index},
+            last_changed=start + timedelta(seconds=index),
+            last_updated=start + timedelta(seconds=index),
+        )
+        for index, state in enumerate(("off", "on", "off"), start=1)
+    ]
+    query_calls = []
+
+    def _get_significant_states(*args, **kwargs):
+        query_calls.append((args, kwargs))
+        return {"binary_sensor.door": list(reversed(rows))}
+
+    class _Recorder:
+        async def async_add_executor_job(self, target, *args):
+            return target(*args)
+
+    coordinator.hass.data[DATA_INSTANCE] = _Recorder()
+    monkeypatch.setattr(history, "get_significant_states", _get_significant_states)
+    monkeypatch.setattr(coordinator_module, "MAX_HISTORY_REPLAY_EVENTS_PER_ENTITY", 2)
+
+    result = await coordinator._async_fetch_history_states(
+        start, start + timedelta(minutes=1)
+    )
+
+    assert [state.attributes["sequence"] for state in result] == [2, 3]
+    assert coordinator._dropped_state_events == 1
+    assert len(query_calls) == 1
+    _args, kwargs = query_calls[0]
+    assert kwargs["include_start_time_state"] is False
+    assert kwargs["significant_changes_only"] is False
+    assert kwargs["no_attributes"] is False

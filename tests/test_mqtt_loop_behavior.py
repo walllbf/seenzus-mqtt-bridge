@@ -42,6 +42,7 @@ COMMAND_SUB = "seenzus/v2/bridge/ha-demo/command/+"
 
 HAPPY_ENTRY_DATA = {
     "mqtt_host": "broker.example.com",
+    "mqtt_scheme": "mqtts",
     "topic_root": "seenzus/v2",
     "bridge_id": "ha-demo",
     "pairing_mode": "manual",
@@ -153,10 +154,13 @@ async def test_loop_happy_connect_subscribes_then_presence_catalog_and_snapshot(
 
         client = fake.clients[0]
         assert client.connect_kwargs["hostname"] == "broker.example.com"
-        assert client.connect_kwargs["port"] == 1883
-        assert client.connect_kwargs["identifier"] == "seenzus-bridge-01kpcrmg59ph"
-        # 裸 TCP entry（无 scheme）绝不附加 wss 支持引入的传输参数（issue #14）。
-        assert not {"transport", "websocket_path", "tls_context"} & set(client.connect_kwargs)
+        assert client.connect_kwargs["port"] == 8883
+        assert client.connect_kwargs["identifier"] == (
+            "seenzus-bridge-3a6f48fc1e61cd6d2b5e51496c676789"
+        )
+        # Secure TCP uses TLS without WebSocket framing.
+        assert "tls_context" in client.connect_kwargs
+        assert not {"transport", "websocket_path"} & set(client.connect_kwargs)
         assert client.subscriptions == [{"topic": COMMAND_SUB, "qos": 1}]
 
         presence = client.published[0]
@@ -164,6 +168,13 @@ async def test_loop_happy_connect_subscribes_then_presence_catalog_and_snapshot(
         assert presence["qos"] == 1
         assert presence["retain"] is True
         assert json.loads(presence["payload"])["status"] == "online"
+
+        presences = [item for item in client.published if item["topic"] == PRESENCE_TOPIC]
+        assert [json.loads(item["payload"])["mqttConnected"] for item in presences] == [False, True]
+        ready_presence = presences[1]
+        assert ready_presence["retain"] is True
+        assert ready_presence["qos"] == 1
+        assert json.loads(ready_presence["payload"])["capabilities"]["snapshotStream"] == 1
 
         states = [item for item in client.published if "/state/" in item["topic"]]
         assert [item["topic"] for item in states] == [
@@ -183,6 +194,11 @@ async def test_loop_happy_connect_subscribes_then_presence_catalog_and_snapshot(
         topics = [item["topic"] for item in client.published]
         assert topics.index(CATALOG_TOPIC) < topics.index(
             "seenzus/v2/bridge/ha-demo/state/light.living_room"
+        )
+        assert (
+            client.published.index(catalogs[0])
+            < client.published.index(ready_presence)
+            < client.published.index(states[0])
         )
 
         assert coordinator.status == "active"
@@ -365,13 +381,21 @@ async def test_loop_wss_entry_connects_with_websockets_transport(monkeypatch) ->
 async def test_loop_publishes_startup_snapshot_once_across_reconnect_cycles(monkeypatch) -> None:
     coordinator, fake = _make_coordinator(
         monkeypatch,
-        data=dict(HAPPY_ENTRY_DATA),
+        data={**HAPPY_ENTRY_DATA, "enable_state_events": True},
         cycles=[
             {"end": FakeMqttError("[code:7] connection lost")},
             {"end": asyncio.CancelledError},
         ],
     )
     coordinator.hass.states.set("light.living_room", state="on")
+    replay_clients = []
+    original_start_history_replay = coordinator._start_history_replay
+
+    def _record_history_replay(client):
+        replay_clients.append(client)
+        original_start_history_replay(client)
+
+    monkeypatch.setattr(coordinator, "_start_history_replay", _record_history_replay)
     sleeps, _real_sleep = _install_recording_sleep(monkeypatch)
     coordinator._on_ha_started(None)
 
@@ -384,6 +408,7 @@ async def test_loop_publishes_startup_snapshot_once_across_reconnect_cycles(monk
     assert [item["topic"] for item in first_cycle.published] == [
         PRESENCE_TOPIC,
         CATALOG_TOPIC,
+        PRESENCE_TOPIC,
         "seenzus/v2/bridge/ha-demo/state/light.living_room",
     ]
     # Reconnect re-asserts presence AND the retained catalog (durable topology truth —
@@ -392,6 +417,7 @@ async def test_loop_publishes_startup_snapshot_once_across_reconnect_cycles(monk
     assert [item["topic"] for item in second_cycle.published] == [
         PRESENCE_TOPIC,
         CATALOG_TOPIC,
+        PRESENCE_TOPIC,
     ]
     # The reconnect catalog is tagged source="reconnect" and sent at qos 1 (reliable).
     reconnect_catalog = next(
@@ -401,6 +427,7 @@ async def test_loop_publishes_startup_snapshot_once_across_reconnect_cycles(monk
     assert reconnect_catalog["qos"] == 1
     assert json.loads(reconnect_catalog["payload"])["source"] == "reconnect"
     assert coordinator._initial_snapshot_attempted is True
+    assert replay_clients == [first_cycle, second_cycle]
     assert coordinator._mqtt_client is None
     # A recovered connection must not keep presenting the previous iterator
     # disconnect as its current Last error.

@@ -18,7 +18,7 @@ def flow_for(hass, world="world-a"):
     flow._quick_pair_session_id = "wps_test"
     flow._quick_pair_page_url = "https://app.seenzus.cn/pair"
     flow._quick_pair_exchange_result = SimpleNamespace(ok=True, session_id="wps_test", world_id=world,
-        world_name=world, source_id=f"source-{world}", confirmed_at=None, mqtt={"host": "mqtt.test", "password": "rotated"})
+        world_name=world, source_id=f"source-{world}", confirmed_at=None, mqtt={"host": "mqtt.test", "scheme": "mqtts", "password": "rotated"})
     flow.async_create_entry = lambda **kwargs: {"type": "created", **kwargs}
     flow.async_abort = lambda **kwargs: {"type": "abort", **kwargs}
     return flow

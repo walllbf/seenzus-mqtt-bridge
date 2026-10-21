@@ -150,7 +150,9 @@ https://seenzus.ai/ha-pairing?session_id=...&redirect_uri=...&bridge_name=seenzu
 | 参数 | 说明 | 默认 |
 |---|---|---|
 | MQTT Broker 地址 | 公网 MQTT 地址 | （必填） |
-| MQTT 端口 | Broker 端口 | `1883` |
+| MQTT 传输协议 | 远程 Broker 必须使用 `mqtts` 或 `wss` | `mqtts` |
+| MQTT 端口 | 留空按协议选择；自定义端口请填写 | `mqtts:8883` / `wss:443` |
+| WebSocket 路径 | 仅 `ws` / `wss` 使用 | `/mqtt` |
 | MQTT 用户名 / 密码 | Broker 认证 | 空 |
 
 **高级参数**
@@ -190,7 +192,12 @@ https://seenzus.ai/ha-pairing?session_id=...&redirect_uri=...&bridge_name=seenzu
 
 - **专用 Broker + 强密码**，不要与不可信方共用
 - **按 bridge 配置 Topic ACL**：`{topicRoot}/bridge/{bridgeId}/command/+` 的 **publish 权限只授予可信后端**
-- 尽量使用 **8883/TLS** 连接
+- 远程连接强制使用 **mqtts/TLS** 或 **wss**，并校验证书和主机名。协议缺失、未知或远程明文配置会被拒绝，不会自动降级。
+
+从 v0.2.13 起，旧的远程明文配置或缺少协议的配置会停止连接并显示错误。
+请打开「配置 → 重新配对或手动配置」，选择安全协议与正确端口，或重新快速配对。
+已有安全配置继续使用。明文仅限显式填写的内网或回环 IP；包括 `.local` 在内的
+所有域名都需要 TLS。完整规则见 [README 升级说明](../README.md#v0213-连接安全与升级)。
 
 详见仓库 README 的「🔒 安全部署」章节。
 

@@ -1,6 +1,6 @@
 # 多环境、多条目与设备授权
 
-用户于 2026-09-16 确认初版，并于 2026-09-18 将条目规则调整为每个环境最多一条；本文件以下述最新规则为准。桥和应用的实现已落在本地工作区，完成下述自动化验证，尚未发布或操作线上数据库。
+用户于 2026-09-16 确认初版，并于 2026-09-18 将条目规则调整为每个环境最多一条；本文件以下述最新规则为准。应用端主体已通过 [PR #2087](https://github.com/JoeWu-explorer/Seenzus/pull/2087) 合入主分支；桥侧在 2026-10-21 整合主分支 `0db65b8`。代码合并不代表真实 HA、三环境部署或数据库迁移验收已完成。
 
 ## 已确认的产品规则
 
@@ -55,7 +55,7 @@ HA 官方跳转不会保留最初的应用 launch ID，因此浏览器提示与 
 
 ## 发布顺序与兼容
 
-1. 先备份并验证应用迁移 `0225_bridge_device_access.sql`，为 Source 链接增加独立撤权状态及证据时间。
+1. 先备份并验证应用迁移 `0241_bridge_device_access.sql`，为 Source 链接增加独立撤权状态及证据时间。
 2. 部署三个应用环境的 API 和页面，确认国内中转页以及各环境 `/pair/bootstrap` 可达；旧插件仍沿用原协议。
 3. 验证从 UAT／国内／境外各自发起的真实浏览器和手机链路，再更新 HA 插件。
 4. 旧条目自动迁移为原连接地址、原凭证、全部设备授权。不会重新解释开发配置文件；缺少 World 身份的旧条目在下一次重配对时通过原 Source 校验补齐。
@@ -79,6 +79,17 @@ HA 官方跳转不会保留最初的应用 launch ID，因此浏览器提示与 
 
 ## 应用仓库协作
 
-实现工作区：`C:/Users/Bi-FanLin/.codex/worktrees/e9a6/seenzus-application`。
+应用端以 `JoeWu-explorer/Seenzus` 的 PR #2087 及后续主分支为准。2026-10-21 对照提交为 `37d303462`；不要依赖历史临时工作区路径。
 
 ADR 0013 中“桥由另一条工作线维护、保持旧协议不变”的历史约束在本次跨仓库授权内被扩展：新能力通过兼容字段和新流程接入，旧版插件协议继续工作。World 仍是 ADR 0104 定义的租户边界。
+
+## 2026-10-21 双端接口对齐
+
+- 新建会话发送 `protocolVersion: 2`、`haInstanceId`、`redirectUri` 和短期 `state`。重新配对附带原 `expectedWorldId`，旧条目缺 World 时附带 `expectedSourceId`。
+- 授权回调包含 `environment`、`session_id`、`state` 和一次性 `code`；桥只向已知环境或显式开发预设兑换。兑换返回 `worldId`／`worldName`、Source 身份及带 `scheme`／`path` 的 MQTT 配置。远程连接继续要求 TLS，不增加明文回退。
+- 中转补选提示 `available_environments` 来自桥：普通入口为 `cn,global`，有效开发预设可增加 `uat`。它仅限制上下文缺失时的选择，不阻止有效 UAT 应用发起记录，也不授予身份或权限。应用端省略该字段时保留旧桥行为；先发布配套应用再发布桥。
+- 授权目录的 `access` 使用 `mode`（`all`／`selected`）、`deviceIds`、`entityIds` 和 `entityRegistryIds`。应用迁移使用 `access_revoked` 和 `access_observed_at` 保存撤权证据。
+- 主分支新增的快照流、历史补录、服务索引和展示属性读取同样执行授权。快照回执缓存按授权范围失效；异步加载展示资源后重新检查授权。原始 HA 时间、事件身份、TLS、包大小预算、WSS 恢复及中英文运行时翻译沿用主分支。
+- 条目配置菜单提供「MQTT 连接设置」「设备授权范围」「重新配对或手动配置」。修改范围不轮换凭证，也不重置包大小预算、环境或 World。
+
+真实 HA／Android WebView、三环境发布和真实 PostgreSQL 迁移仍需按发布清单验收；自动化检查不替代这些证据。

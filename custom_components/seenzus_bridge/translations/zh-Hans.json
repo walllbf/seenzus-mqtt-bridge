@@ -27,7 +27,13 @@
               "mqtt_host": "MQTT Broker 地址",
               "mqtt_port": "MQTT 端口",
               "mqtt_username": "MQTT 用户名",
-              "mqtt_password": "MQTT 密码"
+              "mqtt_password": "MQTT 密码",
+              "mqtt_scheme": "MQTT 传输协议",
+              "mqtt_ws_path": "WebSocket 路径（仅 ws/wss）"
+            },
+            "data_description": {
+              "mqtt_port": "留空使用所选协议的标准端口：mqtts 8883、wss 443、mqtt 1883、ws 80。自定义端口请明确填写。",
+              "mqtt_ws_path": "安全 WebSocket 通常使用 /mqtt，按 Broker 配置填写。"
             }
           },
           "advanced_settings": {
@@ -39,7 +45,11 @@
               "enable_state_events": "启用实体状态事件推送",
               "allow_dangerous_services": "允许调用危险服务（hassio / shell_command / python_script 等，默认关闭）",
               "enable_template_api": "允许模板渲染 API /api/template（默认关闭）",
-              "expose_full_config": "返回完整 /api/config（含家庭位置坐标，默认关闭）"
+              "expose_full_config": "返回完整 /api/config（含家庭位置坐标，默认关闭）",
+              "mqtt_max_packet_size_kib": "MQTT 最大报文大小（KiB）"
+            },
+            "data_description": {
+              "mqtt_max_packet_size_kib": "本地发送上限，须不高于 Broker 允许的报文大小。1024 KiB = 1 MiB，2048 KiB = 2 MiB；不会自动修改 Broker 配置。"
             }
           }
         }
@@ -90,6 +100,10 @@
       "quick_pair_code_exchange_failed": "回跳成功但兑换桥接配置失败，请检查后端服务状态",
       "quick_pair_callback_timeout": "未收到回跳确认，请确认外部页面已完成授权并返回 Home Assistant",
       "quick_pair_missing_context": "快速配对会话已丢失，请重新发起",
+      "invalid_mqtt_packet_size": "请输入 1–262144 范围内的整数（KiB），并确保不超过 Broker 的报文大小限制",
+      "mqtt_packet_size_too_small_for_topic": "此上限无法容纳当前 Topic 的最小离线消息，请提高上限或缩短 Topic / Bridge ID",
+      "mqtt_transport_required": "MQTT 传输协议缺失或无效。请选择 mqtts/wss；快速配对时请联系服务端修正协议后重新配对，不会回退为明文连接。",
+      "mqtt_tls_required": "此 Broker 必须使用 TLS（mqtts 或 wss）。明文 MQTT/WebSocket 仅允许明确的内网或回环 IP，请检查协议与端口。",
       "world_identity_missing": "无法确认世界身份，请先升级 Seenzus 服务端；旧条目缺少数据源身份时请先移除原条目，再重新接入。",
       "world_mismatch": "重新配对只能连接原来的世界。同一环境只能有一个条目；更换世界请先移除原条目，再重新接入。",
       "ha_identity_unavailable": "无法获取此 HA 的安装标识，请稍后重试。",
@@ -108,12 +122,12 @@
   "options": {
     "step": {
       "init": {
-        "title": "修改 seenzus MQTT Bridge 配置",
-        "description": "修改设备授权，或在原环境和世界中重新配对。保存后自动重载。",
-        "data": {
-          "action": "设置项"
-        },
-        "sections": {}
+        "title": "配置 seenzus MQTT Bridge",
+        "menu_options": {
+          "connection_settings": "MQTT 连接设置",
+          "device_access": "设备授权范围",
+          "pairing": "重新配对或手动配置"
+        }
       },
       "seamless": {
         "title": "快速配对",
@@ -133,7 +147,13 @@
               "mqtt_host": "MQTT Broker 地址",
               "mqtt_port": "MQTT 端口",
               "mqtt_username": "MQTT 用户名",
-              "mqtt_password": "MQTT 密码"
+              "mqtt_password": "MQTT 密码",
+              "mqtt_scheme": "MQTT 传输协议",
+              "mqtt_ws_path": "WebSocket 路径（仅 ws/wss）"
+            },
+            "data_description": {
+              "mqtt_port": "留空使用所选协议的标准端口：mqtts 8883、wss 443、mqtt 1883、ws 80。自定义端口请明确填写。",
+              "mqtt_ws_path": "安全 WebSocket 通常使用 /mqtt，按 Broker 配置填写。"
             }
           },
           "advanced_settings": {
@@ -145,9 +165,30 @@
               "enable_state_events": "启用实体状态事件推送",
               "allow_dangerous_services": "允许调用危险服务（hassio / shell_command / python_script 等，默认关闭）",
               "enable_template_api": "允许模板渲染 API /api/template（默认关闭）",
-              "expose_full_config": "返回完整 /api/config（含家庭位置坐标，默认关闭）"
+              "expose_full_config": "返回完整 /api/config（含家庭位置坐标，默认关闭）",
+              "mqtt_max_packet_size_kib": "MQTT 最大报文大小（KiB）"
+            },
+            "data_description": {
+              "mqtt_max_packet_size_kib": "本地发送上限，须不高于 Broker 允许的报文大小。1024 KiB = 1 MiB，2048 KiB = 2 MiB；不会自动修改 Broker 配置。"
             }
           }
+        }
+      },
+      "pairing": {
+        "title": "重新配对或手动配置",
+        "description": "重新配对保留原环境、世界和设备范围。手动配置的条目可以修改连接设置。",
+        "data": {
+          "action": "操作"
+        }
+      },
+      "connection_settings": {
+        "title": "MQTT 连接设置",
+        "description": "修改本地报文上限并重连，保留当前配对、凭据和传输方式，无需重新授权。",
+        "data": {
+          "mqtt_max_packet_size_kib": "MQTT 最大报文大小（KiB）"
+        },
+        "data_description": {
+          "mqtt_max_packet_size_kib": "本地发送上限，须不高于 Broker 允许的报文大小。1024 KiB = 1 MiB，2048 KiB = 2 MiB；不会自动修改 Broker 配置。"
         }
       },
       "environment": {
@@ -196,6 +237,10 @@
       "quick_pair_code_exchange_failed": "回跳成功但兑换桥接配置失败，请检查后端服务状态",
       "quick_pair_callback_timeout": "未收到回跳确认，请确认外部页面已完成授权并返回 Home Assistant",
       "quick_pair_missing_context": "快速配对会话已丢失，请重新发起",
+      "invalid_mqtt_packet_size": "请输入 1–262144 范围内的整数（KiB），并确保不超过 Broker 的报文大小限制",
+      "mqtt_packet_size_too_small_for_topic": "此上限无法容纳当前 Topic 的最小离线消息，请提高上限或缩短 Topic / Bridge ID",
+      "mqtt_transport_required": "MQTT 传输协议缺失或无效。请选择 mqtts/wss；快速配对时请联系服务端修正协议后重新配对，不会回退为明文连接。",
+      "mqtt_tls_required": "此 Broker 必须使用 TLS（mqtts 或 wss）。明文 MQTT/WebSocket 仅允许明确的内网或回环 IP，请检查协议与端口。",
       "world_identity_missing": "无法确认世界身份，请先升级 Seenzus 服务端；旧条目缺少数据源身份时请先移除原条目，再重新接入。",
       "world_mismatch": "重新配对只能连接原来的世界。同一环境只能有一个条目；更换世界请先移除原条目，再重新接入。",
       "ha_identity_unavailable": "无法获取此 HA 的安装标识，请稍后重试。",
@@ -208,6 +253,43 @@
       "pairing_in_progress": "已有配对正在进行，请先完成或取消。",
       "environment_already_configured": "此环境已有条目。请进入原条目的配置进行管理或重新配对；同一环境不能重复添加，即使选择另一个世界。",
       "all_environments_configured": "四种环境均已有条目，无法继续添加。请管理已有条目。"
+    }
+  },
+  "exceptions": {
+    "mqtt_transport_required": {
+      "message": "旧配置缺少有效的 MQTT 协议，连接已阻止。打开「配置 → 重新配对或手动配置」，选择 mqtts/wss 和正确的 TLS 端口，或重新快速配对。"
+    },
+    "mqtt_tls_required": {
+      "message": "远程 Broker 的明文连接已阻止。打开「配置 → 重新配对或手动配置」，选择 mqtts/wss 和正确的 TLS 端口，或重新快速配对。"
+    }
+  },
+  "selector": {
+    "pairing_mode": {
+      "options": {
+        "seamless": "快速配对（自动识别环境，推荐）",
+        "choose_environment": "快速配对（手动选择环境）",
+        "manual": "手动配置（高级）"
+      }
+    },
+    "environment": {
+      "options": {
+        "cn": "国内 PRD",
+        "global": "境外 PRD",
+        "uat": "UAT（开发）",
+        "custom": "Dev Server（开发预设）"
+      }
+    },
+    "device_scope": {
+      "options": {
+        "all": "全部设备",
+        "selected": "指定设备"
+      }
+    },
+    "pairing_action": {
+      "options": {
+        "repair": "重新配对（保留环境、世界和设备范围）",
+        "manual": "手动连接设置"
+      }
     }
   }
 }

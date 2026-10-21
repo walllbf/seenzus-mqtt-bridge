@@ -8,6 +8,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import service as service_helper
 from .device_access import DeviceAccess, SAFE_SERVICES
+from .sensor_display import async_prepare_sensor_display, sensor_display_attributes
 
 
 @dataclass(slots=True)
@@ -107,7 +108,14 @@ async def dispatch(
         return DispatchResult(status=200, data=data, touched_entities=[])
 
     if method == "GET" and path == "/api/states":
-        return DispatchResult(status=200, data=[access.state(s) if access else s.as_dict() for s in hass.states.async_all() if access is None or access.allows(s.entity_id)], touched_entities=[])
+        states = [s for s in hass.states.async_all() if access is None or access.allows(s.entity_id)]
+        await async_prepare_sensor_display(hass, [s.entity_id for s in states])
+        data = []
+        for state in states:
+            item = access.state(state) if access else dict(state.as_dict())
+            item["attributes"] = sensor_display_attributes(hass, state.entity_id, item.get("attributes", {}))
+            data.append(item)
+        return DispatchResult(status=200, data=data, touched_entities=[])
 
     if method == "GET" and path == "/api/services":
         descriptions = await service_helper.async_get_all_descriptions(hass)
@@ -117,6 +125,21 @@ async def dispatch(
                             for domain, services in descriptions.items() if domain in SAFE_SERVICES}
         return DispatchResult(status=200, data=descriptions, touched_entities=[])
 
+    if method == "GET" and path == "/api/seenzus/services/index":
+        services = []
+        for domain, definitions in hass.services.async_services().items():
+            if not re.fullmatch(r"[a-z0-9_]+", domain):
+                return DispatchResult(status=500, data={"error": "invalid_service_registry"}, touched_entities=[])
+            for service in definitions:
+                if restricted and service not in SAFE_SERVICES.get(domain, {}):
+                    continue
+                if not re.fullmatch(r"[a-z0-9_]+", service):
+                    return DispatchResult(status=500, data={"error": "invalid_service_registry"}, touched_entities=[])
+                services.append(f"{domain}.{service}")
+        return DispatchResult(status=200, data={
+            "version": 1, "isComplete": True, "count": len(services), "services": sorted(services),
+        }, touched_entities=[])
+
     state_match = re.fullmatch(r"/api/states/(.+)", path)
     if method == "GET" and state_match:
         entity_id = state_match.group(1)
@@ -124,7 +147,10 @@ async def dispatch(
             return DispatchResult(status=404, data={"message": "Entity not found"}, touched_entities=[])
         state = hass.states.get(entity_id)
         if state:
-            return DispatchResult(status=200, data=access.state(state) if access else state.as_dict(), touched_entities=[entity_id])
+            await async_prepare_sensor_display(hass, [entity_id])
+            data = access.state(state) if access else dict(state.as_dict())
+            data["attributes"] = sensor_display_attributes(hass, entity_id, data.get("attributes", {}))
+            return DispatchResult(status=200, data=data, touched_entities=[entity_id])
         return DispatchResult(status=404, data={"message": f"Entity not found: {entity_id}"}, touched_entities=[])
 
     service_match = re.fullmatch(r"/api/services/([^/]+)/([^/]+)", path)

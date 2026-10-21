@@ -1,7 +1,8 @@
 """常量定义 - 不引入任何第三方依赖，供 config_flow 安全导入."""
 
 DOMAIN = "seenzus_bridge"
-BRIDGE_VERSION = "0.2.3"
+# Keep in sync with manifest.json; presence and pairing tests guard this contract.
+BRIDGE_VERSION = "0.2.14"
 
 # 产品显示名（Python 侧唯一来源：config_flow / sensor / quick_pair 都引用这里）。
 # 注意：manifest.json、strings.json、translations 因 HA 翻译机制无法引用 Python
@@ -13,10 +14,11 @@ CONF_MQTT_HOST      = "mqtt_host"
 CONF_MQTT_PORT      = "mqtt_port"
 CONF_MQTT_USERNAME  = "mqtt_username"
 CONF_MQTT_PASSWORD  = "mqtt_password"
-# 传输方式（issue #14）：web-pair 兑换响应下发，manual 流程不暴露 UI。
-# 旧 entry 无此键 → 按 DEFAULT_MQTT_SCHEME 走裸 TCP 现状路径。
+# Transport is explicit in manual setup and pairing responses. Legacy entries
+# without a scheme must be reconfigured; remote brokers always require TLS.
 CONF_MQTT_SCHEME = "mqtt_scheme"
 CONF_MQTT_WS_PATH = "mqtt_ws_path"
+CONF_MQTT_MAX_PACKET_SIZE_KIB = "mqtt_max_packet_size_kib"
 CONF_TOPIC_ROOT = "topic_root"
 CONF_BRIDGE_ID = "bridge_id"
 CONF_SOURCE_ID = "source_id"
@@ -61,14 +63,16 @@ MQTT_SCHEME_WSS = "wss"
 VALID_MQTT_SCHEMES = {MQTT_SCHEME_TCP, MQTT_SCHEME_TCP_TLS, MQTT_SCHEME_WS, MQTT_SCHEME_WSS}
 
 # 默认值
-DEFAULT_MQTT_PORT      = 1883
-DEFAULT_MQTT_SCHEME = MQTT_SCHEME_TCP
+DEFAULT_MQTT_PORT      = 8883
+DEFAULT_MQTT_SCHEME = MQTT_SCHEME_TCP_TLS
 DEFAULT_MQTT_WS_PATH = "/mqtt"
+DEFAULT_MQTT_MAX_PACKET_SIZE_KIB = 1024
+MAX_MQTT_PACKET_SIZE_KIB = 262144
 # 各 scheme 的惯例默认端口。后端契约总是显式下发 port，这里仅作缺省兜底：
 # wss/mqtts 响应缺 port 时若一律回退 1883，会拿 TLS 去连明文 TCP 端口。
 DEFAULT_PORT_BY_MQTT_SCHEME = {
-    MQTT_SCHEME_TCP: DEFAULT_MQTT_PORT,
-    MQTT_SCHEME_TCP_TLS: 8883,
+    MQTT_SCHEME_TCP: 1883,
+    MQTT_SCHEME_TCP_TLS: DEFAULT_MQTT_PORT,
     MQTT_SCHEME_WS: 80,
     MQTT_SCHEME_WSS: 443,
 }

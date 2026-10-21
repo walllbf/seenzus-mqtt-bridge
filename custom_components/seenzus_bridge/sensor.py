@@ -106,6 +106,10 @@ class BridgeStatusSensor(_BridgeBaseSensor):
         conf = {**self._entry.data, **self._entry.options}
         # 与连接层同源的生效传输方式（issue #14 联调排查：一眼确认 wss/裸 TCP）。
         transport_scheme, transport_ws_path = c.resolve_transport()
+        try:
+            max_packet_size = c.mqtt_max_packet_size
+        except ValueError:
+            max_packet_size = None
         return {
             "raw_status":       c.status,
             "last_request":     c.last_req.isoformat() if c.last_req else None,
@@ -113,6 +117,7 @@ class BridgeStatusSensor(_BridgeBaseSensor):
             "last_cleanup_diagnostic": c.last_cleanup_diagnostic,
             "mqtt_transport":   transport_scheme,
             "mqtt_ws_path":     transport_ws_path,
+            "mqtt_max_packet_size": max_packet_size,
             "topic_root":       conf.get(CONF_TOPIC_ROOT, DEFAULT_TOPIC_ROOT),
             # Same sanitized id the bridge actually uses in MQTT topics.
             "bridge_id":        build_bridge_id(str(conf.get(CONF_BRIDGE_ID, "")), self._entry.entry_id),

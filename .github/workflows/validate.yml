@@ -60,12 +60,36 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
           cache-dependency-path: requirements_contract.txt
-      - name: Install exact Core and contract dependencies
+      - name: Install exact Core and bridge dependencies under runtime constraints
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements_contract.txt
           read -r -a test_requirements <<< "$TEST_REQUIREMENTS"
           python -m pip install "$CORE_REQUIREMENT" "${test_requirements[@]}"
+          python - <<'PY'
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
+          import homeassistant
+
+          manifest = json.loads(Path("custom_components/seenzus_bridge/manifest.json").read_text(encoding="utf-8"))
+          constraints = Path(homeassistant.__file__).with_name("package_constraints.txt")
+          subprocess.run([
+              sys.executable, "-m", "pip", "install", "--constraint", str(constraints),
+              "-r", "requirements_contract.txt", *manifest["requirements"],
+          ], check=True)
+          PY
+      - name: Repair an already-installed incompatible MQTT pair with HA's installer
+        run: |
+          set -o pipefail
+          python -m venv --system-site-packages .venv-test/mqtt-upgrade
+          source .venv-test/mqtt-upgrade/bin/activate
+          # Deliberately reproduce a pair accepted by both manifest ranges.
+          # uv needs its executable inside this venv; retain Core's uv version.
+          uv_requirement=$(python -c 'from importlib.metadata import version; print("uv==" + version("uv"))')
+          python -m pip install --ignore-installed --no-deps "$uv_requirement" aiomqtt==2.5.1 paho-mqtt==1.6.1
+          mkdir -p compatibility-results
+          python tools/mqtt_upgrade_smoke.py | tee compatibility-results/mqtt-upgrade.txt
       - name: Prove the exact Core version and run publisher contracts
         run: |
           mkdir -p compatibility-results

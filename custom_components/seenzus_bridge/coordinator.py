@@ -14,7 +14,7 @@ import json
 import logging
 import uuid
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import islice
 from typing import Any
 
@@ -23,11 +23,15 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_STATE_CHANGED
 from homeassistant.core import CoreState, Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.recorder import DATA_INSTANCE as RECORDER_INSTANCE
 
 from .bridge_protocol import (
     BridgeTopics,
+    MINIMAL_OFFLINE_PRESENCE_PAYLOAD,
     build_bridge_id,
+    build_mqtt_client_id,
     build_topics,
+    mqtt_publish_packet_size as _mqtt_publish_packet_size,
     retained_topics_to_clear_on_reload,
 )
 from .catalog import build_device_catalog_payload, utc_now_iso
@@ -60,14 +64,12 @@ from .const import (
     DEFAULT_ENABLE_STATE_EVENTS,
     DEFAULT_ENABLE_TEMPLATE_API,
     DEFAULT_EXPOSE_FULL_CONFIG,
-    DEFAULT_MQTT_PORT,
-    DEFAULT_MQTT_SCHEME,
+    DEFAULT_PORT_BY_MQTT_SCHEME,
     DEFAULT_MQTT_WS_PATH,
     DEFAULT_TOPIC_ROOT,
     MQTT_SCHEME_TCP_TLS,
     MQTT_SCHEME_WS,
     MQTT_SCHEME_WSS,
-    VALID_MQTT_SCHEMES,
     PAIRING_MODE_MANUAL,
     PAIRING_MODE_SEAMLESS,
     PAIRING_STATUS_BOUND,
@@ -81,28 +83,67 @@ from .const import (
 )
 from .entity_filters import looks_like_internal_bridge_entity_id, name_has_model_marker
 from .ha_dispatcher import DispatchPolicy, dispatch
+from .mqtt_io_guard import websocket_connection
+from .mqtt_settings import mqtt_packet_size_limit, validate_mqtt_presence_budget
+from .mqtt_transport import MqttTransportError, validate_mqtt_transport
 from .operation_store import PersistentOperationStore
 from .device_access import DeviceAccess
+from .sensor_display import async_prepare_sensor_display, sensor_display_attributes, supports_entity_display
 
 _LOGGER = logging.getLogger(__name__)
 
 PRESENCE_HEARTBEAT_INTERVAL_SECONDS = 30
+CATALOG_REFRESH_DELAY_SECONDS = 1.5
 MAX_INFLIGHT_COMMANDS = 8
 # 全量快照分批发布并短暂让出事件循环，避免短时间内把上千条 QoS 0 消息压进
 # paho 队列，也给心跳、命令和连接维护任务稳定的调度机会。
 SNAPSHOT_BATCH_SIZE = 50
 SNAPSHOT_BATCH_PAUSE_SECONDS = 0.05
+SNAPSHOT_STREAM_TIMEOUT_SECONDS = 120
+MAX_SNAPSHOT_ENTITIES = 100_000
 # 断线期间 HA 状态照常变化，_pending_state_events 按 entity 合并但不设上限时会
 # 无限增长；重连后 _state_worker 若整包以 QoS 1 回放，会长期占用带宽和在途
 # 窗口，拖慢刚恢复的连接。超出上限丢最旧的一条——按 entity 合并后，只有每个
 # entity 的最新状态有价值。
 MAX_PENDING_STATE_EVENTS = 2000
+# Recorder catch-up is deliberately bounded independently of recorder retention.
+# A reconnect must not turn a busy HA database into an unbounded MQTT flood.
+HISTORY_REPLAY_WINDOW = timedelta(minutes=30)
+MAX_HISTORY_REPLAY_EVENTS_PER_ENTITY = 100
+MAX_HISTORY_REPLAY_EVENTS = 2000
 PENDING_DROP_LOG_INTERVAL = 500
 SHUTDOWN_CLEANUP_TIMEOUT_SECONDS = 3.0
 RELOAD_CLEANUP_TIMEOUT_SECONDS = 10.0
 
 
 _TLS_CONTEXT_CACHE = None
+
+
+class _MqttPublishFailure(Exception):
+    """A transport failure that cannot be reported over the same MQTT socket."""
+
+
+class _MqttConfigurationError(Exception):
+    """Configuration must be corrected before opening another connection."""
+
+
+class _MqttPacketTooLarge(_MqttPublishFailure):
+    """A locally rejected publication; the MQTT connection remains usable."""
+
+    def __init__(self, packet_size: int, max_packet_size: int) -> None:
+        self.packet_size = packet_size
+        self.max_packet_size = max_packet_size
+        super().__init__(
+            f"mqtt_packet_too_large: packet={packet_size} limit={max_packet_size}"
+        )
+
+
+def _mqtt_json(value: Any) -> str:
+    """Keep JSON values intact without whitespace or ASCII escape expansion."""
+    encoded = json.dumps(value, default=str, ensure_ascii=False, separators=(",", ":"))
+    # Preserve even an unpaired surrogate as a JSON escape, as json.dumps'
+    # previous ensure_ascii=True default did; Paho encodes strings as UTF-8.
+    return encoded.encode("utf-8", errors="backslashreplace").decode("utf-8")
 
 
 def _client_tls_context():
@@ -129,15 +170,8 @@ def _client_tls_context():
 
 
 def _effective_transport(conf: dict) -> tuple[str, str | None]:
-    """归一后的生效传输方式 ``(scheme, ws_path)``；非 ws/wss 时 ws_path 为 None。
-
-    scheme 缺失 / 空 / 未知值一律归一为裸 TCP "mqtt"。连接层
-    （_transport_connect_kwargs）与诊断展示（presence / 状态传感器）共用这
-    一份解析，保证「桥实际怎么连」和「界面显示怎么连」永远同源。
-    """
-    scheme = str(conf.get(CONF_MQTT_SCHEME, "") or "").strip().lower()
-    if scheme not in VALID_MQTT_SCHEMES:
-        scheme = DEFAULT_MQTT_SCHEME
+    """Resolve a validated transport; never downgrade a missing/unknown scheme."""
+    scheme = validate_mqtt_transport(conf)
     if scheme in (MQTT_SCHEME_WS, MQTT_SCHEME_WSS):
         ws_path = str(conf.get(CONF_MQTT_WS_PATH, "") or "").strip() or DEFAULT_MQTT_WS_PATH
         return scheme, ws_path
@@ -145,13 +179,7 @@ def _effective_transport(conf: dict) -> tuple[str, str | None]:
 
 
 def _transport_connect_kwargs(conf: dict) -> dict[str, Any]:
-    """Extra aiomqtt.Client kwargs derived from the entry's transport scheme.
-
-    裸 TCP（scheme 缺失 / "mqtt" / 任何未知值）返回空 dict——连接调用与
-    wss 支持落地前完全一致，绝不影响旧 entry。ws/wss 走 paho 原生
-    websockets transport（aiomqtt 的 ``websocket_path`` 即 paho
-    ``ws_set_options`` 的握手路径）；wss/mqtts 附加 TLS 上下文。
-    """
+    """Enforce remote TLS and use verified system CAs for mqtts/wss."""
     scheme, ws_path = _effective_transport(conf)
     kwargs: dict[str, Any] = {}
     if ws_path is not None:
@@ -160,6 +188,22 @@ def _transport_connect_kwargs(conf: dict) -> dict[str, Any]:
     if scheme in (MQTT_SCHEME_WSS, MQTT_SCHEME_TCP_TLS):
         kwargs["tls_context"] = _client_tls_context()
     return kwargs
+
+
+def _identity_json_default(value: object) -> object:
+    """Canonicalize values the way HA's recorder serializes them to JSON.
+
+    The recorder stores attributes as JSON (``datetime`` becomes an ISO
+    string, sets become lists), so history replay sees already-canonical
+    values while live events hold the original objects. Serializing both
+    sides through this hook keeps one ``eventId`` per HA fact.
+    """
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, (set, frozenset)):
+        # Sorted for cross-restart stability (set order is hash-randomized).
+        return sorted(value, key=str)
+    return str(value)
 
 
 class BridgeCoordinator:
@@ -202,6 +246,10 @@ class BridgeCoordinator:
         self._listeners: list[Callable[[], None]] = []
         self._task: asyncio.Task | None = None
         self._state_unsub = None
+        self._display_unsubs: list[Callable[[], None]] = []
+        self._device_registry_unsub: Callable[[], None] | None = None
+        self._catalog_refresh_task: asyncio.Task | None = None
+        self._catalog_refresh_pending = False
         self._ha_started_unsub = None
         self._mqtt_client = None
         self._aiomqtt = None
@@ -211,12 +259,18 @@ class BridgeCoordinator:
         self._ha_started_event = asyncio.Event()
         self._initial_snapshot_attempted = False
         self._initial_snapshot_task: asyncio.Task | None = None
-        self._pending_state_events: dict[str, Event] = {}
+        # Current-state domains coalesce under their entity_id key. Stateless
+        # event/button occurrences use unique keys so repeated presses/rings survive.
+        self._pending_state_events: dict[object, Event] = {}
         self._dropped_state_events = 0
         self._next_drop_log_at = 1
         self._state_worker_task: asyncio.Task | None = None
+        self._history_replay_task: asyncio.Task | None = None
         self._presence_heartbeat_task: asyncio.Task | None = None
         self._command_tasks: set[asyncio.Task] = set()
+        self._snapshot_request: tuple[Any, str] | None = None
+        self._snapshot_replies: dict[str, tuple[dict, dict]] = {}
+        self._snapshot_client: Any = None
         self._operation_store = PersistentOperationStore(hass, entry.entry_id)
 
     def register_update_listener(self, cb: Callable[[], None]) -> None:
@@ -228,6 +282,11 @@ class BridgeCoordinator:
 
     def _conf(self) -> dict[str, Any]:
         return {**self._entry.data, **self._entry.options}
+
+    @property
+    def mqtt_max_packet_size(self) -> int:
+        """Effective local byte budget; MQTT 3.1.1 does not negotiate it."""
+        return mqtt_packet_size_limit(self._conf())
 
     def _set_pairing_step(self, step: str, *, api_base: str | None = None) -> None:
         self.pairing_last_step = step
@@ -243,7 +302,11 @@ class BridgeCoordinator:
         供诊断展示（presence / 状态传感器）使用，真机上一眼可确认桥走的是
         wss 还是裸 TCP（issue #14 联调排查）。
         """
-        return _effective_transport(self._conf())
+        try:
+            return _effective_transport(self._conf())
+        except MqttTransportError:
+            # Diagnostics must remain readable while an old entry is blocked.
+            return "invalid", None
 
     def _resolve_config_source(self) -> str:
         conf = self._conf()
@@ -344,6 +407,7 @@ class BridgeCoordinator:
             self.pairing_status = PAIRING_STATUS_PAIRED
 
         self._aiomqtt = await self._async_import_aiomqtt()
+        self._subscribe_device_registry()
 
         conf = self._conf()
         events_enabled = bool(conf.get(CONF_ENABLE_STATE_EVENTS, DEFAULT_ENABLE_STATE_EVENTS))
@@ -377,9 +441,78 @@ class BridgeCoordinator:
             self._subscribe_state_events()
 
     @callback
+    def _subscribe_device_registry(self) -> None:
+        # Catalog metadata is independent of the optional live-state stream.
+        if self._device_registry_unsub is None:
+            self._device_registry_unsub = self.hass.bus.async_listen(
+                "device_registry_updated", self._on_device_registry_changed
+            )
+
+    @callback
+    def _on_device_registry_changed(self, event: Event) -> None:
+        if event.data.get("action") != "update" or not set(event.data.get("changes", {})).intersection({
+            "name", "name_by_user", "manufacturer", "model", "model_id", "area_id", "via_device_id",
+        }):
+            return
+        self._catalog_refresh_pending = True
+        self._start_catalog_refresh_if_ready()
+
+    def _start_catalog_refresh_if_ready(self) -> None:
+        if not self._catalog_refresh_pending or self._mqtt_client is None or not self.mqtt_connected:
+            return
+        if self._catalog_refresh_task is None or self._catalog_refresh_task.done():
+            self._catalog_refresh_task = self._entry.async_create_task(
+                self.hass, self._refresh_catalog_metadata(), "seenzus catalog metadata refresh"
+            )
+
+    async def _refresh_catalog_metadata(self) -> None:
+        try:
+            while self._catalog_refresh_pending:
+                # One entry-owned task batches edits and preserves changes arriving during I/O.
+                await asyncio.sleep(CATALOG_REFRESH_DELAY_SECONDS)
+                client = self._mqtt_client
+                if client is None or not self.mqtt_connected:
+                    return
+                self._catalog_refresh_pending = False
+                try:
+                    await self._publish_device_catalog(client, source="registry_update")
+                except Exception as err:  # noqa: BLE001
+                    # Reconnect and periodic catalog requests remain the recovery path.
+                    _LOGGER.warning("Device metadata catalog refresh failed: %s", err)
+        finally:
+            self._catalog_refresh_task = None
+
+    async def _stop_catalog_refresh(self) -> None:
+        task = self._catalog_refresh_task
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self._catalog_refresh_task = None
+        self._catalog_refresh_pending = False
+
+    @callback
     def _subscribe_state_events(self) -> None:
         if self._state_unsub is None:
             self._state_unsub = self.hass.bus.async_listen(EVENT_STATE_CHANGED, self._on_state_changed)
+        if not self._display_unsubs:
+            self._display_unsubs = [self.hass.bus.async_listen(name, self._on_display_metadata_changed)
+                                    for name in ("entity_registry_updated", "core_config_updated")]
+
+    @callback
+    def _on_display_metadata_changed(self, event: Event) -> None:
+        if event.event_type == "core_config_updated":
+            if "time_zone" not in event.data:
+                return
+        elif event.data.get("action") != "update" or not set(event.data.get("changes", {})).intersection({
+            "options", "translation_key", "platform", "device_class", "original_device_class", "unit_of_measurement", "name", "original_name", "has_entity_name",
+        }):
+            return
+        entity_id = event.data.get("entity_id")
+        states = [self.hass.states.get(entity_id)] if entity_id else self.hass.states.async_all()
+        for state in states:
+            if state is not None and supports_entity_display(state.entity_id):
+                # Use the bounded/coalesced publisher, but never claim an HA state-change event.
+                self._on_state_changed(Event("seenzus_display_metadata_changed", {"new_state": state}))
 
     async def async_stop(self) -> None:
         """Stop the runtime without allowing external I/O to delay HA."""
@@ -414,6 +547,7 @@ class BridgeCoordinator:
         self._task = None
         self._initial_snapshot_task = None
         self._state_worker_task = None
+        self._history_replay_task = None
         self._presence_heartbeat_task = None
         self._command_tasks.clear()
         self._pending_state_events.clear()
@@ -432,12 +566,23 @@ class BridgeCoordinator:
         if self._state_unsub is not None:
             self._state_unsub()
             self._state_unsub = None
+        for unsubscribe in self._display_unsubs:
+            unsubscribe()
+        self._display_unsubs = []
+        if self._device_registry_unsub is not None:
+            self._device_registry_unsub()
+            self._device_registry_unsub = None
+        self._catalog_refresh_pending = False
+        if self._catalog_refresh_task is not None:
+            self._catalog_refresh_task.cancel()
 
     def _cancel_runtime_tasks(self) -> None:
         for task in (
             self._task,
             self._initial_snapshot_task,
             self._state_worker_task,
+            self._history_replay_task,
+            self._catalog_refresh_task,
             self._presence_heartbeat_task,
             *self._command_tasks,
         ):
@@ -458,6 +603,8 @@ class BridgeCoordinator:
             ("command cancellation", tuple(self._command_tasks)),
             ("initial snapshot cancellation", (self._initial_snapshot_task,)),
             ("state task cancellation", (self._state_worker_task,)),
+            ("history replay cancellation", (self._history_replay_task,)),
+            ("catalog refresh cancellation", (self._catalog_refresh_task,)),
             ("MQTT disconnect", (self._task,)),
             ("heartbeat cancellation", (self._presence_heartbeat_task,)),
         )
@@ -572,32 +719,59 @@ class BridgeCoordinator:
             aiomqtt = await self._async_import_aiomqtt()
             self._aiomqtt = aiomqtt
 
-        client_id = f"seenzus-bridge-{self._entry.entry_id}"
+        client_id = build_mqtt_client_id(self._entry.entry_id)
 
         while True:
+            retry_delay = 0
             try:
                 if not await self._connect_and_serve(aiomqtt, client_id):
                     _LOGGER.warning("MQTT host missing, retry in 10s")
-                    await asyncio.sleep(10)
-                    continue
-            except aiomqtt.MqttError as err:
-                await self._stop_presence_heartbeat()
+                    retry_delay = 10
+            except (_MqttConfigurationError, _MqttPacketTooLarge) as err:
+                # Reconnecting cannot repair invalid settings or a catalog
+                # exceeding the local budget. Options save/reload starts a new
+                # loop; keep the failure visible without flooding the broker.
+                self.err_count += 1
+                self._mark_mqtt_error(str(err))
+                self._fire()
+                _LOGGER.error("MQTT setup stopped: %s; correct connection settings and reload", err)
+                return
+            except (aiomqtt.MqttError, _MqttPublishFailure) as err:
                 self._mark_mqtt_error(str(err))
                 self._fire()
                 _LOGGER.error("MQTT disconnected: %s, retry in 5s", err)
-                await asyncio.sleep(5)
+                retry_delay = 5
             except asyncio.CancelledError:
                 raise
             except Exception as err:  # noqa: BLE001
-                await self._stop_presence_heartbeat()
                 self._mark_mqtt_error(str(err))
                 self._fire()
                 _LOGGER.exception("Fatal MQTT runtime error: %s", err)
                 raise
             finally:
+                self._mqtt_client = None
+                await self._stop_connection_commands()
+                await self._stop_history_replay()
+                await self._stop_catalog_refresh()
                 await self._stop_presence_heartbeat()
                 await self._stop_initial_snapshot()
-                self._mqtt_client = None
+            if retry_delay:
+                await asyncio.sleep(retry_delay)
+
+
+    async def _stop_connection_commands(self) -> None:
+        """Retire handlers holding the old client before reconnecting."""
+        tasks = tuple(self._command_tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await self._run_bounded_cleanup(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=SHUTDOWN_CLEANUP_TIMEOUT_SECONDS,
+                stage="disconnected command cancellation",
+                context="MQTT reconnect",
+            )
 
     async def _connect_and_serve(self, aiomqtt: Any, client_id: str) -> bool:
         """Resolve config, connect, announce, become ready, pump messages.
@@ -606,6 +780,10 @@ class BridgeCoordinator:
         shell can back off; connection errors propagate to the shell.
         """
         conf = self._conf()
+        try:
+            validate_mqtt_presence_budget(conf, self._entry.entry_id)
+        except ValueError as err:
+            raise _MqttConfigurationError(str(err)) from err
         self.pairing_mode = self._resolve_pairing_mode()
         self.config_source = self._resolve_config_source()
         self._sync_source_metadata()
@@ -619,7 +797,15 @@ class BridgeCoordinator:
             self._fire()
             return False
 
-        port = int(conf.get(CONF_MQTT_PORT, DEFAULT_MQTT_PORT))
+        try:
+            connect_kwargs = _transport_connect_kwargs(conf)
+        except MqttTransportError as err:
+            raise _MqttConfigurationError(
+                f"{err}: select mqtts/wss and the broker TLS port in Configure; "
+                "or pair again with a backend that supplies a secure endpoint"
+            ) from err
+        scheme, _ = _effective_transport(conf)
+        port = int(conf.get(CONF_MQTT_PORT, DEFAULT_PORT_BY_MQTT_SCHEME[scheme]))
         username = str(conf.get(CONF_MQTT_USERNAME, "")).strip() or None
         password = str(conf.get(CONF_MQTT_PASSWORD, "")).strip() or None
         if self.pairing_mode == PAIRING_MODE_SEAMLESS:
@@ -630,14 +816,18 @@ class BridgeCoordinator:
 
         # keepalive 保持 aiomqtt 默认 60s，别调大：Cloudflare 对空闲 ~100s 的
         # WebSocket 会掐连接，60s 心跳正好压在窗口内（issue #14）。
-        async with aiomqtt.Client(
+        mqtt_client = aiomqtt.Client(
             hostname=host,
             port=port,
             username=username,
             password=password,
             identifier=client_id,
-            **_transport_connect_kwargs(conf),
-        ) as client:
+            **connect_kwargs,
+        )
+        connection = mqtt_client
+        if _effective_transport(conf)[0] in (MQTT_SCHEME_WS, MQTT_SCHEME_WSS):
+            connection = websocket_connection(mqtt_client)
+        async with connection as client:
             if self._topics is None:
                 self._topics = self._resolve_topics()
                 self._command_prefix = self._topics.command_sub[:-2]
@@ -648,10 +838,6 @@ class BridgeCoordinator:
             # connection contract below (presence + retained catalog) is ready.
             # Otherwise a large pending-state backlog can race bootstrap and
             # starve or disconnect it before the catalog exists.
-            await self._publish_presence("online", client=client)
-            # Catalog + state snapshot both need HA fully started (entity registry
-            # populated); defer on the started event (no sleep-poll).
-            await self._ha_started_event.wait()
             # Device CATALOG: re-assert on EVERY (re)connect, mirroring presence. The
             # catalog is the durable topology truth every consumer depends on, yet the
             # broker's retained store can be wiped on broker restart — publishing it once
@@ -661,8 +847,22 @@ class BridgeCoordinator:
             # best-effort full state snapshot: a large HA can spend minutes in that loop,
             # and a disconnect used to restart it from zero forever without ever publishing
             # the catalog.
-            catalog_source = "startup_snapshot" if not self._initial_snapshot_attempted else "reconnect"
-            await self._publish_device_catalog(client, source=catalog_source)
+            try:
+                await self._publish_presence("online", client=client, required=True)
+                # Catalog + state snapshot both need HA fully started (entity
+                # registry populated); defer on the started event (no sleep-poll).
+                await self._ha_started_event.wait()
+                catalog_source = "startup_snapshot" if not self._initial_snapshot_attempted else "reconnect"
+                await self._publish_device_catalog(client, source=catalog_source)
+            except _MqttPacketTooLarge as err:
+                self._mark_mqtt_error(str(err))
+                # Retract online from this or an earlier connection. Retry
+                # diagnostics may make even initial presence exceed the budget;
+                # that must not bypass the outstanding offline announcement.
+                # A failed retraction is a transport failure: reconnect and
+                # retry it instead of leaving the retained online state behind.
+                await self._publish_presence("offline", client=client, required=True)
+                raise
             await self._try_pairing()
 
             self._mqtt_client = client
@@ -674,8 +874,13 @@ class BridgeCoordinator:
                 self.pairing_status = PAIRING_STATUS_BRIDGE_READY
                 self.pairing_last_error = None
             self._fire()
+            # Announce readiness before starting the snapshot or command pump;
+            # consumers must negotiate capabilities without waiting for a heartbeat.
+            await self._publish_presence("online", client=client)
             self._start_presence_heartbeat()
             self._start_state_worker_if_ready()
+            self._start_catalog_refresh_if_ready()
+            self._start_history_replay(client)
             self._start_initial_snapshot(client)
             _LOGGER.info(
                 "MQTT connected %s:%s, v2 command topic: %s",
@@ -721,6 +926,35 @@ class BridgeCoordinator:
     async def _stop_initial_snapshot(self) -> None:
         task = self._initial_snapshot_task
         self._initial_snapshot_task = None
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    def _start_history_replay(self, client: Any) -> None:
+        """Backfill a bounded recorder window after startup or reconnect.
+
+        The exact start of a network partition cannot be observed reliably,
+        and a process restart has no in-memory boundary at all. Replaying the
+        whole bounded window on every connection covers both cases; stable IDs
+        make overlap with already delivered live events safe.
+        """
+        if not bool(self._conf().get(CONF_ENABLE_STATE_EVENTS, DEFAULT_ENABLE_STATE_EVENTS)):
+            return
+        if self._history_replay_task is not None and not self._history_replay_task.done():
+            return
+        end_time = datetime.now(timezone.utc)
+        start_time = end_time - HISTORY_REPLAY_WINDOW
+        self._history_replay_task = self._entry.async_create_task(
+            self.hass,
+            self._run_history_replay(start_time, end_time, client=client),
+            "seenzus recorder history replay",
+        )
+
+    async def _stop_history_replay(self) -> None:
+        task = self._history_replay_task
+        self._history_replay_task = None
         if task is None:
             return
         if not task.done():
@@ -808,7 +1042,29 @@ class BridgeCoordinator:
         self.last_req = datetime.now(timezone.utc)
         self._fire()
 
+        snapshot_request = method.upper() == "GET" and path in {
+            "/api/states", "/api/seenzus/states/snapshot",
+        }
+        if snapshot_request:
+            if self._snapshot_request:
+                if self._snapshot_request != (client, effective_msg_id):
+                    await self._publish_result(client, effective_msg_id, success=False, status=409, error="snapshot_in_progress")
+                return
+            if (self._snapshot_client is not client
+                    or getattr(self, "_snapshot_scope_fingerprint", None) != scope_fingerprint):
+                self._snapshot_client = client
+                self._snapshot_scope_fingerprint = scope_fingerprint
+                self._snapshot_replies.clear()
+            if path == "/api/seenzus/states/snapshot" and effective_msg_id in self._snapshot_replies:
+                for reply in self._snapshot_replies[effective_msg_id]:
+                    await self._publish_result(client, effective_msg_id, **reply)
+                return
+            self._snapshot_request = (client, effective_msg_id)
+
         try:
+            if method.upper() == "GET" and path == "/api/seenzus/states/snapshot":
+                await self._publish_snapshot_stream(client, effective_msg_id)
+                return
             if method.upper() == "GET" and path.rstrip("/") in {
                 "/api/seenzus/device-catalog",
                 "/api/seenzus/devices",
@@ -817,13 +1073,14 @@ class BridgeCoordinator:
                     source="command",
                     correlation_id=effective_msg_id,
                 )
-                await self._publish_result(
+                if not await self._publish_result(
                     client,
                     effective_msg_id,
                     success=True,
                     status=200,
                     data=catalog_payload,
-                )
+                ):
+                    return
                 # Reuse the already-built payload for the retained catalog topic
                 # instead of rebuilding (which would mint a fresh eventId/ts).
                 # Acceptable side effect: result.data and the retained catalog now
@@ -871,17 +1128,87 @@ class BridgeCoordinator:
                 if not await self._operation_store.complete(operation_key, fingerprint, result_payload):
                     await self._publish_result(client, effective_msg_id, success=False, status=409, error="control_outcome_unknown")
                     return
-            await self._publish_result(client, effective_msg_id, **result_payload)
+            if not await self._publish_result(client, effective_msg_id, **result_payload):
+                return
             if method.upper() == "GET" and path.rstrip("/") == "/api/states":
                 await self._publish_all_states(client, source="full_snapshot", correlation_id=effective_msg_id)
             else:
                 await self._publish_states_for_entities(client, result.touched_entities, correlation_id=effective_msg_id)
+        except _MqttPublishFailure as err:
+            self.err_count += 1
+            self.last_error = f"[{effective_msg_id}] state_publish_failed:{err}"
+            self._fire()
+            _LOGGER.warning("[%s] Command state publish failed: %s", effective_msg_id, err)
         except Exception as err:  # noqa: BLE001
             self.err_count += 1
             self.last_error = f"[{effective_msg_id}] {err}"
             self._fire()
             _LOGGER.exception("[%s] Command handling error: %s", effective_msg_id, err)
             await self._publish_result(client, effective_msg_id, success=False, status=500, error=str(err))
+        finally:
+            if snapshot_request:
+                self._snapshot_request = None
+
+    async def _publish_snapshot_stream(self, client: Any, msg_id: str) -> None:
+        # HA State objects are immutable. Capture once, including the original
+        # attributes/timestamps; do not re-read a changing entity during the stream.
+        states = [state for state in self.hass.states.async_all()
+                  if state.entity_id and not self._is_excluded_entity(state.entity_id)
+                  and not self._is_model_marked_standalone_entity(state)]
+        scope_fingerprint = DeviceAccess(self.hass, self._conf()).fingerprint()
+        if len(states) > MAX_SNAPSHOT_ENTITIES:
+            await self._publish_result(client, msg_id, success=False, status=413, error="snapshot_scope_too_large")
+            return
+        entity_ids = sorted(state.entity_id for state in states)
+        scope = {
+            "version": 1, "scope": "publishable_states", "expectedCount": len(states),
+            "entitiesSha256": hashlib.sha256("".join(f"{entity_id}\n" for entity_id in entity_ids).encode("utf-8")).hexdigest(),
+        }
+        accepted = {"success": True, "status": 202, "data": {**scope, "phase": "accepted"}}
+        if not await self._publish_result(client, msg_id, **accepted, require_full=True):
+            return
+        sent = oversized = 0
+        outcome, status = "complete", 200
+        try:
+            async with asyncio.timeout(SNAPSHOT_STREAM_TIMEOUT_SECONDS):
+                for state in states:
+                    if scope_fingerprint != DeviceAccess(self.hass, self._conf()).fingerprint():
+                        raise PermissionError("device_grant_changed")
+                    try:
+                        await self._publish_state_object(
+                            client, state, source="full_snapshot", correlation_id=msg_id,
+                            qos=0, snapshot_version=1,
+                        )
+                    except _MqttPacketTooLarge as err:
+                        self._record_oversized_state(state.entity_id, "full_snapshot", err)
+                        oversized += 1
+                    else:
+                        sent += 1
+                    if (sent + oversized) % SNAPSHOT_BATCH_SIZE == 0:
+                        await asyncio.sleep(SNAPSHOT_BATCH_PAUSE_SECONDS)
+            if oversized:
+                outcome, status = "partial", 413
+        except asyncio.CancelledError:
+            # Disconnection/unload invalidates the request. Never manufacture a
+            # completion or keep the old connection alive to publish a receipt.
+            raise
+        except PermissionError:
+            outcome, status = "failed", 409
+        except Exception:  # noqa: BLE001
+            outcome, status = "failed", 503
+            self.err_count += 1
+            self.last_error = f"snapshot_failed:{msg_id}"
+            self._fire()
+        finished = {"success": outcome == "complete", "status": status, "data": {
+            **scope, "phase": "finished", "outcome": outcome, "sentCount": sent,
+            "omittedCount": len(states) - sent, "oversizedCount": oversized,
+        }}
+        self._snapshot_replies[msg_id] = (accepted, finished)
+        if len(self._snapshot_replies) > 64:
+            del self._snapshot_replies[next(iter(self._snapshot_replies))]
+        await self._publish_result(client, msg_id, **finished)
+        _LOGGER.info("Snapshot stream %s: outcome=%s expected=%s sent=%s oversized=%s",
+                     msg_id, outcome, len(states), sent, oversized)
 
     async def _publish(
         self,
@@ -901,11 +1228,18 @@ class BridgeCoordinator:
         blocking.  Burst control belongs at the producers (snapshot batching and
         the bounded, coalescing state backlog), not around this acknowledgement.
         """
-        await client.publish(topic, payload, qos=qos, retain=retain)
+        packet_size = _mqtt_publish_packet_size(topic, payload, qos)
+        max_packet_size = self.mqtt_max_packet_size
+        if packet_size > max_packet_size:
+            raise _MqttPacketTooLarge(packet_size, max_packet_size)
+        try:
+            await client.publish(topic, payload, qos=qos, retain=retain)
+        except Exception as err:  # noqa: BLE001
+            raise _MqttPublishFailure(str(err)) from err
 
-    async def _publish_result(self, client: Any, msg_id: str, *, success: bool, status: int, data: Any = None, error: str | None = None) -> None:
+    async def _publish_result(self, client: Any, msg_id: str, *, success: bool, status: int, data: Any = None, error: str | None = None, require_full: bool = False) -> bool:
         if self._topics is None:
-            return
+            return False
         payload: dict[str, Any] = {
             "msgId": msg_id,
             "bridgeId": self._topics.bridge_id,
@@ -918,13 +1252,28 @@ class BridgeCoordinator:
         else:
             payload["data"] = data
 
+        topic = f"{self._topics.result_prefix}/{msg_id}"
+        full_result = True
         try:
-            await self._publish(
-                client,
-                f"{self._topics.result_prefix}/{msg_id}",
-                json.dumps(payload, default=str),
-                qos=1,
-            )
+            try:
+                await self._publish(client, topic, _mqtt_json(payload), qos=1)
+            except _MqttPacketTooLarge as err:
+                full_result = False
+                # One explicit failure result preserves the existing RPC wire
+                # contract. Splitting results would make old consumers accept
+                # the first fragment and silently discard the rest.
+                payload.pop("data", None)
+                payload.update(
+                    success=False,
+                    status=413,
+                    error="response_too_large",
+                    packetSize=err.packet_size,
+                    maxPacketSize=err.max_packet_size,
+                )
+                await self._publish(client, topic, _mqtt_json(payload), qos=1)
+                self.err_count += 1
+                self.last_error = f"response_too_large: packet={err.packet_size} limit={err.max_packet_size}"
+                _LOGGER.warning("[%s] %s; sent size error and kept MQTT connected", msg_id, self.last_error)
         except Exception as err:  # noqa: BLE001
             # Count the failure here (once) instead of letting it escape the
             # fire-and-forget command task as an unhandled exception.
@@ -932,9 +1281,10 @@ class BridgeCoordinator:
             self.last_error = f"result_publish_failed:{err}"
             self._fire()
             _LOGGER.exception("[%s] Result publish failed: %s", msg_id, err)
-            return
+            return False
         self.result_count += 1
         self._fire()
+        return full_result or not require_full
 
     async def _publish_states_for_entities(self, client: Any, entity_ids: list[str], *, correlation_id: str | None = None) -> None:
         dedup = list(dict.fromkeys(entity_ids))
@@ -945,19 +1295,38 @@ class BridgeCoordinator:
         snapshot_qos = 0 if source in {"startup_snapshot", "full_snapshot"} else 1
         states = self.hass.states.async_all()
         published = 0
+        skipped = 0
         for state in states:
             entity_id = getattr(state, "entity_id", "")
             if not entity_id or self._is_excluded_entity(entity_id):
                 continue
             if self._is_model_marked_standalone_entity(state):
                 continue
-            await self._publish_state_for_entity(
-                client, entity_id, source=source, correlation_id=correlation_id, qos=snapshot_qos
-            )
-            published += 1
-            if published % SNAPSHOT_BATCH_SIZE == 0:
+            try:
+                await self._publish_state_for_entity(
+                    client, entity_id, source=source, correlation_id=correlation_id, qos=snapshot_qos
+                )
+            except _MqttPacketTooLarge as err:
+                self._record_oversized_state(entity_id, source, err)
+                skipped += 1
+            else:
+                published += 1
+            # Rejected packets never await network I/O. Count attempts so a
+            # batch of oversized entities still yields to live work/keepalive.
+            if (published + skipped) % SNAPSHOT_BATCH_SIZE == 0:
                 await asyncio.sleep(SNAPSHOT_BATCH_PAUSE_SECONDS)
-        _LOGGER.info("Published full HA state snapshot: %s entities", published)
+        _LOGGER.info(
+            "Published HA state snapshot: %s entities; skipped %s oversized entities",
+            published, skipped,
+        )
+
+    def _record_oversized_state(self, entity_id: str, source: str, error: _MqttPacketTooLarge) -> None:
+        """Expose the missing state while keeping the rest of the batch usable."""
+        self.err_count += 1
+        self.last_error = f"state_publish_failed:{source}:{entity_id}:{error}"
+        self._record_dropped_state_events(1, "MQTT state packet size limit")
+        self._fire()
+        _LOGGER.warning("Skipped oversized state: %s", self.last_error)
 
     async def _publish_device_catalog(self, client: Any, *, source: str, correlation_id: str | None = None) -> None:
         if self._topics is None:
@@ -971,7 +1340,7 @@ class BridgeCoordinator:
         await self._publish(
             client,
             self._topics.catalog_topic,
-            json.dumps(payload, default=str),
+            _mqtt_json(payload),
             qos=0 if source == "startup_snapshot" else 1,
             retain=True,
         )
@@ -993,6 +1362,15 @@ class BridgeCoordinator:
             access=DeviceAccess(self.hass, self._conf()),
         )
 
+    @staticmethod
+    def _state_datetime(state_obj: Any, attribute: str) -> datetime | None:
+        value = getattr(state_obj, attribute, None)
+        if not isinstance(value, datetime):
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
     def _build_state_payload(
         self,
         entity_id: str,
@@ -1000,17 +1378,56 @@ class BridgeCoordinator:
         *,
         source: str,
         correlation_id: str | None = None,
+        observed_at: datetime | None = None,
     ) -> dict[str, Any]:
+        # last_updated includes attribute-only changes; snapshots and live events
+        # therefore retain HA's observation clock instead of bridge publish time.
+        observed_at = (
+            observed_at
+            or self._state_datetime(state_obj, "last_updated")
+            or datetime.now(timezone.utc)
+        )
+        observed_at = observed_at.astimezone(timezone.utc)
+        last_updated = self._state_datetime(state_obj, "last_updated") or observed_at
+        last_changed = self._state_datetime(state_obj, "last_changed") or last_updated
+        original_attributes = dict(state_obj.attributes)
+        published_attributes = sensor_display_attributes(
+            self.hass, entity_id,
+            DeviceAccess(self.hass, self._conf()).attributes(original_attributes),
+        )
+        # Recorder replay is a retry of the original HA state fact. Other
+        # sources (command/snapshot/display) remain distinct evidence so they
+        # cannot consume a live event's identity before activity derivation.
+        # Include the original HA attributes so two attribute-only updates stay
+        # distinct even if the upstream clock has insufficient resolution.
+        identity_source = "ha_state_changed" if source == "history_replay" else source
+        identity = json.dumps(
+            [
+                self._topics.bridge_id,
+                identity_source,
+                correlation_id or "",
+                entity_id,
+                last_changed.isoformat(),
+                last_updated.isoformat(),
+                str(state_obj.state),
+                original_attributes,
+            ],
+            sort_keys=True,
+            separators=(",", ":"),
+            default=_identity_json_default,
+        )
         payload: dict[str, Any] = {
-            "eventId": str(uuid.uuid4()),
+            # UUIDv5 is stable for the same HA fact across MQTT retries, recorder
+            # replay and process restarts. A new HA update changes its timestamps.
+            "eventId": str(uuid.uuid5(uuid.NAMESPACE_URL, identity)),
             "bridgeId": self._topics.bridge_id,
             "entityId": entity_id,
             "state": state_obj.state,
-            "attributes": DeviceAccess(self.hass, self._conf()).attributes(state_obj.attributes),
+            "attributes": published_attributes,
             # HA reserves `unavailable` for reachability. `unknown` means the Entity is present but
             # its current value is unknown (common for stateless buttons), not that it is offline.
             "available": str(state_obj.state).lower() != "unavailable",
-            "ts": utc_now_iso(),
+            "ts": observed_at.isoformat(),
             "source": source,
         }
         if correlation_id:
@@ -1035,18 +1452,162 @@ class BridgeCoordinator:
             return
         if self._is_model_marked_standalone_entity(state):
             return
-        topic_entity = entity_id.replace("/", "_")
-        payload = self._build_state_payload(
-            entity_id, state, source=source, correlation_id=correlation_id
+        await self._publish_state_object(
+            client,
+            state,
+            source=source,
+            correlation_id=correlation_id,
+            qos=qos,
         )
+
+    async def _publish_state_object(
+        self,
+        client: Any,
+        state: Any,
+        *,
+        source: str,
+        correlation_id: str | None = None,
+        qos: int = 1,
+        observed_at: datetime | None = None,
+        snapshot_version: int | None = None,
+    ) -> None:
+        entity_id = state.entity_id
+        topic_entity = entity_id.replace("/", "_")
+        await async_prepare_sensor_display(self.hass, [entity_id])
+        if self._is_excluded_entity(entity_id):
+            raise PermissionError("device_grant_changed")
+        payload = self._build_state_payload(
+            entity_id,
+            state,
+            source=source,
+            correlation_id=correlation_id,
+            observed_at=observed_at,
+        )
+        if snapshot_version is not None:
+            payload["snapshotVersion"] = snapshot_version
         await self._publish(
             client,
             f"{self._topics.state_prefix}/{topic_entity}",
-            json.dumps(payload, default=str),
+            _mqtt_json(payload),
             qos=qos,
         )
         self.state_push_count += 1
         self._fire()
+
+    async def _async_fetch_history_states(
+        self, start_time: datetime, end_time: datetime
+    ) -> list[Any]:
+        """Read full recorder states off the HA event loop."""
+        recorder_instance = self.hass.data.get(RECORDER_INSTANCE)
+        if recorder_instance is None:
+            return []
+
+        entity_ids = [
+            state.entity_id
+            for state in self.hass.states.async_all()
+            if state.entity_id
+            and not self._is_excluded_entity(state.entity_id)
+            and not self._is_model_marked_standalone_entity(state)
+        ]
+        if not entity_ids:
+            return []
+
+        def _query_history():
+            # Importing recorder history loads SQLAlchemy and can itself be
+            # expensive on first use, so keep both import and query on the
+            # recorder's dedicated executor.
+            from homeassistant.components.recorder import history
+
+            return history.get_significant_states(
+                self.hass,
+                start_time,
+                end_time,
+                entity_ids,
+                include_start_time_state=False,
+                significant_changes_only=False,
+                minimal_response=False,
+                no_attributes=False,
+            )
+
+        rows_by_entity = await recorder_instance.async_add_executor_job(_query_history)
+        states: list[Any] = []
+        for entity_id in entity_ids:
+            rows = list(rows_by_entity.get(entity_id, ()))
+            rows.sort(
+                key=lambda state: self._state_datetime(state, "last_updated")
+                or self._state_datetime(state, "last_changed")
+                or start_time
+            )
+            overflow = max(0, len(rows) - MAX_HISTORY_REPLAY_EVENTS_PER_ENTITY)
+            if overflow:
+                self._record_dropped_state_events(overflow, "recorder per-entity replay limit")
+                rows = rows[-MAX_HISTORY_REPLAY_EVENTS_PER_ENTITY:]
+            states.extend(rows)
+        states.sort(
+            key=lambda state: self._state_datetime(state, "last_updated")
+            or self._state_datetime(state, "last_changed")
+            or start_time
+        )
+        overflow = max(0, len(states) - MAX_HISTORY_REPLAY_EVENTS)
+        if overflow:
+            self._record_dropped_state_events(overflow, "recorder total replay limit")
+            states = states[-MAX_HISTORY_REPLAY_EVENTS:]
+        return states
+
+    async def _run_history_replay(
+        self,
+        start_time: datetime,
+        end_time: datetime,
+        *,
+        client: Any | None = None,
+    ) -> None:
+        publish_client = client or self._mqtt_client
+        if publish_client is None or self._topics is None:
+            return
+        published = 0
+        skipped = 0
+        try:
+            states = await self._async_fetch_history_states(start_time, end_time)
+            states.sort(
+                key=lambda state: self._state_datetime(state, "last_updated")
+                or self._state_datetime(state, "last_changed")
+                or start_time
+            )
+            for state in states:
+                if self._is_excluded_entity(state.entity_id) or self._is_model_marked_standalone_entity(state):
+                    continue
+                observed_at = (
+                    self._state_datetime(state, "last_changed")
+                    or self._state_datetime(state, "last_updated")
+                )
+                try:
+                    await self._publish_state_object(
+                        publish_client,
+                        state,
+                        source="history_replay",
+                        observed_at=observed_at,
+                    )
+                except _MqttPacketTooLarge as err:
+                    self._record_oversized_state(state.entity_id, "history_replay", err)
+                    skipped += 1
+                else:
+                    published += 1
+                if (published + skipped) % SNAPSHOT_BATCH_SIZE == 0:
+                    await asyncio.sleep(SNAPSHOT_BATCH_PAUSE_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001
+            # Recorder is optional in HA. Keep live forwarding healthy and retry
+            # the same bounded window on the next MQTT connection.
+            _LOGGER.warning("Recorder history replay unavailable or interrupted: %s", err)
+            return
+        if states:
+            _LOGGER.info(
+                "Replayed %s HA recorder state change(s) from %s; skipped %s oversized states",
+                published,
+                start_time.isoformat(),
+                skipped,
+            )
 
     @callback
     def _on_state_changed(self, event: Event) -> None:
@@ -1059,21 +1620,29 @@ class BridgeCoordinator:
             return
         if self._is_model_marked_standalone_entity(new_state):
             return
-        # Re-inserting an existing key does not update dict insertion order.
-        # Move it to the end so trimming really discards the least recently
-        # updated entity and retains this entity's newest event.
-        self._pending_state_events.pop(entity_id, None)
-        self._pending_state_events[entity_id] = event
+        domain = entity_id.partition(".")[0]
+        is_transient = event.event_type == EVENT_STATE_CHANGED and domain in {"event", "button"}
+        if is_transient:
+            # Repeated occurrences can have the same state/event_type. A unique
+            # queue key preserves each occurrence and their insertion order.
+            queue_key: object = (entity_id, uuid.uuid4())
+        else:
+            # Re-inserting an existing key does not update dict insertion order.
+            # Move it to the end so trimming really discards the least recently
+            # updated entity and retains this entity's newest event.
+            queue_key = entity_id
+            self._pending_state_events.pop(queue_key, None)
+        self._pending_state_events[queue_key] = event
         self._trim_pending_state_events()
         self._start_state_worker_if_ready()
 
     def _trim_pending_state_events(self) -> None:
-        """把合并后的积压压在 MAX_PENDING_STATE_EVENTS 以内，超出丢最旧的。
+        """Keep the mixed coalesced/transient backlog within its hard limit.
 
-        _on_state_changed 不管连没连着都入列，而 _state_worker 只在连上时排空。
-        真机上一次断线的 5 秒内（大量实体持续抖动）就能攒出几千条，重连瞬间以
-        QoS 1 全量回放，把刚建立的链路再次打死。丢弃是有意的：这里只保留每个
-        entity 的最新状态，快照与 catalog 才是补齐真值的路径。
+        Current-state domains keep only the latest entity value; event/button
+        entries remain individual and ordered. If either kind overflows, drop
+        the globally oldest queued item and expose the shared drop counter.
+        Recorder replay is the bounded recovery path after reconnection.
         """
         overflow = len(self._pending_state_events) - MAX_PENDING_STATE_EVENTS
         if overflow <= 0:
@@ -1082,13 +1651,17 @@ class BridgeCoordinator:
         # overflow 几乎恒为 1，不该为此复制整份 key 列表。
         for stale_entity_id in list(islice(self._pending_state_events, overflow)):
             del self._pending_state_events[stale_entity_id]
-        self._dropped_state_events += overflow
+        self._record_dropped_state_events(overflow, "live MQTT backlog limit")
+
+    def _record_dropped_state_events(self, count: int, reason: str) -> None:
+        if count <= 0:
+            return
+        self._dropped_state_events += count
         if self._dropped_state_events >= self._next_drop_log_at:
             self._next_drop_log_at = self._dropped_state_events + PENDING_DROP_LOG_INTERVAL
             _LOGGER.warning(
-                "State backlog exceeded %s coalesced entries while the MQTT link was "
-                "unhealthy; dropped %s oldest event(s) so far",
-                MAX_PENDING_STATE_EVENTS,
+                "State history overflow (%s); dropped %s event(s) so far",
+                reason,
                 self._dropped_state_events,
             )
 
@@ -1107,8 +1680,9 @@ class BridgeCoordinator:
         while self._pending_state_events:
             if self._mqtt_client is None or not self.mqtt_connected:
                 return
-            entity_id, event = next(iter(self._pending_state_events.items()))
-            self._pending_state_events.pop(entity_id, None)
+            queue_key, event = next(iter(self._pending_state_events.items()))
+            self._pending_state_events.pop(queue_key, None)
+            entity_id = getattr(event.data.get("new_state"), "entity_id", queue_key)
             try:
                 await self._publish_state_from_event(event)
             except Exception as err:  # noqa: BLE001
@@ -1126,25 +1700,24 @@ class BridgeCoordinator:
             return
         if self._is_model_marked_standalone_entity(new_state):
             return
-        payload = self._build_state_payload(
-            new_state.entity_id, new_state, source="ha_state_changed"
-        )
-        topic_entity = new_state.entity_id.replace("/", "_")
         try:
-            await self._publish(
+            await self._publish_state_object(
                 self._mqtt_client,
-                f"{self._topics.state_prefix}/{topic_entity}",
-                json.dumps(payload, default=str),
-                qos=1,
+                new_state,
+                source=(
+                    "display_metadata"
+                    if event.event_type == "seenzus_display_metadata_changed"
+                    else "ha_state_changed"
+                ),
             )
-            self.state_push_count += 1
-            self._fire()
         except Exception as err:  # noqa: BLE001
             self.err_count += 1
             self.last_error = f"state_publish_failed:{err}"
             self._fire()
 
-    async def _publish_presence(self, status: str, *, client: Any | None = None) -> None:
+    async def _publish_presence(
+        self, status: str, *, client: Any | None = None, required: bool = False,
+    ) -> None:
         publish_client = client or self._mqtt_client
         if publish_client is None or self._topics is None:
             return
@@ -1156,6 +1729,7 @@ class BridgeCoordinator:
             # 生效传输方式（issue #14 联调排查）：后端/运维凭 presence 即可确认
             # 桥走的是 wss 还是裸 TCP；wsPath 仅 ws/wss 时出现，与兑换响应对齐。
             "transport": transport_scheme,
+            "maxPacketSize": self.mqtt_max_packet_size,
             "mqttConnected": self.mqtt_connected,
             "pairingStatus": self.pairing_status,
             "configSource": self.config_source,
@@ -1167,21 +1741,51 @@ class BridgeCoordinator:
             "ts": utc_now_iso(),
             "requestCount": self.req_count,
             "errorCount": self.err_count,
+            "droppedStateEventCount": self._dropped_state_events,
             "lastError": self.last_error,
             "version": BRIDGE_VERSION,
-            "capabilities": {"persistentOperationIdempotency": True},
+            "capabilities": {
+                "persistentOperationIdempotency": True,
+                "recorderHistoryReplay": True,
+                "serviceIndex": 1,
+                "snapshotStream": 1,
+            },
         }
         if transport_ws_path is not None:
             payload["wsPath"] = transport_ws_path
         try:
-            await self._publish(
-                publish_client,
-                self._topics.presence_topic,
-                json.dumps(payload, default=str),
-                qos=1,
-                retain=True,
-            )
+            try:
+                await self._publish(
+                    publish_client,
+                    self._topics.presence_topic,
+                    _mqtt_json(payload),
+                    qos=1,
+                    retain=True,
+                )
+            except _MqttPacketTooLarge:
+                if status != "offline":
+                    raise
+                # Error diagnostics can make offline larger than the online
+                # announcement it retracts. Keep the status deliverable under
+                # the same budget; the full error remains in HA diagnostics.
+                offline = _mqtt_json({
+                    "bridgeId": self._topics.bridge_id,
+                    "status": "offline",
+                    "mqttConnected": False,
+                    "ts": payload["ts"],
+                })
+                if _mqtt_publish_packet_size(self._topics.presence_topic, offline, 1) > self.mqtt_max_packet_size:
+                    offline = MINIMAL_OFFLINE_PRESENCE_PAYLOAD
+                await self._publish(
+                    publish_client,
+                    self._topics.presence_topic,
+                    offline,
+                    qos=1,
+                    retain=True,
+                )
         except Exception as err:  # noqa: BLE001
+            if required:
+                raise
             _LOGGER.debug("Presence publish failed: %s", err)
 
     def _start_presence_heartbeat(self) -> None:

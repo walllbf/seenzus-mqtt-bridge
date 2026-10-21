@@ -39,7 +39,9 @@ async def test_catalog_read_snapshots_and_events_share_the_grant(home):
     policy = coordinator._dispatch_policy()
     result = await dispatch(hass, "GET", "/api/states", None, policy)
     assert {s["entity_id"] for s in result.data} == {"light.city", "input_boolean.helper"}
-    assert all(s["attributes"] == {"brightness": 100} for s in result.data)
+    assert all(s["attributes"]["brightness"] == 100 for s in result.data)
+    assert all(set(s["attributes"]) <= {"brightness", "seenzus_display"} for s in result.data)
+    assert "seenzus_display" in next(s for s in result.data if s["entity_id"] == "light.city")["attributes"]
     assert (await dispatch(hass, "GET", "/api/states/light.suburb", None, policy)).status == 404
     catalog = coordinator._build_device_catalog_payload(source="test")
     assert {d["deviceId"] for d in catalog["devices"]} == {"city", "input_boolean.helper"}

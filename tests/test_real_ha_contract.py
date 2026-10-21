@@ -5,7 +5,7 @@ schema validation and dispatch are the installed upstream implementation.
 """
 import json
 from inspect import signature
-from datetime import datetime, timezone
+from datetime import datetime
 from types import MappingProxyType
 
 import pytest
@@ -97,7 +97,10 @@ async def test_real_service_dispatch_publishes_result_and_observed_state(
     observed = json.loads(client.published[-1]["payload"])
     assert observed["entityId"] == entity_id
     assert observed["state"] == new_state
-    assert observed["attributes"] == {"friendly_name": "Isolated device"}
+    assert observed["attributes"]["friendly_name"] == "Isolated device"
+    assert observed["attributes"]["seenzus_display"]["time_zone"] == "UTC"
+    # Display enrichment belongs to the wire payload, not HA's original state.
+    assert hass.states.get(entity_id).attributes == {"friendly_name": "Isolated device"}
     assert observed["correlationMsgId"] == "contract"
 
 
@@ -155,7 +158,10 @@ async def test_real_registry_catalog_and_snapshot_preserve_identity_and_evidence
         "vendor_custom", "test", "custom-1", device_id=device.id,
         entity_category=EntityCategory.DIAGNOSTIC, suggested_object_id="attached",
     )
-    registry.async_update_entity(attached.entity_id, area_id=override_area.id)
+    # An entity needs its own name to override its device's area.
+    registry.async_update_entity(
+        attached.entity_id, name="Test entity", area_id=override_area.id,
+    )
     hass.states.async_set(attached.entity_id, "unknown", {"unit_of_measurement": "W"})
     hass.states.async_set("vendor_custom.orphan", "on")
     hass.states.async_set("input_boolean.helper", "off")
@@ -176,9 +182,7 @@ async def test_real_registry_catalog_and_snapshot_preserve_identity_and_evidence
     assert custom["available"] is True and custom["unit"] == "W"
     assert entities["switch.unreachable"]["available"] is False
 
-    before = datetime.now(timezone.utc)
     result = await command(bridge, client, "GET", "/api/states")
-    after = datetime.now(timezone.utc)
     states = {item["entity_id"]: item for item in result["data"]}
     evidence = states[attached.entity_id]
     assert datetime.fromisoformat(evidence["last_changed"]) == hass.states.get(attached.entity_id).last_changed
@@ -188,4 +192,7 @@ async def test_real_registry_catalog_and_snapshot_preserve_identity_and_evidence
     assert publications[attached.entity_id]["available"] is True
     assert publications["switch.unreachable"]["available"] is False
     assert publications[attached.entity_id]["attributes"]["unit_of_measurement"] == "W"
-    assert before <= datetime.fromisoformat(publications[attached.entity_id]["ts"]) <= after
+    assert (
+        datetime.fromisoformat(publications[attached.entity_id]["ts"])
+        == hass.states.get(attached.entity_id).last_updated
+    )

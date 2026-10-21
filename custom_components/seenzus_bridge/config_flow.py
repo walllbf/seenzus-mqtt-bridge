@@ -26,6 +26,9 @@ from homeassistant.helpers.selector import (
     EntitySelectorConfig,
     AreaSelector,
     AreaSelectorConfig,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
 )
 
 from .const import (
@@ -40,6 +43,7 @@ from .const import (
     CONF_ENABLE_TEMPLATE_API,
     CONF_EXPOSE_FULL_CONFIG,
     CONF_MQTT_HOST,
+    CONF_MQTT_MAX_PACKET_SIZE_KIB,
     CONF_MQTT_PASSWORD,
     CONF_MQTT_PORT,
     CONF_MQTT_SCHEME,
@@ -58,12 +62,12 @@ from .const import (
     DEFAULT_ENABLE_TEMPLATE_API,
     DEFAULT_EXPOSE_FULL_CONFIG,
     DEFAULT_MQTT_SCHEME,
+    DEFAULT_MQTT_MAX_PACKET_SIZE_KIB,
     DEFAULT_PAIRING_API_BASE,
-    DEFAULT_MQTT_PORT,
     DEFAULT_PORT_BY_MQTT_SCHEME,
     MQTT_SCHEME_WS,
     MQTT_SCHEME_WSS,
-    VALID_MQTT_SCHEMES,
+    MAX_MQTT_PACKET_SIZE_KIB,
     DEFAULT_PAIRING_MODE,
     DEFAULT_TOPIC_ROOT,
     DOMAIN,
@@ -75,6 +79,12 @@ from .const import (
 from .dev_override import DevOverrideError, resolve_dev_pairing_api_base
 from .device_access import CONF_SCOPE, CONF_DEVICES, CONF_ENTITIES, SCOPE_KEYS
 from .environments import CONF_ENVIRONMENT, CONF_WORLD_ID, CONF_WORLD_NAME, ENVIRONMENTS, ENVIRONMENT_SLOTS, bootstrap_url, entry_environment, environment_for_api
+from .mqtt_transport import MqttTransportError, validate_mqtt_transport
+from .mqtt_settings import (
+    MqttPresenceBudgetError,
+    mqtt_packet_size_limit,
+    validate_mqtt_presence_budget,
+)
 from .pairing_bootstrap import (
     create_web_pairing_session,
     exchange_web_pairing_callback_code,
@@ -178,15 +188,38 @@ def _mode_schema(default_mode: str = DEFAULT_PAIRING_MODE) -> vol.Schema:
             vol.Required(
                 CONF_PAIRING_MODE,
                 default=default_mode,
-            ): vol.In(
-                {
-                    PAIRING_MODE_SEAMLESS: "快速配对（自动识别环境，推荐）",
-                    _PAIRING_MODE_CHOOSE_ENVIRONMENT: "快速配对（手动选择环境）",
-                    PAIRING_MODE_MANUAL: "手动配置（高级）",
-                }
-            ),
+            ): SelectSelector(SelectSelectorConfig(
+                options=[PAIRING_MODE_SEAMLESS, _PAIRING_MODE_CHOOSE_ENVIRONMENT, PAIRING_MODE_MANUAL],
+                mode=SelectSelectorMode.LIST, translation_key="pairing_mode",
+            )),
         }
     )
+
+
+class _PacketSizeSelector(NumberSelector):
+    """Keep HA's number control while rejecting lossy input coercion."""
+
+    def __call__(self, data: object) -> int:
+        try:
+            return mqtt_packet_size_limit({CONF_MQTT_MAX_PACKET_SIZE_KIB: data}) // 1024
+        except ValueError as err:
+            raise vol.Invalid(str(err)) from err
+
+
+def _packet_size_fields(defaults: dict) -> dict:
+    """Fields shared by manual setup and connection-only options."""
+    try:
+        default = mqtt_packet_size_limit(defaults) // 1024
+    except ValueError:
+        default = DEFAULT_MQTT_MAX_PACKET_SIZE_KIB
+    return {
+        vol.Optional(CONF_MQTT_MAX_PACKET_SIZE_KIB, default=default): _PacketSizeSelector(
+            NumberSelectorConfig(
+                min=1, max=MAX_MQTT_PACKET_SIZE_KIB, step=1,
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
+    }
 
 
 def _schema(pairing_mode: str, defaults: dict | None = None) -> vol.Schema:
@@ -206,12 +239,25 @@ def _schema(pairing_mode: str, defaults: dict | None = None) -> vol.Schema:
                     CONF_MQTT_HOST,
                     default=d.get(CONF_MQTT_HOST, ""),
                 ): TextSelector(),
+                vol.Required(
+                    CONF_MQTT_SCHEME,
+                    default=d.get(CONF_MQTT_SCHEME) or DEFAULT_MQTT_SCHEME,
+                ): vol.In({
+                    "mqtts": "MQTT over TLS",
+                    "wss": "MQTT over secure WebSocket",
+                    "mqtt": "MQTT (local IP only)",
+                    "ws": "WebSocket (local IP only)",
+                }),
                 vol.Optional(
                     CONF_MQTT_PORT,
-                    default=d.get(CONF_MQTT_PORT, DEFAULT_MQTT_PORT),
+                    description={"suggested_value": d.get(CONF_MQTT_PORT)},
                 ): NumberSelector(
                     NumberSelectorConfig(min=1, max=65535, mode=NumberSelectorMode.BOX)
                 ),
+                vol.Optional(
+                    CONF_MQTT_WS_PATH,
+                    default=d.get(CONF_MQTT_WS_PATH) or "/mqtt",
+                ): TextSelector(),
                 vol.Optional(
                     CONF_MQTT_USERNAME,
                     default=d.get(CONF_MQTT_USERNAME, ""),
@@ -237,6 +283,7 @@ def _schema(pairing_mode: str, defaults: dict | None = None) -> vol.Schema:
                     CONF_BRIDGE_ID,
                     default=d.get(CONF_BRIDGE_ID, ""),
                 ): TextSelector(),
+                **_packet_size_fields(d),
                 vol.Optional(
                     CONF_ENABLE_STATE_EVENTS,
                     default=d.get(CONF_ENABLE_STATE_EVENTS, DEFAULT_ENABLE_STATE_EVENTS),
@@ -260,8 +307,15 @@ def _schema(pairing_mode: str, defaults: dict | None = None) -> vol.Schema:
     return vol.Schema(schema_fields)
 
 
-def _validate(data: dict) -> dict[str, str]:
+def _validate(data: dict, *, entry_id: str = "000000000000") -> dict[str, str]:
+    # Before entry creation, reserve the full 12-character generated ID suffix.
     errors: dict[str, str] = {}
+    try:
+        validate_mqtt_presence_budget(data, entry_id)
+    except MqttPresenceBudgetError:
+        errors[CONF_MQTT_MAX_PACKET_SIZE_KIB] = "mqtt_packet_size_too_small_for_topic"
+    except ValueError:
+        errors[CONF_MQTT_MAX_PACKET_SIZE_KIB] = "invalid_mqtt_packet_size"
     pairing_mode = str(data.get(CONF_PAIRING_MODE, DEFAULT_PAIRING_MODE)).strip()
     if pairing_mode == PAIRING_MODE_SEAMLESS:
         # 环境和设备范围由前置步骤校验；重试表单没有连接参数。
@@ -269,6 +323,11 @@ def _validate(data: dict) -> dict[str, str]:
 
     if not str(data.get(CONF_MQTT_HOST, "")).strip():
         errors[CONF_MQTT_HOST] = "host_required"
+    else:
+        try:
+            validate_mqtt_transport(data)
+        except MqttTransportError as err:
+            errors[CONF_MQTT_SCHEME] = str(err)
     return errors
 
 
@@ -282,17 +341,9 @@ def _build_quick_pair_entry_data(
     if not host:
         raise ValueError("quick_pair_mqtt_missing")
 
-    # 传输 scheme（issue #14）：web-pair 兑换响应下发。`or ""` 归一显式 JSON
-    # null（str(None) 会变 "None"）；未知值按裸 TCP 回退并告警，避免坏值直接
-    # 炸掉连接层。
-    scheme = str(mqtt.get("scheme") or "").strip().lower()
-    if scheme and scheme not in VALID_MQTT_SCHEMES:
-        _LOGGER.warning(
-            "Quick pair returned unknown mqtt scheme %r; falling back to bare TCP",
-            scheme,
-        )
-        scheme = ""
-    scheme = scheme or DEFAULT_MQTT_SCHEME
+    scheme = validate_mqtt_transport({
+        CONF_MQTT_HOST: host, CONF_MQTT_SCHEME: mqtt.get("scheme"),
+    })
     ws_path = ""
     if scheme in (MQTT_SCHEME_WS, MQTT_SCHEME_WSS):
         raw_ws_path = str(mqtt.get("path") or "").strip()
@@ -311,11 +362,7 @@ def _build_quick_pair_entry_data(
         CONF_MQTT_PORT: int(mqtt.get("port") or DEFAULT_PORT_BY_MQTT_SCHEME[scheme]),
         CONF_MQTT_USERNAME: str(mqtt.get("username", "")).strip(),
         CONF_MQTT_PASSWORD: str(mqtt.get("password", "")).strip(),
-        # scheme/ws_path 总是显式落盘（裸 TCP 即 "mqtt"/""）：options 流重配对走
-        # {**entry.data, **entry.options} 合并，若裸 TCP 结果省略这两个键，旧
-        # entry.data 里残留的 wss/path 会穿透合并继续生效，把新的裸 TCP broker
-        # 拨成 websockets+TLS。旧 entry（升级前创建）无键 → coordinator 按缺省
-        # 走裸 TCP 现状路径。
+        # Always replace both keys so stale options cannot change the transport.
         CONF_MQTT_SCHEME: scheme,
         CONF_MQTT_WS_PATH: ws_path,
     }
@@ -548,6 +595,10 @@ class _QuickPairFlowMixin:
                 api_base=self._quick_pair_api_base,
                 status_result=status_result,
             )
+        except MqttTransportError as err:
+            self._quick_pair_diagnostic = {"error_code": str(err)}
+            _record_quick_pair_diagnostic(self.hass, str(err), self._quick_pair_diagnostic, self._notification_scope())
+            return self._reshow_seamless_form(str(err))
         except ValueError:
             _record_quick_pair_diagnostic(self.hass, "quick_pair_mqtt_missing", self._quick_pair_diagnostic, self._notification_scope())
             return self._reshow_seamless_form("quick_pair_mqtt_missing")
@@ -632,7 +683,8 @@ class _QuickPairFlowMixin:
                 return await self._after_scope()
             return await self.async_step_scope()
         return self.async_show_form(step_id="environment", data_schema=vol.Schema({
-            vol.Required(CONF_ENVIRONMENT): vol.In(choices),
+            vol.Required(CONF_ENVIRONMENT): SelectSelector(SelectSelectorConfig(
+                options=list(choices), mode=SelectSelectorMode.LIST, translation_key="environment")),
         }))
 
     async def async_step_seamless(self, user_input: dict | None = None):
@@ -683,12 +735,22 @@ class _QuickPairFlowMixin:
                 self._quick_pair_session_id = result.session_id
                 self._quick_pair_app_return_url = _sanitize_app_return_url(getattr(result, "app_return_url", None))
                 return await self.async_step_seamless_authorize()
+            # This hint controls only the relay's recovery picker, never the
+            # environment of an existing app launch or the destination API.
+            try:
+                developer_preset = await resolve_dev_pairing_api_base(self.hass)
+            except DevOverrideError:
+                developer_preset = None
+            available_environments = ["cn", "global"]
+            if developer_preset:
+                available_environments.append("uat")
             self._quick_pair_page_url = bootstrap_url(api_base, {
                 "state": token, "redirect_uri": redirect_uri,
                 "ha_instance_id": ha_instance_id, "bridge_name": _backend_bridge_name(self.hass),
                 "expected_world_id": existing.get(CONF_WORLD_ID),
                 "expected_source_id": existing.get(CONF_SOURCE_ID) if not existing.get(CONF_WORLD_ID) else None,
                 "configured_environments": ",".join(sorted(self._configured_environments())),
+                "available_environments": ",".join(available_environments),
             })
             return await self.async_step_seamless_authorize()
         except DevOverrideError:
@@ -816,7 +878,8 @@ class _QuickPairFlowMixin:
                 return await self._after_scope()
             return await self.async_step_devices()
         return self.async_show_form(step_id="scope", data_schema=vol.Schema({
-            vol.Required(CONF_SCOPE, default=self._scope.get(CONF_SCOPE, "all")): vol.In({"all": "全部设备", "selected": "指定设备"}),
+            vol.Required(CONF_SCOPE, default=self._scope.get(CONF_SCOPE, "all")): SelectSelector(SelectSelectorConfig(
+                options=["all", "selected"], mode=SelectSelectorMode.LIST, translation_key="device_scope")),
         }))
 
     async def async_step_devices(self, user_input: dict | None = None):
@@ -873,12 +936,17 @@ class _QuickPairFlowMixin:
             data = _flatten_form_input(user_input)
             data[CONF_PAIRING_MODE] = PAIRING_MODE_MANUAL
             data[CONF_CONFIG_SOURCE] = CONFIG_SOURCE_MANUAL
-            # 手动配置只支持裸 TCP（issue #14 明确不做 ws 的手动 UI）。显式落盘
-            # 以覆盖 options 合并里可能残留的旧 wss scheme/path（见
-            # _build_quick_pair_entry_data 的同款注释）。
-            data[CONF_MQTT_SCHEME] = DEFAULT_MQTT_SCHEME
-            data[CONF_MQTT_WS_PATH] = ""
-            errors = _validate(data)
+            # New manual forms default to TLS; saved/paired entries never do.
+            data.setdefault(CONF_MQTT_SCHEME, DEFAULT_MQTT_SCHEME)
+            scheme = str(data[CONF_MQTT_SCHEME] or "").strip().lower()
+            data[CONF_MQTT_SCHEME] = scheme
+            data.setdefault(CONF_MQTT_PORT, DEFAULT_PORT_BY_MQTT_SCHEME.get(scheme, 8883))
+            path = str(data.get(CONF_MQTT_WS_PATH) or "/mqtt").strip()
+            data[CONF_MQTT_WS_PATH] = (
+                "/" + path.lstrip("/") if scheme in ("ws", "wss") else ""
+            )
+            entry = getattr(self, "_config_entry", None)
+            errors = _validate(data, entry_id=entry.entry_id if entry is not None else "000000000000")
             if not errors:
                 environment = self._current_config().get(CONF_ENVIRONMENT, self._selected_environment)
                 if environment not in ENVIRONMENT_SLOTS:
@@ -892,6 +960,7 @@ class _QuickPairFlowMixin:
                     self.context["unique_id"] = environment
                 # Manual (re)config carries no return link; clear any stale
                 # return-link / failure notification from an earlier quick pair.
+                data[CONF_MQTT_MAX_PACKET_SIZE_KIB] = mqtt_packet_size_limit(data) // 1024
                 _clear_quick_pair_notifications(self.hass, self._notification_scope())
                 return self.async_create_entry(title=self._entry_title, data={**self._current_config(), **data, **self._scope})
 
@@ -942,6 +1011,22 @@ class SavanAIBridgeOptionsFlow(_QuickPairFlowMixin, config_entries.OptionsFlow):
     _flow_manager = FLOW_MANAGER_OPTIONS
     _entry_title = ""
 
+    @callback
+    def async_create_entry(self, *, data: dict, **kwargs) -> config_entries.ConfigFlowResult:
+        result = super().async_create_entry(data=data, **kwargs)
+        entry = self._config_entry
+        if data != entry.options and not entry.update_listeners:
+            # Blocked setup never installed the normal reload listener. Core
+            # 2025.1 has no OptionsFlowWithReload; use a one-shot listener so
+            # reload runs only after Core saves the corrected options. Loaded
+            # entries keep their existing retained-topic cleanup/reload path.
+            async def reload_once(hass, updated_entry):
+                remove_listener()
+                await hass.config_entries.async_reload(updated_entry.entry_id)
+
+            remove_listener = entry.add_update_listener(reload_once)
+        return result
+
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._config_entry = config_entry
         self._init_quick_pair_state()
@@ -953,6 +1038,56 @@ class SavanAIBridgeOptionsFlow(_QuickPairFlowMixin, config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input: dict | None = None):
         if user_input is not None:
+            return await self.async_step_pairing(user_input)
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["connection_settings", "device_access", "pairing"],
+        )
+
+    async def async_step_device_access(self, user_input: dict | None = None):
+        """Change grants without rotating credentials or changing the World."""
+        self._scope_only = True
+        return await self.async_step_scope(user_input)
+
+    async def async_step_connection_settings(self, user_input: dict | None = None):
+        """Change the local budget without touching pairing or transport fields."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                budget_kib = mqtt_packet_size_limit(user_input) // 1024
+                validate_mqtt_presence_budget(
+                    {**self._current_config(), CONF_MQTT_MAX_PACKET_SIZE_KIB: budget_kib},
+                    self._config_entry.entry_id,
+                )
+            except MqttPresenceBudgetError:
+                errors[CONF_MQTT_MAX_PACKET_SIZE_KIB] = "mqtt_packet_size_too_small_for_topic"
+            except ValueError:
+                errors[CONF_MQTT_MAX_PACKET_SIZE_KIB] = "invalid_mqtt_packet_size"
+            else:
+                return self.async_create_entry(
+                    title=self._entry_title,
+                    data={
+                        **self._config_entry.options,
+                        CONF_MQTT_MAX_PACKET_SIZE_KIB: budget_kib,
+                    },
+                )
+        return self.async_show_form(
+            step_id="connection_settings",
+            data_schema=vol.Schema(_packet_size_fields(self._current_config())),
+            errors=errors,
+        )
+
+    def _finish_quick_pair(self, data: dict) -> config_entries.ConfigFlowResult:
+        # The budget is a local operator choice, absent from the App exchange.
+        # Re-pairing must not discard a value saved in entry.options.
+        current = self._current_config()
+        if CONF_MQTT_MAX_PACKET_SIZE_KIB in current:
+            data = {**data, CONF_MQTT_MAX_PACKET_SIZE_KIB: mqtt_packet_size_limit(current) // 1024}
+        return super()._finish_quick_pair(data)
+
+    async def async_step_pairing(self, user_input: dict | None = None):
+        self._scope_only = False
+        if user_input is not None:
             action = user_input.get("action", "repair")
             if action == "devices":
                 self._scope_only = True
@@ -961,7 +1096,10 @@ class SavanAIBridgeOptionsFlow(_QuickPairFlowMixin, config_entries.OptionsFlow):
                 self._selected_pairing_mode = PAIRING_MODE_MANUAL
                 return await self.async_step_manual()
             return await self.async_step_seamless({})
-        actions = {"repair": "重新配对（保留环境、世界和设备范围）", "devices": "设备授权范围"}
+        actions = ["repair"]
         if self._current_config().get(CONF_CONFIG_SOURCE) == CONFIG_SOURCE_MANUAL:
-            actions["manual"] = "手动连接设置"
-        return self.async_show_form(step_id="init", data_schema=vol.Schema({vol.Required("action", default="devices"): vol.In(actions)}))
+            actions.append("manual")
+        return self.async_show_form(step_id="pairing", data_schema=vol.Schema({
+            vol.Required("action", default="repair"): SelectSelector(SelectSelectorConfig(
+                options=actions, mode=SelectSelectorMode.LIST, translation_key="pairing_action")),
+        }))

@@ -212,7 +212,7 @@ async def test_seamless_authorize_consumes_stored_callback_payload(monkeypatch) 
                 "config_source": "web_pair",
                 "confirmed_at": "2026-04-20T12:01:22Z",
                 "mqtt": {
-                    "host": "broker.example.com",
+                    "host": "broker.example.com", "scheme": "mqtts",
                     "port": 1883,
                     "username": "user-1",
                     "password": "pass-1",
@@ -305,7 +305,7 @@ async def test_user_step_routes_to_manual_form(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_seamless_step_starts_external_quick_pair(monkeypatch) -> None:
+async def test_seamless_step_starts_external_quick_pair(monkeypatch, bridge_manifest_version) -> None:
     flow = _new_config_flow()
     flow._selected_environment = "global"
     flow.hass = FakeHass()
@@ -357,6 +357,7 @@ async def test_seamless_step_starts_external_quick_pair(monkeypatch) -> None:
     assert result["url"] == "https://app.seenzus.xxx/web-pairing/wps_1"
     # 无 dev 覆盖文件 → 用内置生产默认地址。
     assert create_calls[0]["api_base"] == DEFAULT_PAIRING_API_BASE
+    assert create_calls[0]["bridge_version"] == bridge_manifest_version
     assert create_calls[0]["redirect_uri"] == f"http://homeassistant.local:8123{QUICK_PAIR_CALLBACK_PATH}"
     assert create_calls[0]["state"] == "jwt-state"
 
@@ -460,7 +461,7 @@ async def test_seamless_authorize_exchanges_callback_code(monkeypatch) -> None:
                 "config_source": "web_pair",
                 "confirmed_at": "2026-04-20T12:01:22Z",
                 "mqtt": {
-                    "host": "broker.example.com",
+                    "host": "broker.example.com", "scheme": "mqtts",
                     "port": 1883,
                     "username": "user-1",
                     "password": "pass-1",
@@ -558,7 +559,7 @@ async def test_seamless_finish_creates_entry_with_bootstrapped_mqtt(monkeypatch)
             "source_name": "MQTT Bridge 01",
             "confirmed_at": "2026-04-20T12:01:22Z",
             "mqtt": {
-                "host": "broker.example.com",
+                "host": "broker.example.com", "scheme": "mqtts",
                 "port": 1883,
                 "username": "user-1",
                 "password": "pass-1",
@@ -601,7 +602,7 @@ async def test_seamless_finish_creates_entry_with_web_pairing_mqtt(monkeypatch) 
             "config_source": "web_pair",
             "confirmed_at": "2026-04-20T12:01:22Z",
             "mqtt": {
-                "host": "broker.example.com",
+                "host": "broker.example.com", "scheme": "mqtts",
                 "port": 1883,
                 "username": "user-1",
                 "password": "pass-1",
@@ -628,24 +629,18 @@ async def test_seamless_finish_creates_entry_with_web_pairing_mqtt(monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_options_init_shows_mode_selection_form() -> None:
+async def test_options_init_offers_connection_settings_without_repairing() -> None:
     config_entry = type(
         "Entry",
         (),
         {"data": {"mqtt_host": "old-broker"}, "options": {}, "entry_id": "entry-1"},
     )()
     flow = SavanAIBridgeOptionsFlow(config_entry)
-    flow.async_show_form = lambda *, step_id, data_schema, errors=None: {
-        "type": "form",
-        "step_id": step_id,
-        "data_schema": data_schema,
-        "errors": errors or {},
-    }
-
     result = await flow.async_step_init()
 
+    assert result["type"] == FlowResultType.MENU
     assert result["step_id"] == "init"
-    assert _schema_field_names(result["data_schema"]) == {"action"}
+    assert result["menu_options"] == ["connection_settings", "device_access", "pairing"]
 
 
 @pytest.mark.asyncio
@@ -672,7 +667,7 @@ async def test_options_flow_creates_entry_with_flattened_data() -> None:
 
 
 @pytest.mark.asyncio
-async def test_options_seamless_step_uses_options_flow_manager(monkeypatch) -> None:
+async def test_options_seamless_step_uses_options_flow_manager(monkeypatch, bridge_manifest_version) -> None:
     config_entry = FakeConfigEntry(data={"mqtt_host": "old-broker", "source_id": "source-1", "pairing_api_base": "https://uat.seenzus.ai/api/seenzus"})
     flow = SavanAIBridgeOptionsFlow(config_entry)
     flow.hass = FakeHass()
@@ -722,6 +717,7 @@ async def test_options_seamless_step_uses_options_flow_manager(monkeypatch) -> N
     # 模型 A:重配对无视 entry 存值,无 dev 文件 → 内置生产默认。
     assert create_calls[0]["api_base"] == "https://uat.seenzus.ai/api/seenzus"
     assert create_calls[0]["expected_source_id"] == "source-1"
+    assert create_calls[0]["bridge_version"] == bridge_manifest_version
     assert create_calls[0]["state"] == "jwt-state"
     assert result["type"] == "external"
     assert result["step_id"] == "seamless_authorize"
@@ -770,7 +766,7 @@ async def test_options_seamless_finish_creates_entry_with_empty_title() -> None:
             "config_source": "web_pair",
             "confirmed_at": "2026-04-20T12:01:22Z",
             "mqtt": {
-                "host": "broker.example.com",
+                "host": "broker.example.com", "scheme": "mqtts",
                 "port": 1883,
                 "username": "user-1",
                 "password": "pass-1",
@@ -843,7 +839,7 @@ async def test_seamless_finish_polls_legacy_status_until_bound(monkeypatch) -> N
                 "config_source": "web_pair",
                 "confirmed_at": "2026-04-20T12:01:22Z",
                 "mqtt": {
-                    "host": "broker.example.com",
+                    "host": "broker.example.com", "scheme": "mqtts",
                     "port": 1883,
                     "username": "user-1",
                     "password": "pass-1",
@@ -1497,55 +1493,29 @@ def test_build_quick_pair_entry_data_stores_wss_scheme_and_path() -> None:
     assert data[CONF_MQTT_WS_PATH] == "/mqtt"
 
 
-def test_build_quick_pair_entry_data_bare_tcp_response_stores_default_transport_keys() -> None:
-    # 裸 TCP 下发（无 scheme/path 或显式 "mqtt"）也显式落盘 "mqtt"/""：options
-    # 流重配对走 {**entry.data, **entry.options} 合并，省略键会让旧 entry.data
-    # 里残留的 wss scheme/path 穿透合并、把新的裸 TCP broker 拨成 websockets+TLS。
-    for mqtt in ({}, {"scheme": "mqtt"}):
+def test_build_quick_pair_local_tcp_replaces_stale_websocket_path() -> None:
+    data = _build_quick_pair_entry_data(
+        api_base="https://api.example.com",
+        status_result=_pairing_result_with_mqtt({"host": "192.168.1.2", "scheme": "mqtt", "path": "/old"}),
+    )
+    assert data[CONF_MQTT_SCHEME] == "mqtt"
+    assert data[CONF_MQTT_WS_PATH] == ""
+
+
+def test_build_quick_pair_entry_data_normalizes_secure_transport_path() -> None:
+    for scheme, path in [("mqtts", "/stray"), ("wss", None)]:
         data = _build_quick_pair_entry_data(
-            api_base="https://api.seenzus.xxx/api",
-            status_result=_pairing_result_with_mqtt(mqtt),
+            api_base="https://api.example.com",
+            status_result=_pairing_result_with_mqtt({"scheme": scheme, "path": path}),
         )
-        assert data[CONF_MQTT_SCHEME] == "mqtt"
+        assert data[CONF_MQTT_SCHEME] == scheme
         assert data[CONF_MQTT_WS_PATH] == ""
-
-
-def test_build_quick_pair_entry_data_normalizes_unknown_scheme_null_and_stray_path() -> None:
-    # 未知 scheme 回退为显式 "mqtt"（连接层走裸 TCP）；非 ws/wss 的杂散 path 丢弃。
-    data = _build_quick_pair_entry_data(
-        api_base="https://api.seenzus.xxx/api",
-        status_result=_pairing_result_with_mqtt({"scheme": "quic", "path": "/mqtt"}),
-    )
-    assert data[CONF_MQTT_SCHEME] == "mqtt"
-    assert data[CONF_MQTT_WS_PATH] == ""
-
-    data = _build_quick_pair_entry_data(
-        api_base="https://api.seenzus.xxx/api",
-        status_result=_pairing_result_with_mqtt({"scheme": "mqtts", "path": "/mqtt"}),
-    )
-    assert data[CONF_MQTT_SCHEME] == "mqtts"
-    assert data[CONF_MQTT_WS_PATH] == ""
-
-    # 显式 JSON null 不得字符串化成 "None"/"none"（str(None) 陷阱）。
-    data = _build_quick_pair_entry_data(
-        api_base="https://api.seenzus.xxx/api",
-        status_result=_pairing_result_with_mqtt({"scheme": None, "path": None}),
-    )
-    assert data[CONF_MQTT_SCHEME] == "mqtt"
-    assert data[CONF_MQTT_WS_PATH] == ""
-
-    data = _build_quick_pair_entry_data(
-        api_base="https://api.seenzus.xxx/api",
-        status_result=_pairing_result_with_mqtt({"scheme": "wss", "path": None}),
-    )
-    assert data[CONF_MQTT_SCHEME] == "wss"
-    assert data[CONF_MQTT_WS_PATH] == ""
 
 
 def test_build_quick_pair_entry_data_defaults_port_by_scheme() -> None:
     # 响应缺 port 时按 scheme 取惯例端口，而不是一律 1883（wss 回退 1883 会拿
     # TLS websocket 去连明文 TCP 端口）；显式 port 始终优先。
-    cases = [({}, 1883), ({"scheme": "mqtts"}, 8883), ({"scheme": "ws"}, 80), ({"scheme": "wss"}, 443)]
+    cases = [({"host": "192.168.1.2", "scheme": "mqtt"}, 1883), ({"scheme": "mqtts"}, 8883), ({"host": "::1", "scheme": "ws"}, 80), ({"scheme": "wss"}, 443)]
     for mqtt, expected_port in cases:
         result = _pairing_result_with_mqtt(mqtt)
         result.mqtt.pop("port")
@@ -1638,7 +1608,7 @@ async def test_seamless_finish_creates_entry_with_return_link(monkeypatch) -> No
             "confirmed_at": "2026-04-20T12:01:22Z",
             "app_return_url": "seenzus://pairing/done?session=wps_1",
             "mqtt": {
-                "host": "broker.example.com",
+                "host": "broker.example.com", "scheme": "mqtts",
                 "port": 1883,
                 "username": "user-1",
                 "password": "pass-1",

@@ -10,6 +10,10 @@
 
 本文档以当前插件实现为准。
 
+可选的精简读取扩展见 [MQTT 精简读取 v1](COMPACT_READS_V1.zh-CN.md)：
+`snapshotStream=1` 协商接受/逐实体/结束三阶段快照，`serviceIndex=1` 读取服务名称集合。
+原 `GET /api/states` 和 `GET /api/services` 的完整数据语义保留。
+
 ## 1. 通用约定
 
 默认约定：
@@ -30,6 +34,8 @@ topic 模板如下：
 - `topicRoot` 会去掉首尾 `/`，空值回退为 `seenzus/v2`
 - `bridgeId` 来自配置；如果未配置，插件使用 `ha-{entry_id前12位}`；配置值会转小写，并把非法字符替换成 `-`
 - 插件订阅 command 时使用 `{topicRoot}/bridge/{bridgeId}/command/+`
+- MQTT client ID 是 `seenzus-bridge-` 加完整 HA `entry_id` 的 SHA-256 前 128 位十六进制摘要；与 topic 中的 `bridgeId` 分离，配置项重启/重连稳定，不截断 ULID 的时间前缀。升级会切换 client ID；默认 MQTT 3.1.1 clean session，不迁移旧会话或改配对凭据。
+- 完整 MQTT PUBLISH 的本地预算默认 1 MiB，可通过集成选项显式配置为 1–262144 KiB。`presence.maxPacketSize` 以字节报告此发送预算，仅用于诊断，不代表 MQTT 3.1.1 协商到的 Broker 限额。消费端不能据此假设 Broker 接收能力。
 - 当前实现里 `presence` 和 `catalog` 使用 `retain=true`
 - 当 `bridgeId` 或 `topicRoot` 变化时，插件当前只主动清理旧 `presence` retained 消息；旧 `catalog` retained 消息不会主动清理
 - `state` 是事件流，不是 retained 快照
@@ -193,14 +199,24 @@ seenzus/v2/bridge/ha-demo/state/light.living_room
 
 ### 4.5 字段说明
 
-- `eventId`: 本次状态事件唯一 ID
+- `eventId`: 状态事实的稳定 ID。由桥实例、语义来源、可选命令关联、实体、HA 状态时间、状态值和原始属性快照确定；同一 HA 变化因 MQTT 重试或 recorder 补录再次发送时复用，新的状态更新生成新 ID。命令回显、快照和显示元数据与真实 `ha_state_changed` 使用不同身份，避免先到的基线消息吞掉真实活动
 - `bridgeId`: 当前桥实例 ID
 - `entityId`: 真实 HA 实体 ID
 - `state`: 实体主状态
-- `attributes`: 实体属性快照
-- `ts`: 事件时间
+- `attributes`: HA `State.attributes` 的完整快照，桥不裁剪键值；包括 `device_class`，`event` 实体包括 `event_type`
+- `ts`: 事件的 HA 原始观测时间。实时事件、命令回显和快照使用 `last_updated`；recorder 补录使用记录的 `last_changed`。不得理解成 MQTT 接收时间或桥构造消息的当前时间
 - `source`: 事件来源
 - `correlationMsgId`: 可选，若本次状态由某次 `command` 触发，则用于关联该请求
+
+实体的 `attributes.seenzus_display` 是可选的显示资源信封，覆盖传感器和设备页面的控制域，随实时状态、快照及 GET 状态回读传输；旧桥缺失此字段时，服务端保留原名、原值和基本类别回退。内容包括：
+
+- `sensor_options`：Registry `options.sensor` 中原样的 `display_precision`、`suggested_display_precision`，显式 0 有效。
+- `time_zone`：HA 实例配置的时区，不代表某个 HA 用户的浏览器显示偏好。
+- `naming`：Registry 原始 `name`（用户覆盖，可为 null）、`original_name`、`has_entity_name` 和 `platform`。由服务端决定名称显示，不让插件猜测厂商名称；用户覆盖不得被通用译名替换。
+- 实体 Registry 的名称更新（含清除自定义名称）也会通过同一 state topic 上报最新 `naming`，`source` 为 `display_metadata`；即使读数和 `friendly_name` 未变化也会上报。消费方据名称证据刷新目录，不应将这类消息当作设备操作。
+- `translations`：`en`、`zh-Hans` 各自的 `entity`、`device_class`、`default` 资源片段；片段中 `state` 为原始枚举值到文本的字典，`name` 为可选名称模板，`unit_of_measurement` 为可选单位文本，`state_attributes.<attribute>.state` 为属性选项字典。名称占位符参数不从状态属性猜测，无法展开时保留来源名称。
+
+插件通过 HA 官方 `async_get_translations` 加载、按当前授权实体的资源前缀裁剪，仅传输该实体所需片段，不传完整平台字典。每个片段最多 128 个状态项、32 个属性且每属性最多 128 项，单个文本最多 256 字符。插件不选择当前状态译文、不格式化数字、不换算单位；服务端按实时值解释优先级，再发布安全显示提示。保留原始 `state`、`options` 和其他属性值，禁止按显示文本控制设备。Registry 名称、翻译键或显示选项变化会重新发送 `display_metadata`，不伪造状态变化事件。
 
 ### 4.6 source 语义
 
@@ -210,6 +226,8 @@ seenzus/v2/bridge/ha-demo/state/light.living_room
 - `ha_state_changed`: HA 内部真实状态变化产生的主动推送
 - `startup_snapshot`: MQTT 连接成功后启动快照
 - `full_snapshot`: `GET /api/states` 命令触发的全量状态快照
+- `history_replay`: 启动或 MQTT 重连后从 HA recorder 补录的断线窗口状态变化
+- `display_metadata`: Registry 显示选项或 HA 时区变化后重发当前读数和显示资源；不表示实际传感器状态发生变化，不据此生成状态变化或掉线历史。
 
 **为开放枚举**，消费方应只识别已知值、对未知值惰性处理，后续新增取值不应破坏现有消费方。语义锚：
 
@@ -229,6 +247,10 @@ seenzus/v2/bridge/ha-demo/state/light.living_room
 - 名称末尾带含数字 ASCII 型号 token（如 `T1*`）的实体不做 state 上报，详见 §5.7；普通用户命名里的 `*` 不受影响
 - `state` 默认不 retain
 - `startup_snapshot` 和 `full_snapshot` 的 state 发布使用 `qos=0`，其他 state 使用 `qos=1`
+- 普通当前态和连续测量在内存积压中仍按实体合并；`event`、`button` 域逐条保序，不合并连续同类型触发
+- 桥启动及每次 MQTT 重连都补查 recorder 最近 30 分钟，以覆盖无法精确探测起点的网络分区和桥进程重启。每实体最多补 100 条、每轮最多补 2,000 条，取较新的记录；超限计入 `presence.droppedStateEventCount` 并记录警告
+- recorder 补录按 HA 原始时间发送，应用应按 `eventId` 幂等接收；补录不代表事实刚刚发生，也不应倒拨当前态
+- 快照与 recorder 补录的单条 state 若超过本地 MQTT 报文预算，记录实体、来源、字节数及上限，计入错误数和 `presence.droppedStateEventCount`，继续发送后续正常 state；批次完成日志分别报告成功数及超限跳过数，不代表漏送 state 已同步。实际传输故障或取消仍中断批次。每尝试 50 条短暂让出事件循环，包括所有报文均超限的情况。
 
 ## 5. catalog
 
@@ -311,7 +333,7 @@ seenzus/v2/bridge/ha-demo/catalog
 - `eventId`: 本次 catalog 快照事件唯一 ID
 - `bridgeId`: 当前桥实例 ID
 - `wireVersion`: Catalog wire Schema 版本；当前为 `2.1`，与插件发布版本、Topic 根路径版本分别演进
-- `source`: 本次 catalog 的来源，取值 `startup_snapshot`（首次连接全量）/ `reconnect`（断线重连重发）/ `command`（收到查询命令回发）。**为开放枚举**：消费方应只识别已知值、对未知值按惰性/基线处理（catalog 无论何种 source 都按整包重新校准设备基线，不据 source 派生事件），后续新增取值不应破坏现有消费方
+- `source`: 本次 catalog 的来源，取值 `startup_snapshot`（首次连接全量）/ `reconnect`（断线重连重发）/ `command`（收到查询命令回发）/ `registry_update`（设备 Registry 元数据变更）。**为开放枚举**：消费方应只识别已知值、对未知值按惰性/基线处理（catalog 无论何种 source 都按整包重新校准设备基线，不据 source 派生事件），后续新增取值不应破坏现有消费方
 - `ts`: 快照生成时间
 - `isComplete`: 本次是否为完整的来源级快照。只有 `true` 才能把未出现的既有设备作为 soft-missing 证据；字段缺省表示旧插件，服务端按完整快照兼容处理。当前插件从 HA 本地状态注册表一次性取全量，无分页或远端权限截断，因此发布 `true`
 - `devices`: 设备列表
@@ -319,9 +341,13 @@ seenzus/v2/bridge/ha-demo/catalog
 - `entityCount`(顶层): 所有设备下实体总数
 - `correlationMsgId`: 可选，command 触发时用于关联请求
 
+Device Registry 中影响目录的字段（名称、型号、制造商、区域及上级设备）更新时，插件会合并约 1.5 秒内的更新，然后重发 retained catalog，`source` 为 `registry_update`。它不依赖实体名称或状态同时变化，也不受 live state 开关影响；发送期间发生的后续修改会再次补发。断线重连的目录快照负责恢复当前值，卸载时取消待发送任务。此消息只更新目录，不生成设备操作或物理状态事件。
+
 `devices[]` 内每个设备对象字段：
 
 - `deviceId`: HA device registry 的 device id；没有 registry 设备时，使用 `entityId` 构造独立设备
+- `model`: 可选，HA device registry 的原始 `model`；它可能是产品描述，不保证是型号代码
+- `modelId`: 可选，HA device registry 的原始 `model_id`（如 `SPM01-U01`）；没有该字段时省略。与 `model` 分开透传，由服务端决定功能识别，插件不解释型号
 - `entityCount`(设备级): 该设备下实体数量
 - `availableEntityCount`: 该设备下 `available=true` 的实体数量;配合设备级 `entityCount` 可体现「部分掉线」程度
 - `online`: 当前设备下任一实体 `available=true` 即为 true(语义不变;等价于 `availableEntityCount > 0`)
@@ -402,8 +428,13 @@ seenzus/v2/bridge/ha-demo/presence
   "ts": "2026-04-22T12:00:00.000000+00:00",
   "requestCount": 12,
   "errorCount": 1,
+  "droppedStateEventCount": 0,
   "lastError": null,
-  "version": "0.2.3"
+  "version": "0.2.11",
+  "capabilities": {
+    "persistentOperationIdempotency": true,
+    "recorderHistoryReplay": true
+  }
 }
 ```
 
@@ -424,12 +455,15 @@ seenzus/v2/bridge/ha-demo/presence
 - `ts`: 上报时间
 - `requestCount`: 累计请求数
 - `errorCount`: 累计错误数
+- `droppedStateEventCount`: 有界实时队列与 recorder 补录因容量上限丢弃的累计事件数
 - `lastError`: 最近一次错误
 - `version`: 插件版本
+- `capabilities.recorderHistoryReplay`: `true` 表示支持有界 HA recorder 断线补录
 
 ### 6.6 Retain 语义
 
 - `presence` 使用 `retain=true`
+- 初始在线声明发送失败时，桥不会进入就绪状态。若完整离线声明超过本地预算，桥退回只含 `bridgeId`、`status=offline`、`mqttConnected=false`、`ts` 的精简声明；长 Topic 导致仍超限时再退回 `{"status":"offline"}`。消费端须按 Topic 识别桥，容忍元数据缺省并将缺省 `mqttConnected` 视为 false，完整错误保留在 HA 本地。桥的配置校验会拒绝无法容纳最小离线消息的预算；空 retained 消息不代替有效离线声明。
 - 新订阅方会先收到该桥最后一次 retained `presence`
 
 ### 6.7 后端要求

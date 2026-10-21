@@ -68,7 +68,7 @@ class DeviceAccess:
         return {k: v for k, v in dict(attributes).items() if not self.restricted or k in STATE_ATTRIBUTES}
 
     def state(self, state: Any) -> dict:
-        payload = state.as_dict()
+        payload = dict(state.as_dict())
         if self.restricted:
             payload["attributes"] = self.attributes(state.attributes)
             # HA Context contains user/automation IDs unrelated to this World.

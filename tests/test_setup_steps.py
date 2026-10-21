@@ -117,7 +117,7 @@ async def test_explicit_environment_route_still_uses_quick_pairing(home, monkeyp
     monkeypatch.setattr("seenzus_bridge.config_flow.resolve_dev_pairing_api_base", AsyncMock(return_value="http://dev.local/api"))
     result = await flow.async_step_user({"pairing_mode": "choose_environment"})
     assert result["step_id"] == "environment"
-    assert "auto" not in next(iter(result["data_schema"].schema.values())).container
+    assert "auto" not in next(iter(result["data_schema"].schema.values())).config["options"]
     result = await flow.async_step_environment({"environment": environment})
     assert result["step_id"] == "scope"
     assert flow._selected_environment == environment
