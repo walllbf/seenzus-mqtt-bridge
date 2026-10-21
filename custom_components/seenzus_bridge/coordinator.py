@@ -1085,6 +1085,8 @@ class BridgeCoordinator:
                 # instead of rebuilding (which would mint a fresh eventId/ts).
                 # Acceptable side effect: result.data and the retained catalog now
                 # share one eventId/ts.
+                if scope_fingerprint != DeviceAccess(self.hass, self._conf()).fingerprint():
+                    return
                 await self._publish_catalog_payload(
                     client,
                     catalog_payload,
@@ -1128,6 +1130,11 @@ class BridgeCoordinator:
                 if not await self._operation_store.complete(operation_key, fingerprint, result_payload):
                     await self._publish_result(client, effective_msg_id, success=False, status=409, error="control_outcome_unknown")
                     return
+            # Persisting the result yields to the event loop. A scope edit while
+            # writing must not release a state read under the previous grant.
+            if scope_fingerprint != DeviceAccess(self.hass, self._conf()).fingerprint():
+                await self._publish_result(client, effective_msg_id, success=False, status=409, error="device_grant_changed")
+                return
             if not await self._publish_result(client, effective_msg_id, **result_payload):
                 return
             if method.upper() == "GET" and path.rstrip("/") == "/api/states":

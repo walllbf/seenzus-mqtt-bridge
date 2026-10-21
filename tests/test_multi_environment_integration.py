@@ -7,8 +7,10 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from seenzus_bridge.ha_dispatcher import dispatch
+from seenzus_bridge.operation_store import PersistentOperationStore
 from tests.helpers import AsyncFakeMQTTClient
 from tests.test_device_access import home
+from tests.test_command_behavior import _MemoryStorage
 
 
 def messages(client):
@@ -121,3 +123,42 @@ async def test_relay_recovery_choices_follow_local_developer_preset(home, monkey
     result = await flow.async_step_seamless({})
     assert parse_qs(urlparse(result["url"]).query)["available_environments"] == [expected]
     assert urlparse(result["url"]).netloc == "app.seenzus.cn"
+
+
+@pytest.mark.asyncio
+async def test_revoke_while_persisting_operation_result_does_not_publish_old_state(home, monkeypatch):
+    hass, _, _, entry, bridge = home
+    client = AsyncFakeMQTTClient()
+    bridge._operation_store = PersistentOperationStore(hass, entry.entry_id, _MemoryStorage())
+    complete = bridge._operation_store.complete
+
+    async def revoke_after_write(*args):
+        result = await complete(*args)
+        entry.options = {"device_scope": "selected", "allowed_device_ids": [], "allowed_entity_registry_ids": []}
+        return result
+
+    monkeypatch.setattr(bridge._operation_store, "complete", revoke_after_write)
+    await bridge._handle_v2_command("read", json.dumps({
+        "method": "GET", "path": "/api/states/light.city", "operationKey": "read-before-revoke",
+    }), client)
+    assert messages(client)[-1]["status"] == 409
+    assert messages(client)[-1]["error"] == "device_grant_changed"
+    assert all("data" not in message and "entityId" not in message for message in messages(client))
+
+
+@pytest.mark.asyncio
+async def test_revoke_during_result_ack_does_not_retain_the_old_catalog(home):
+    _, _, _, entry, bridge = home
+
+    class RevokeOnAck(AsyncFakeMQTTClient):
+        async def publish(self, topic, payload, **kwargs):
+            await super().publish(topic, payload, **kwargs)
+            entry.options = {"device_scope": "selected", "allowed_device_ids": [], "allowed_entity_registry_ids": []}
+
+    client = RevokeOnAck()
+    await bridge._handle_v2_command("catalog", json.dumps({
+        "method": "GET", "path": "/api/seenzus/device-catalog",
+    }), client)
+    assert len(client.published) == 1
+    assert all(message["topic"] != bridge._topics.catalog_topic for message in client.published)
+    assert bridge._build_device_catalog_payload(source="revoked")["devices"] == []
