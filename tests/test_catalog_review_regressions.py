@@ -308,3 +308,57 @@ async def test_app_return_html_is_localized(real_runtime, monkeypatch, language,
     assert f'lang="{language}"' in response.text
     assert expected in response.text
     assert "seenzus://pairing/done" in response.text
+
+
+async def test_bootstrap_cannot_overwrite_offline_during_acknowledgement(real_runtime, monkeypatch):
+    hass, _, coordinator, fake = real_runtime
+    release_catalog = asyncio.Event()
+    catalog_resumed = asyncio.Event()
+
+    async def catalog(*_args, **_kwargs):
+        await release_catalog.wait()
+        catalog_resumed.set()
+
+    monkeypatch.setattr(coordinator, "_publish_device_catalog", catalog)
+    await coordinator.async_start()
+    async with asyncio.timeout(2):
+        while not fake.clients or not fake.clients[0].published:
+            await asyncio.sleep(0)
+    client = fake.clients[0]
+    publish = client.publish
+
+    async def acknowledged_publish(topic, payload, **kwargs):
+        await publish(topic, payload, **kwargs)
+        if topic.endswith("/presence") and json.loads(payload)["status"] == "offline":
+            release_catalog.set()
+            await catalog_resumed.wait()
+
+    monkeypatch.setattr(client, "publish", acknowledged_publish)
+    await hass.async_stop(force=True)
+    assert [json.loads(item["payload"])["status"] for item in client.published
+            if item["topic"].endswith("/presence")] == ["online", "offline"]
+    assert not client.connected
+
+
+async def test_identity_changing_reload_clears_retained_topics_before_readiness(
+    real_runtime, monkeypatch,
+):
+    hass, entry, coordinator, fake = real_runtime
+
+    async def blocked_catalog(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(coordinator, "_publish_device_catalog", blocked_catalog)
+    await coordinator.async_start()
+    async with asyncio.timeout(2):
+        while not fake.clients or not fake.clients[0].published:
+            await asyncio.sleep(0)
+    old_topics = coordinator._topics
+    hass.config_entries.async_update_entry(entry, options={
+        "bridge_id": "replacement", "topic_root": "replacement/v2",
+    })
+    await coordinator.async_prepare_for_reload()
+    await coordinator.async_stop()
+    cleared = {item["topic"] for item in fake.clients[0].published
+               if item["payload"] == "" and item["retain"]}
+    assert cleared == {old_topics.presence_topic, old_topics.catalog_topic}

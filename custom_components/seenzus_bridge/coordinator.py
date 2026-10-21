@@ -257,6 +257,8 @@ class BridgeCoordinator:
         self._command_prefix = ""
         self._skip_offline_presence = False
         self._ha_started_event = asyncio.Event()
+        self._stopping = False
+        self._stop_complete = asyncio.Event()
         self._initial_snapshot_attempted = False
         self._initial_snapshot_task: asyncio.Task | None = None
         # Current-state domains coalesce under their entity_id key. Stateless
@@ -400,6 +402,8 @@ class BridgeCoordinator:
         return name_has_model_marker(attributes.get("friendly_name"))
 
     async def async_start(self) -> None:
+        self._stopping = False
+        self._stop_complete.clear()
         self._topics = self._resolve_topics()
         self._command_prefix = self._topics.command_sub[:-2]
         self.pairing_mode = self._resolve_pairing_mode()
@@ -525,6 +529,7 @@ class BridgeCoordinator:
 
     async def async_stop(self, *, shutting_down: bool = False) -> None:
         """Stop the runtime without allowing external I/O to delay HA."""
+        self._stopping = True
         self._unsubscribe_runtime_listeners()
         shutting_down = shutting_down or self.hass.state in {
             CoreState.stopping,
@@ -566,6 +571,7 @@ class BridgeCoordinator:
         self._reload_cleanup_deadline = None
         self.status = "stopped"
         self.mqtt_connected = False
+        self._stop_complete.set()
         _LOGGER.info("seenzus Bridge stopped")
         self._fire()
 
@@ -683,6 +689,7 @@ class BridgeCoordinator:
         return False
 
     async def async_prepare_for_reload(self) -> None:
+        self._stopping = True
         loop = asyncio.get_running_loop()
         self._reload_cleanup_deadline = (
             loop.time() + RELOAD_CLEANUP_TIMEOUT_SECONDS
@@ -698,12 +705,13 @@ class BridgeCoordinator:
             return
 
         self._skip_offline_presence = True
-        if self._mqtt_client is None:
+        cleanup_client = self._connected_client or self._mqtt_client
+        if cleanup_client is None:
             return
 
         cleanup = asyncio.gather(
             *(
-                self._publish(self._mqtt_client, topic, "", qos=1, retain=True)
+                self._publish(cleanup_client, topic, "", qos=1, retain=True)
                 for topic in topics_to_clear
             ),
             return_exceptions=True,
@@ -739,7 +747,7 @@ class BridgeCoordinator:
 
         client_id = build_mqtt_client_id(self._entry.entry_id)
 
-        while True:
+        while not self._stopping:
             retry_delay = 0
             try:
                 if not await self._connect_and_serve(aiomqtt, client_id):
@@ -886,6 +894,12 @@ class BridgeCoordinator:
                 await self._publish_presence("offline", client=client, required=True)
                 raise
             await self._try_pairing()
+
+            if self._stopping:
+                # Keep the socket open for the outstanding offline/retained
+                # acknowledgement. Cleanup cancels this task once it is done.
+                await self._stop_complete.wait()
+                return False
 
             self._mqtt_client = client
             self.status = "active"
@@ -1718,6 +1732,8 @@ class BridgeCoordinator:
     async def _publish_presence(
         self, status: str, *, client: Any | None = None, required: bool = False,
     ) -> None:
+        if status == "online" and self._stopping:
+            return
         publish_client = client or self._mqtt_client
         if publish_client is None or self._topics is None:
             return
