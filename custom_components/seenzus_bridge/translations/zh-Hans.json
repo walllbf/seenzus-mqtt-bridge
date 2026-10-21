@@ -185,5 +185,59 @@
     "mqtt_tls_required": {
       "message": "远程 Broker 的明文连接已阻止。打开「配置 → 重新配对或手动配置」，选择 mqtts/wss 和正确的 TLS 端口，或重新快速配对。"
     }
+  },
+  "selector": {
+    "pairing_mode": {
+      "options": {
+        "seamless": "快速配对（推荐）",
+        "manual": "手动配置（高级）"
+      }
+    },
+    "mqtt_scheme": {
+      "options": {
+        "mqtts": "MQTT over TLS",
+        "wss": "安全 WebSocket",
+        "mqtt": "MQTT（仅限本地 IP）",
+        "ws": "WebSocket（仅限本地 IP）"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "状态",
+        "state": {
+          "starting": "启动中",
+          "active": "运行中",
+          "error": "发生错误",
+          "stopped": "已停止"
+        }
+      },
+      "request_count": {
+        "name": "请求次数"
+      },
+      "result_count": {
+        "name": "结果回包次数"
+      },
+      "state_push_count": {
+        "name": "状态推送次数"
+      },
+      "error_count": {
+        "name": "错误次数"
+      },
+      "pairing_status": {
+        "name": "配对状态"
+      }
+    }
+  },
+  "common": {
+    "diagnostic_title": "seenzus Bridge 快速配对诊断",
+    "diagnostic_message": "快速配对失败：{reason}\n\n{diagnostic}",
+    "paired_title": "seenzus Bridge 配对完成",
+    "paired_message": "seenzus MQTT Bridge 已成功绑定。\n\n## 👉 {link}",
+    "return_label": "返回 seenzus 应用",
+    "manual_return": "若链接无法点击，请手动打开：`{url}`",
+    "opening_app": "正在打开 seenzus 应用…",
+    "return_fallback": "如未自动跳转，请点击这里"
   }
 }

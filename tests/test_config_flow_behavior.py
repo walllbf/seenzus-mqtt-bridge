@@ -711,6 +711,7 @@ async def test_options_seamless_form_has_no_fields_ignoring_stored_api_base() ->
         }
     )
     flow = SavanAIBridgeOptionsFlow(config_entry)
+    flow.hass = FakeHass()
     flow.async_show_form = lambda *, step_id, data_schema, errors, description_placeholders=None: {
         "type": "form",
         "step_id": step_id,
@@ -1126,8 +1127,8 @@ def test_record_quick_pair_diagnostic_creates_persistent_notification(monkeypatc
     assert created == [
         {
             "hass": hass,
-            "message": "快速配对失败：quick_pair_session_failed\n\nhttp_status=500 | message=boom",
-            "title": "seenzus Bridge 快速配对诊断",
+            "message": "Quick pairing failed: quick_pair_session_failed\n\nhttp_status=500 | message=boom",
+            "title": "seenzus Bridge quick pairing diagnostics",
             "notification_id": "seenzus_bridge_quick_pair_diagnostic",
         }
     ]
@@ -1179,11 +1180,11 @@ def test_notify_app_return_creates_notification_and_clears_diagnostic(monkeypatc
         {
             "hass": hass,
             "message": (
-                "seenzus MQTT Bridge 已成功绑定。\n\n## 👉 "
+                "seenzus MQTT Bridge is paired.\n\n## 👉 "
                 f'<a href="{QUICK_PAIR_APP_RETURN_PATH}?token=app-return-token" '
-                'target="_blank">返回 seenzus 应用</a>'
+                'target="_blank">Return to seenzus</a>'
             ),
-            "title": "seenzus Bridge 配对完成",
+            "title": "seenzus Bridge paired",
             "notification_id": "seenzus_bridge_app_return",
         }
     ]
@@ -1196,7 +1197,8 @@ def test_notify_app_return_creates_notification_and_clears_diagnostic(monkeypatc
 def test_notify_app_return_falls_back_to_raw_url_without_http(monkeypatch) -> None:
     # No hass.http surface -> transit link can't be built -> the notification
     # still goes out, linking the raw URL directly (no auto-dismiss).
-    hass = SimpleNamespace(data={})
+    hass = FakeHass()
+    del hass.http
     created: list[str] = []
 
     monkeypatch.setattr(
@@ -1212,9 +1214,9 @@ def test_notify_app_return_falls_back_to_raw_url_without_http(monkeypatch) -> No
     # 回退直链附带可复制的明文地址：自定义 scheme 的 href 会被前端 markdown
     # 的 xss 过滤器清空，锚点可能是死链接。
     assert created == [
-        "seenzus MQTT Bridge 已成功绑定。\n\n## 👉 "
-        '<a href="seenzus://pairing/done?session=wps_1" target="_blank">返回 seenzus 应用</a>'
-        "\n\n若链接无法点击，请手动打开：`seenzus://pairing/done?session=wps_1`"
+        "seenzus MQTT Bridge is paired.\n\n## 👉 "
+        '<a href="seenzus://pairing/done?session=wps_1" target="_blank">Return to seenzus</a>'
+        "\n\nIf the link does not open, open this address manually: `seenzus://pairing/done?session=wps_1`"
     ]
 
 
@@ -1612,9 +1614,9 @@ async def test_seamless_finish_creates_entry_with_return_link(monkeypatch) -> No
     assert notified == [
         {
             "message": (
-                "seenzus MQTT Bridge 已成功绑定。\n\n## 👉 "
+                "seenzus MQTT Bridge is paired.\n\n## 👉 "
                 f'<a href="{QUICK_PAIR_APP_RETURN_PATH}?token=app-return-token" '
-                'target="_blank">返回 seenzus 应用</a>'
+                'target="_blank">Return to seenzus</a>'
             ),
             "notification_id": "seenzus_bridge_app_return",
         }
