@@ -711,6 +711,7 @@ async def test_options_seamless_form_has_no_fields_ignoring_stored_api_base() ->
         }
     )
     flow = SavanAIBridgeOptionsFlow(config_entry)
+    flow.hass = FakeHass()
     flow.async_show_form = lambda *, step_id, data_schema, errors, description_placeholders=None: {
         "type": "form",
         "step_id": step_id,
