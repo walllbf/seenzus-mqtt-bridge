@@ -12,7 +12,7 @@ from voluptuous_serialize import convert
 
 from homeassistant import loader
 from homeassistant.config_entries import ConfigEntries
-from homeassistant.core import CoreState, HomeAssistant
+from homeassistant.core import CoreState, HassJob, HomeAssistant
 from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 from homeassistant.helpers.config_validation import custom_serializer
 from homeassistant.helpers.translation import async_get_translations
@@ -92,6 +92,8 @@ async def test_real_core_stop_cleans_connected_bridge_before_task_cancellation(
 
     monkeypatch.setattr(client, "publish", publish)
     monkeypatch.setattr("seenzus_bridge.coordinator.SHUTDOWN_CLEANUP_TIMEOUT_SECONDS", 0.03)
+    other_shutdown_job = AsyncMock()
+    hass.async_add_shutdown_job(HassJob(other_shutdown_job))
     async with asyncio.timeout(1):
         await hass.async_stop(force=True)
 
@@ -99,6 +101,7 @@ async def test_real_core_stop_cleans_connected_bridge_before_task_cancellation(
     assert runtime_task.done()
     assert not client.connected
     assert coordinator.status == "stopped"
+    other_shutdown_job.assert_awaited_once()
     if blocked_publish:
         assert "shutdown" in coordinator.last_cleanup_diagnostic
     else:
@@ -211,3 +214,30 @@ async def test_credentials_are_preserved_from_entry_to_mqtt_client(
     await start_connected(coordinator)
     assert fake.clients[0].connect_kwargs["username"] == credential
     assert fake.clients[0].connect_kwargs["password"] == credential
+
+
+async def test_manual_stop_unregisters_shutdown_job(real_runtime):
+    hass, _, coordinator, fake = real_runtime
+    await start_connected(coordinator)
+    client = fake.clients[0]
+    await coordinator.async_stop()
+    await hass.async_stop(force=True)
+    offline = [item for item in client.published if item["topic"].endswith("/presence")
+               and json.loads(item["payload"])["status"] == "offline"]
+    assert len(offline) == 1
+
+
+@pytest.mark.parametrize("password", [None, "", " "])
+async def test_empty_password_is_distinct_from_missing_password(real_runtime, password):
+    hass, entry, coordinator, fake = real_runtime
+    data = _build_quick_pair_entry_data(
+        api_base="https://example.com",
+        status_result=PairingStatusResult(ok=True, status="confirmed", mqtt={
+            "host": "broker.example.com", "scheme": "mqtts",
+            "username": "user", "password": password,
+        }),
+    )
+    assert data["mqtt_password"] == password
+    hass.config_entries.async_update_entry(entry, data=data)
+    await start_connected(coordinator)
+    assert fake.clients[0].connect_kwargs["password"] == password

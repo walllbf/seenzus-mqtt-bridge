@@ -20,3 +20,19 @@ for path in (REPO_ROOT, REPO_ROOT / "custom_components"):
 def bridge_manifest_version() -> str:
     manifest = REPO_ROOT / "custom_components" / "seenzus_bridge" / "manifest.json"
     return json.loads(manifest.read_text(encoding="utf-8"))["version"]
+
+
+@pytest.fixture(autouse=True)
+def fake_hass_translation_loading(monkeypatch):
+    """FakeHass has no Core loader; real-HA regressions keep the actual loader."""
+    from tests.helpers import FakeHass
+    from seenzus_bridge import ui_text
+
+    load = ui_text.async_get_translations
+
+    async def load_for_hass(hass, *args, **kwargs):
+        if isinstance(hass, FakeHass):
+            return {}
+        return await load(hass, *args, **kwargs)
+
+    monkeypatch.setattr(ui_text, "async_get_translations", load_for_hass)

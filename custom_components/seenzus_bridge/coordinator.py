@@ -21,7 +21,7 @@ from typing import Any
 from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_STATE_CHANGED
-from homeassistant.core import CoreState, Event, HomeAssistant, callback
+from homeassistant.core import CoreState, Event, HassJob, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.recorder import DATA_INSTANCE as RECORDER_INSTANCE
 
@@ -249,6 +249,7 @@ class BridgeCoordinator:
         self._catalog_refresh_task: asyncio.Task | None = None
         self._catalog_refresh_pending = False
         self._ha_started_unsub = None
+        self._shutdown_unsub: Callable[[], None] | None = None
         self._mqtt_client = None
         self._aiomqtt = None
         self._topics: BridgeTopics | None = None
@@ -271,11 +272,18 @@ class BridgeCoordinator:
         self._snapshot_client: Any = None
         self._operation_store = PersistentOperationStore(hass, entry.entry_id)
 
-    def register_update_listener(self, cb: Callable[[], None]) -> None:
+    def register_update_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
         self._listeners.append(cb)
 
+        @callback
+        def unsubscribe() -> None:
+            if cb in self._listeners:
+                self._listeners.remove(cb)
+
+        return unsubscribe
+
     def _fire(self) -> None:
-        for cb in self._listeners:
+        for cb in tuple(self._listeners):
             cb()
 
     def _conf(self) -> dict[str, Any]:
@@ -400,6 +408,7 @@ class BridgeCoordinator:
             self.pairing_status = PAIRING_STATUS_PAIRED
 
         self._aiomqtt = await self._async_import_aiomqtt()
+        self._shutdown_unsub = self.hass.async_add_shutdown_job(HassJob(self._async_shutdown))
         self._subscribe_device_registry()
 
         conf = self._conf()
@@ -507,10 +516,16 @@ class BridgeCoordinator:
                 # Use the bounded/coalesced publisher, but never claim an HA state-change event.
                 self._on_state_changed(Event("seenzus_display_metadata_changed", {"new_state": state}))
 
-    async def async_stop(self) -> None:
+    async def _async_shutdown(self) -> None:
+        """Run before Core cancels background tasks and closes the MQTT socket."""
+        # Core is iterating its shutdown-job list. Do not mutate that list here.
+        self._shutdown_unsub = None
+        await self.async_stop(shutting_down=True)
+
+    async def async_stop(self, *, shutting_down: bool = False) -> None:
         """Stop the runtime without allowing external I/O to delay HA."""
         self._unsubscribe_runtime_listeners()
-        shutting_down = self.hass.state in {
+        shutting_down = shutting_down or self.hass.state in {
             CoreState.stopping,
             CoreState.final_write,
             CoreState.stopped,
@@ -553,6 +568,9 @@ class BridgeCoordinator:
         self._fire()
 
     def _unsubscribe_runtime_listeners(self) -> None:
+        if self._shutdown_unsub is not None:
+            self._shutdown_unsub()
+            self._shutdown_unsub = None
         if self._ha_started_unsub is not None:
             self._ha_started_unsub()
             self._ha_started_unsub = None
@@ -583,6 +601,10 @@ class BridgeCoordinator:
                 task.cancel()
 
     async def _async_graceful_stop(self) -> None:
+        # A heartbeat must not overwrite the final retained offline message
+        # while its QoS acknowledgement is pending.
+        self._cleanup_stage = "heartbeat cancellation"
+        await self._stop_presence_heartbeat()
         self._cleanup_stage = "offline presence"
         if (
             self._mqtt_client is not None
@@ -799,8 +821,8 @@ class BridgeCoordinator:
             ) from err
         scheme, _ = _effective_transport(conf)
         port = int(conf.get(CONF_MQTT_PORT, DEFAULT_PORT_BY_MQTT_SCHEME[scheme]))
-        username = str(conf.get(CONF_MQTT_USERNAME, "")).strip() or None
-        password = str(conf.get(CONF_MQTT_PASSWORD, "")).strip() or None
+        username = conf.get(CONF_MQTT_USERNAME) or None
+        password = conf.get(CONF_MQTT_PASSWORD)
         if self.pairing_mode == PAIRING_MODE_SEAMLESS:
             self._set_pairing_step("bridge_starting")
             if self.pairing_status in {PAIRING_STATUS_IDLE, PAIRING_STATUS_WAITING_EXTERNAL_AUTH}:

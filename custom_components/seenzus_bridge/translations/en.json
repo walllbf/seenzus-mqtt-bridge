@@ -185,5 +185,57 @@
     "mqtt_tls_required": {
       "message": "The plaintext connection to the remote broker was blocked. Open Configure → Re-pair or manual setup, select mqtts/wss and the correct TLS port, or run quick pairing again."
     }
+  },
+  "selector": {
+    "pairing_mode": {
+      "options": {
+        "seamless": "Quick pair (recommended)",
+        "manual": "Manual setup (advanced)"
+      }
+    },
+    "mqtt_scheme": {
+      "options": {
+        "mqtts": "MQTT over TLS",
+        "wss": "MQTT over secure WebSocket",
+        "mqtt": "MQTT (local IP only)",
+        "ws": "WebSocket (local IP only)"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "Status",
+        "state": {
+          "starting": "Starting",
+          "active": "Running",
+          "error": "Error",
+          "stopped": "Stopped"
+        }
+      },
+      "request_count": {
+        "name": "Requests"
+      },
+      "result_count": {
+        "name": "Results"
+      },
+      "state_push_count": {
+        "name": "State updates"
+      },
+      "error_count": {
+        "name": "Errors"
+      },
+      "pairing_status": {
+        "name": "Pairing status"
+      }
+    }
+  },
+  "common": {
+    "diagnostic_title": "seenzus Bridge quick pairing diagnostics",
+    "diagnostic_message": "Quick pairing failed: {reason}\n\n{diagnostic}",
+    "paired_title": "seenzus Bridge paired",
+    "paired_message": "seenzus MQTT Bridge is paired.\n\n## 👉 {link}",
+    "return_label": "Return to seenzus",
+    "manual_return": "If the link does not open, open this address manually: `{url}`"
   }
 }

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.const import EntityCategory
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -22,13 +22,6 @@ from .const import (
     QUICK_PAIR_LAST_DIAGNOSTIC,
 )
 from . import BridgeCoordinator
-
-STATUS_LABELS: dict[str, str] = {
-    "starting": "启动中",
-    "active":   "运行中",
-    "error":    "发生错误",
-    "stopped":  "已停止",
-}
 
 STATUS_ICONS: dict[str, str] = {
     "starting": "mdi:loading",
@@ -56,10 +49,10 @@ async def async_setup_entry(
     async_add_entities(
         [
             BridgeStatusSensor(coordinator, entry),
-            BridgeMetricSensor(coordinator, entry, "request_count", "请求次数", "mdi:counter"),
-            BridgeMetricSensor(coordinator, entry, "result_count", "结果回包次数", "mdi:counter"),
-            BridgeMetricSensor(coordinator, entry, "state_push_count", "状态推送次数", "mdi:counter"),
-            BridgeMetricSensor(coordinator, entry, "error_count", "错误次数", "mdi:alert-circle"),
+            BridgeMetricSensor(coordinator, entry, "request_count", "mdi:counter"),
+            BridgeMetricSensor(coordinator, entry, "result_count", "mdi:counter"),
+            BridgeMetricSensor(coordinator, entry, "state_push_count", "mdi:counter"),
+            BridgeMetricSensor(coordinator, entry, "error_count", "mdi:alert-circle"),
             BridgePairingStateSensor(coordinator, entry),
         ],
         update_before_add=True,
@@ -70,6 +63,7 @@ class _BridgeBaseSensor(SensorEntity):
     """Shared coordinator listener behavior."""
 
     _attr_should_poll = False
+    _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: BridgeCoordinator, entry: ConfigEntry) -> None:
@@ -77,23 +71,27 @@ class _BridgeBaseSensor(SensorEntity):
         self._entry = entry
 
     async def async_added_to_hass(self) -> None:
-        self._coordinator.register_update_listener(self.async_write_ha_state)
+        self.async_on_remove(
+            self._coordinator.register_update_listener(self.async_write_ha_state)
+        )
 
 
 class BridgeStatusSensor(_BridgeBaseSensor):
     """显示桥接运行状态、请求计数、错误信息."""
 
     _attr_icon = "mdi:robot"
+    _attr_translation_key = "status"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["starting", "active", "error", "stopped"]
 
     def __init__(self, coordinator: BridgeCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_status"
-        self._attr_name      = f"{PRODUCT_NAME} 状态"
         self._attr_entity_category = None
 
     @property
     def native_value(self) -> str:
-        return STATUS_LABELS.get(self._coordinator.status, self._coordinator.status)
+        return self._coordinator.status
 
     @property
     def icon(self) -> str:
@@ -141,13 +139,13 @@ class BridgeStatusSensor(_BridgeBaseSensor):
 class BridgeMetricSensor(_BridgeBaseSensor):
     """Expose one numeric metric as independent sensor."""
 
-    def __init__(self, coordinator: BridgeCoordinator, entry: ConfigEntry, key: str, name: str, icon: str) -> None:
+    def __init__(self, coordinator: BridgeCoordinator, entry: ConfigEntry, key: str, icon: str) -> None:
         super().__init__(coordinator, entry)
         if key not in _METRIC_ATTRS:
             raise ValueError(f"Unknown bridge metric key: {key}")
         self._key = key
         self._attr_unique_id = f"{entry.entry_id}_{key}"
-        self._attr_name = f"{PRODUCT_NAME} {name}"
+        self._attr_translation_key = key
         self._attr_icon = icon
 
     @property
@@ -159,11 +157,11 @@ class BridgePairingStateSensor(_BridgeBaseSensor):
     """Expose pairing state as dedicated sensor."""
 
     _attr_icon = "mdi:link-variant"
+    _attr_translation_key = "pairing_status"
 
     def __init__(self, coordinator: BridgeCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_pairing_status"
-        self._attr_name = f"{PRODUCT_NAME} 配对状态"
 
     @property
     def native_value(self) -> str:

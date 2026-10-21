@@ -30,6 +30,7 @@ from homeassistant.helpers.config_entry_oauth2_flow import (
 from homeassistant.helpers.network import get_url
 
 from .const import DOMAIN, PRODUCT_NAME, QUICK_PAIR_LAST_DIAGNOSTIC
+from .ui_text import ui_text
 
 QUICK_PAIR_CALLBACK_PATH = "/api/seenzus_bridge/quick_pair/callback"
 QUICK_PAIR_CALLBACK_VIEW_REGISTERED = "quick_pair_callback_view_registered"
@@ -378,7 +379,7 @@ def _build_quick_pair_callback_context(
 
 def _format_quick_pair_diagnostic(diagnostic: dict[str, str]) -> str:
     if not diagnostic:
-        return "无诊断信息"
+        return "No diagnostic details"
     parts = []
     for key in ("url", "http_status", "error_code", "message", "response"):
         value = diagnostic.get(key)
@@ -411,8 +412,8 @@ def _record_quick_pair_diagnostic(hass: HomeAssistant, reason: str, diagnostic: 
     try:
         persistent_notification.async_create(
             hass,
-            f"快速配对失败：{reason}\n\n{formatted}",
-            title="seenzus Bridge 快速配对诊断",
+            ui_text(hass, "diagnostic_message", reason=reason, diagnostic=formatted),
+            title=ui_text(hass, "diagnostic_title"),
             notification_id=_NOTIFY_DIAGNOSTIC_ID,
         )
     except Exception:  # noqa: BLE001
@@ -448,13 +449,16 @@ def _notify_app_return(hass: HomeAssistant, app_return_url: str) -> None:
     # 仍在、第二次点击（地址未变）完全无操作。带 target 的锚点被放行为真实
     # 浏览器导航；HA 的 markdown 渲染（xss 库白名单 a[target|href|title]）
     # 会保留 target 属性。
-    link_html = f'<a href="{_html_escape(link_url, quote=True)}" target="_blank">返回 seenzus 应用</a>'
-    message = f"{PRODUCT_NAME} 已成功绑定。\n\n## 👉 {link_html}"
+    link_html = (
+        f'<a href="{_html_escape(link_url, quote=True)}" target="_blank">'
+        f'{_html_escape(ui_text(hass, "return_label"))}</a>'
+    )
+    message = ui_text(hass, "paired_message", link=link_html)
     if transit_url is None:
         # 回退直链时，seenzus:// 这类自定义 scheme 的 href 会被前端 markdown
         # 的 xss 过滤器清空（js-xss 默认 safeAttrValue 只放行 http(s)/mailto
         # 等标准 scheme）成死链接——补一行可复制的明文地址兜底。
-        message += f"\n\n若链接无法点击，请手动打开：`{app_return_url}`"
+        message += "\n\n" + ui_text(hass, "manual_return", url=app_return_url)
     try:
         # 配对成功即过期：清掉传感器上挂着的上一次失败诊断。
         hass.data.setdefault(DOMAIN, {}).pop(QUICK_PAIR_LAST_DIAGNOSTIC, None)
@@ -462,7 +466,7 @@ def _notify_app_return(hass: HomeAssistant, app_return_url: str) -> None:
         persistent_notification.async_create(
             hass,
             message,
-            title="seenzus Bridge 配对完成",
+            title=ui_text(hass, "paired_title"),
             notification_id=_NOTIFY_APP_RETURN_ID,
         )
     except Exception:  # noqa: BLE001
