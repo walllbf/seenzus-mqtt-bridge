@@ -8,13 +8,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from voluptuous_serialize import convert
+from voluptuous_serialize import UNSUPPORTED, convert
 
 from homeassistant import loader
 from homeassistant.config_entries import ConfigEntries
 from homeassistant.core import CoreState, HassJob, HomeAssistant
 from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
-from homeassistant.helpers.config_validation import custom_serializer
+from homeassistant.helpers.selector import Selector
 from homeassistant.helpers.translation import async_get_translations
 
 from seenzus_bridge import BridgeCoordinator
@@ -29,6 +29,11 @@ from tests.test_lifecycle_behavior import _make_core_config_entry
 DOMAIN = "seenzus_bridge"
 INTEGRATION_PATH = Path(__file__).resolve().parents[1] / "custom_components" / DOMAIN
 pytestmark = pytest.mark.timeout(10)
+
+
+def serialize_selector(schema):
+    """Use real Core selectors; Core 2026 uses a different UNSUPPORTED sentinel."""
+    return schema.serialize() if isinstance(schema, Selector) else UNSUPPORTED
 
 
 @pytest.fixture
@@ -142,7 +147,7 @@ async def test_serialized_setup_choices_use_runtime_selector_translations(
     # This isolated entry is for lifecycle tests, not an existing integration setup.
     hass.config_entries._entries.clear()
     result = await flow.async_step_user()
-    field = convert(result["data_schema"], custom_serializer=custom_serializer)[0]
+    field = convert(result["data_schema"], custom_serializer=serialize_selector)[0]
     select = field["selector"]["select"]
     translations = await async_get_translations(hass, language, "selector", {DOMAIN})
     key = select["translation_key"]

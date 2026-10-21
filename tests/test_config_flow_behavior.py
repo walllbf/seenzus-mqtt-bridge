@@ -1196,7 +1196,7 @@ def test_notify_app_return_creates_notification_and_clears_diagnostic(monkeypatc
 def test_notify_app_return_falls_back_to_raw_url_without_http(monkeypatch) -> None:
     # No hass.http surface -> transit link can't be built -> the notification
     # still goes out, linking the raw URL directly (no auto-dismiss).
-    hass = SimpleNamespace(data={})
+    hass = SimpleNamespace(data={}, config=SimpleNamespace(language="en"))
     created: list[str] = []
 
     monkeypatch.setattr(
