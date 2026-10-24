@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from aiohttp.test_utils import TestClient, TestServer
-from homeassistant import loader
+from homeassistant import auth, loader
 from homeassistant.components.frontend import DATA_EXTRA_MODULE_URL, UrlManager
 from homeassistant.config_entries import ConfigEntries
 from homeassistant.core import HomeAssistant
@@ -103,6 +103,7 @@ async def test_installed_core_serves_actual_module_and_png_without_auth(tmp_path
     loader.async_setup(hass)
     hass.config_entries = ConfigEntries(hass, {})
     try:
+        hass.auth = await auth.auth_manager_from_config(hass, [], [])
         assert await async_setup_component(hass, "http", {
             "http": {"server_host": "127.0.0.1"},
         })

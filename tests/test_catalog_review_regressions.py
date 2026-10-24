@@ -96,10 +96,14 @@ async def test_real_core_stop_cleans_connected_bridge_before_task_cancellation(
         await original_publish(topic, payload, **kwargs)
 
     monkeypatch.setattr(client, "publish", publish)
-    monkeypatch.setattr("seenzus_bridge.coordinator.SHUTDOWN_CLEANUP_TIMEOUT_SECONDS", 0.03)
+    if blocked_publish:
+        monkeypatch.setattr("seenzus_bridge.coordinator.SHUTDOWN_CLEANUP_TIMEOUT_SECONDS", 0.03)
+    # The normal path uses its real budget: on shared/debug CI, heartbeat
+    # cancellation alone can take >30ms. Only the blocked-publish case needs
+    # an artificially short limit to exercise the bounded shutdown path.
     other_shutdown_job = AsyncMock()
     hass.async_add_shutdown_job(HassJob(other_shutdown_job))
-    async with asyncio.timeout(1):
+    async with asyncio.timeout(1 if blocked_publish else 4):
         await hass.async_stop(force=True)
 
     assert attempted == [True], "Offline must be attempted while MQTT is still connected"
