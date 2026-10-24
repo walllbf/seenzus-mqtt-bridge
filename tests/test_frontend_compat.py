@@ -11,6 +11,7 @@ from homeassistant import auth, loader
 from homeassistant.components.frontend import DATA_EXTRA_MODULE_URL, UrlManager
 from homeassistant.config_entries import ConfigEntries
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 from homeassistant.setup import async_setup_component
 import pytest
 
@@ -103,6 +104,11 @@ async def test_installed_core_serves_actual_module_and_png_without_auth(tmp_path
     loader.async_setup(hass)
     hass.config_entries = ConfigEntries(hass, {})
     try:
+        await ar.async_load(hass)
+        if setup_devices := getattr(dr, "async_setup", None):
+            setup_devices(hass)
+        await dr.async_load(hass)
+        await er.async_load(hass)
         hass.auth = await auth.auth_manager_from_config(hass, [], [])
         assert await async_setup_component(hass, "http", {
             "http": {"server_host": "127.0.0.1"},
