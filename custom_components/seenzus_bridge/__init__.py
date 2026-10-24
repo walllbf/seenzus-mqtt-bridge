@@ -23,6 +23,7 @@ from .coordinator import (  # noqa: F401
 )
 from .mqtt_requirements import async_ensure_mqtt_requirements
 from .mqtt_transport import MqttTransportError, validate_mqtt_transport
+from .frontend_compat import async_setup_frontend_compat
 
 PLATFORMS = ["sensor"]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -31,6 +32,7 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Prepare the integration before config flows and entries start."""
     await async_ensure_mqtt_requirements(hass)
+    await async_setup_frontend_compat(hass)
     return True
 
 

@@ -2,6 +2,8 @@
 
 seenzus MQTT Bridge 运行在 Home Assistant 本地，通过公网 MQTT 实现云端与局域网 HA 的双向联通，无需内网穿透。
 
+旧 HACS / 极速版的图标显示兼容见[图标兼容说明](docs/hacs-legacy-icons.zh-CN.md)。添加并启用 seenzus 集成后自动使用随包本地图标，无需手动修改 HACS。
+
 主要特性：
 
 - 按 `bridgeId` 隔离 Topic
@@ -503,7 +505,7 @@ docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 - Catalog 增加原始 `modelId`，为应用识别已知电表的电量清零用途提供型号依据；增加 HA config entry 分组信息，为应用设备归属提供依据，不传递账号凭据（#48 / #53）
 - 在线状态与配对信息上报的版本号和 manifest 保持一致，修复旧版本号残留（#55）
 - 兼容性 CI 持续验证最低支持版与官方最新稳定版 HA，并增加真实 HA 目录、状态和服务契约测试（#50）
-- 已有配对与配置继续保留，升级后重启 Home Assistant；名称和清零显示效果需要配套新版 Seenzus 应用。本版本不包含开发中的多条目、多环境配对功能
+- 已有配对与配置继续保留，升级后重启 Home Assistant；名称和清零显示效果需要配套新版 seenzus 应用。本版本不包含开发中的多条目、多环境配对功能
 
 ### v0.2.9 (2026-09-01)
 
@@ -513,7 +515,7 @@ docs/MQTT_BRIDGE_EVENTS_SPEC.zh-CN.md
 ### v0.2.8 (2026-08-30)
 
 - MQTT 启动顺序调整为先发布保留设备目录并进入 ready / command pump，再在后台执行最佳努力的全量状态快照；大型 HA 实例的初始快照被中断时，重连不再从零重放并阻塞设备上线（#45 / #46）
-- Quick Pair 回调读到 Seenzus App 会话标记（`?app=1`，由服务端在授权会话来自 App 内嵌 WebView 时附加）后，由插件服务端自己把 config flow 从 `EXTERNAL_STEP_DONE` 推进到终态（`create_entry` / `abort` / 表单），App 内壳全程配对不再依赖常驻 HA 前端标签页，集成条目可靠建立
+- Quick Pair 回调读到 seenzus App 会话标记（`?app=1`，由服务端在授权会话来自 App 内嵌 WebView 时附加）后，由插件服务端自己把 config flow 从 `EXTERNAL_STEP_DONE` 推进到终态（`create_entry` / `abort` / 表单），App 内壳全程配对不再依赖常驻 HA 前端标签页，集成条目可靠建立
 - 推进步数带上限（`MAX_FLOW_RESUME_STEPS=4`）防死循环，耗尽上限仍未到终态时明确报错；`UnknownFlow` 视为成功，兼容前端标签页抢先完成配对的竞态
 - 浏览器路径（无 `app` 标记）保持单次 configure，网页版行为不变；回调页 `window.close()` 无效时 300ms 兜底跳转集成页，不再白屏
 - 测试 fake 的 `async_configure` 升级为可脚本化结果队列，能跑出真实 HA 的两步推进语义（本 bug 即由旧 fake 恒返 None 漏过）
