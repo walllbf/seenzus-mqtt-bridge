@@ -6,7 +6,7 @@ evidence: [tests/test_pairing_origin.py, tools/direct_pairing_preview/browser-te
 
 # 应用来源自动配对验证版 · 0.2.16b1
 
-本版用于验证「从哪个应用发起，就回哪个环境授权」，无需选择环境、填写 HA 地址或输入引导码。当前交付为电脑浏览器验证版，包含 #77 基线 `b1cc89318d1a997a21603ba542a5d097dc38c33c` 的多环境及设备范围功能。#77 保持未合并。
+本版用于验证「从哪个应用发起，就回哪个环境授权」，无需选择环境、额外初始化桥接入口或输入引导码。首次使用 My Home Assistant 时，仍按它原有的流程确认自己的 HA 地址。当前交付为电脑浏览器验证版，包含 #77 基线 `b1cc89318d1a997a21603ba542a5d097dc38c33c` 的多环境及设备范围功能。#77 保持未合并。
 
 ## 安装和开始验证
 
@@ -44,7 +44,7 @@ evidence: [tests/test_pairing_origin.py, tools/direct_pairing_preview/browser-te
 | --- | --- |
 | HA Core 2025.1.4 / Python 3.13 | 642 项测试通过 |
 | HA Core 2026.10.2 / Python 3.14 | 642 项测试通过 |
-| Chromium 窗口通信、跨源隔离与 CSP | 7 项通过；覆盖三个环境、发起页关闭、COOP 阻断、旧流程和重复环境 |
+| Chromium 窗口通信、跨源隔离与 CSP | 8 项通过；覆盖三个环境、发起页关闭、COOP 阻断、旧窗口、两端时钟差异和重复环境 |
 | 真实 UAT 静态入口 + 真实 My Home Assistant 跳转 | 1 项通过；HA 页、交接上下文和授权目的页采用测试夹具 |
 | 用户实际 HA 首次添加、真实授权、MQTT 上线及设备范围 | 等待用户验收 |
 | 手机 Android/iOS/HarmonyOS 原生交接 | 尚未适配，不在本版验收范围 |

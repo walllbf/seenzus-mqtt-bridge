@@ -41,7 +41,7 @@ async function run(browser, name, origin, options = {}) {
       await route.fulfill({ contentType: 'text/html', body: '<button id="authorize">Continue in app</button><script>document.querySelector("button").onclick=()=>window.open("/api/seenzus_bridge/quick_pair/origin")</script>' });
     } else if (url.origin === haOrigin && url.pathname.endsWith('/origin')) {
       const params = { ...fixture.params, redirect_uri: callback, configured_environments: options.duplicate ? 'uat' : '' };
-      const state = { flow_id: 'browser-fixture', redirect_uri: callback, pairing_started_at: Date.now() - (options.stale ? 60000 : 0) };
+      const state = { flow_id: 'browser-fixture', redirect_uri: callback, pairing_started_at: Date.now() - (options.clockSkew ? 86400000 : 0) };
       // The browser only treats JWT content as a routing hint. Python tests check
       // signature, active flow, replacement, expiry and escaping separately.
       currentState = `fixture.${Buffer.from(JSON.stringify(state)).toString('base64url')}.fixture`;
@@ -70,6 +70,15 @@ async function run(browser, name, origin, options = {}) {
     const ha = await haEvent;
     if (options.realMyHa) await ha.locator('a.open-link').click({ timeout: 30000 });
     await ha.waitForURL(options.realMyHa ? '**/_my_redirect/config_flow_start?**' : haOrigin + '/config/integrations');
+    let replacement;
+    if (options.stale) {
+      // A retained old HA tab must not claim a new launch in the same app page.
+      await page.reload();
+      const replacementEvent = context.waitForEvent('page');
+      await page.locator('#connect').click();
+      replacement = await replacementEvent;
+      await replacement.waitForURL(haOrigin + '/config/integrations');
+    }
     if (options.closed) await page.close();
     const externalEvent = context.waitForEvent('page');
     await ha.locator('#authorize').click();
@@ -79,6 +88,12 @@ async function run(browser, name, origin, options = {}) {
       await external.waitForFunction(() => document.getElementById('status')?.textContent.includes('无法取得'), { timeout: 15000 });
       assert(new URL(external.url()).pathname.endsWith('/origin'));
       assert(!visited.some(value => known.includes(value) && value !== origin));
+      if (replacement) {
+        const currentEvent = context.waitForEvent('page');
+        await replacement.locator('#authorize').click();
+        const current = await currentEvent;
+        await current.waitForURL(origin + '/pair/bootstrap?**');
+      }
     } else if (options.duplicate) {
       await external.waitForURL('**/callback?**');
       const target = new URL(external.url());
@@ -109,6 +124,7 @@ async function run(browser, name, origin, options = {}) {
     await run(browser, 'closed initiating app fails without fallback', known[0], { closed: true });
     await run(browser, 'COOP isolation fails without fallback', known[0], { isolated: true });
     await run(browser, 'old flow cannot claim a new launch', known[0], { stale: true });
+    await run(browser, 'HA and PC clock skew does not change the environment', known[0], { clockSkew: true });
     await run(browser, 'same environment returns signed duplicate error', known[0], { duplicate: true });
     fs.writeFileSync(output, JSON.stringify({ browser: browser.version(), passed: results.length, results }, null, 2));
   } finally { await browser.close(); }
