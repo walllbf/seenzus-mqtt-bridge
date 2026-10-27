@@ -17,6 +17,9 @@ from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -26,9 +29,6 @@ from homeassistant.helpers.selector import (
     EntitySelectorConfig,
     AreaSelector,
     AreaSelectorConfig,
-    SelectSelector,
-    SelectSelectorConfig,
-    SelectSelectorMode,
 )
 
 from .const import (
@@ -80,6 +80,7 @@ from .dev_override import DevOverrideError, resolve_dev_pairing_api_base
 from .device_access import CONF_SCOPE, CONF_DEVICES, CONF_ENTITIES, SCOPE_KEYS
 from .environments import CONF_ENVIRONMENT, CONF_WORLD_ID, CONF_WORLD_NAME, ENVIRONMENTS, ENVIRONMENT_SLOTS, bootstrap_url, entry_environment, environment_for_api
 from .mqtt_transport import MqttTransportError, validate_mqtt_transport
+from .ui_text import async_prepare_ui_text
 from .mqtt_settings import (
     MqttPresenceBudgetError,
     mqtt_packet_size_limit,
@@ -242,12 +243,11 @@ def _schema(pairing_mode: str, defaults: dict | None = None) -> vol.Schema:
                 vol.Required(
                     CONF_MQTT_SCHEME,
                     default=d.get(CONF_MQTT_SCHEME) or DEFAULT_MQTT_SCHEME,
-                ): vol.In({
-                    "mqtts": "MQTT over TLS",
-                    "wss": "MQTT over secure WebSocket",
-                    "mqtt": "MQTT (local IP only)",
-                    "ws": "WebSocket (local IP only)",
-                }),
+                ): SelectSelector(SelectSelectorConfig(
+                    options=["mqtts", "wss", "mqtt", "ws"],
+                    mode=SelectSelectorMode.DROPDOWN,
+                    translation_key="mqtt_scheme",
+                )),
                 vol.Optional(
                     CONF_MQTT_PORT,
                     description={"suggested_value": d.get(CONF_MQTT_PORT)},
@@ -260,11 +260,11 @@ def _schema(pairing_mode: str, defaults: dict | None = None) -> vol.Schema:
                 ): TextSelector(),
                 vol.Optional(
                     CONF_MQTT_USERNAME,
-                    default=d.get(CONF_MQTT_USERNAME, ""),
+                    default=d.get(CONF_MQTT_USERNAME) or "",
                 ): TextSelector(),
                 vol.Optional(
                     CONF_MQTT_PASSWORD,
-                    default=d.get(CONF_MQTT_PASSWORD, ""),
+                    default=d.get(CONF_MQTT_PASSWORD) or "",
                 ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
             }
         ),
@@ -360,8 +360,8 @@ def _build_quick_pair_entry_data(
         # 端口缺省按 scheme 取惯例值（wss 443 / ws 80 / mqtts 8883 / mqtt 1883）：
         # wss 响应缺 port 时若一律回退 1883，会拿 TLS websocket 去连明文 TCP 端口。
         CONF_MQTT_PORT: int(mqtt.get("port") or DEFAULT_PORT_BY_MQTT_SCHEME[scheme]),
-        CONF_MQTT_USERNAME: str(mqtt.get("username", "")).strip(),
-        CONF_MQTT_PASSWORD: str(mqtt.get("password", "")).strip(),
+        CONF_MQTT_USERNAME: None if mqtt.get("username") is None else str(mqtt["username"]),
+        CONF_MQTT_PASSWORD: None if mqtt.get("password") is None else str(mqtt["password"]),
         # Always replace both keys so stale options cannot change the transport.
         CONF_MQTT_SCHEME: scheme,
         CONF_MQTT_WS_PATH: ws_path,
@@ -688,6 +688,7 @@ class _QuickPairFlowMixin:
         }))
 
     async def async_step_seamless(self, user_input: dict | None = None):
+        await async_prepare_ui_text(self.hass)
         if user_input is None:
             return self._reshow_seamless_form(self._quick_pair_finish_error or "quick_pair_missing_context")
         if not self._claim_pairing_slot():

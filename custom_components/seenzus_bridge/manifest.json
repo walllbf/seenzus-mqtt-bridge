@@ -1,13 +1,22 @@
 {
   "domain": "seenzus_bridge",
   "name": "seenzus MQTT Bridge",
-  "after_dependencies": ["recorder"],
-  "codeowners": ["@walllbf"],
+  "after_dependencies": [
+    "recorder"
+  ],
+  "codeowners": [
+    "@walllbf"
+  ],
   "config_flow": true,
-  "dependencies": ["http"],
+  "dependencies": [
+    "http"
+  ],
   "documentation": "https://github.com/walllbf/seenzus-mqtt-bridge",
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/walllbf/seenzus-mqtt-bridge/issues",
-  "requirements": ["aiomqtt>=2.0.1,<2.6.0", "paho-mqtt>=1.6.1,<2.2.0"],
-  "version": "0.2.14"
+  "requirements": [
+    "aiomqtt>=2.0.1,<2.6.0",
+    "paho-mqtt>=1.6.1,<2.2.0"
+  ],
+  "version": "0.2.15"
 }

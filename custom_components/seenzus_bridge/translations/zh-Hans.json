@@ -123,10 +123,11 @@
     "step": {
       "init": {
         "title": "配置 seenzus MQTT Bridge",
+        "description": "调整 MQTT 连接设置，或重新进行配对。保存设置后自动重载集成。",
         "menu_options": {
           "connection_settings": "MQTT 连接设置",
-          "device_access": "设备授权范围",
-          "pairing": "重新配对或手动配置"
+          "pairing": "重新配对或手动配置",
+          "device_access": "设备授权范围"
         }
       },
       "seamless": {
@@ -178,8 +179,10 @@
         "title": "重新配对或手动配置",
         "description": "重新配对保留原环境、世界和设备范围。手动配置的条目可以修改连接设置。",
         "data": {
+          "pairing_mode": "配对模式",
           "action": "操作"
-        }
+        },
+        "sections": {}
       },
       "connection_settings": {
         "title": "MQTT 连接设置",
@@ -267,8 +270,16 @@
     "pairing_mode": {
       "options": {
         "seamless": "快速配对（自动识别环境，推荐）",
-        "choose_environment": "快速配对（手动选择环境）",
-        "manual": "手动配置（高级）"
+        "manual": "手动配置（高级）",
+        "choose_environment": "快速配对（手动选择环境）"
+      }
+    },
+    "mqtt_scheme": {
+      "options": {
+        "mqtts": "MQTT over TLS",
+        "wss": "安全 WebSocket",
+        "mqtt": "MQTT（仅限本地 IP）",
+        "ws": "WebSocket（仅限本地 IP）"
       }
     },
     "environment": {
@@ -291,5 +302,43 @@
         "manual": "手动连接设置"
       }
     }
+  },
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "状态",
+        "state": {
+          "starting": "启动中",
+          "active": "运行中",
+          "error": "发生错误",
+          "stopped": "已停止"
+        }
+      },
+      "request_count": {
+        "name": "请求次数"
+      },
+      "result_count": {
+        "name": "结果回包次数"
+      },
+      "state_push_count": {
+        "name": "状态推送次数"
+      },
+      "error_count": {
+        "name": "错误次数"
+      },
+      "pairing_status": {
+        "name": "配对状态"
+      }
+    }
+  },
+  "common": {
+    "diagnostic_title": "seenzus Bridge 快速配对诊断",
+    "diagnostic_message": "快速配对失败：{reason}\n\n{diagnostic}",
+    "paired_title": "seenzus Bridge 配对完成",
+    "paired_message": "seenzus MQTT Bridge 已成功绑定。\n\n## 👉 {link}",
+    "return_label": "返回 seenzus 应用",
+    "manual_return": "若链接无法点击，请手动打开：`{url}`",
+    "opening_app": "正在打开 seenzus 应用…",
+    "return_fallback": "如未自动跳转，请点击这里"
   }
 }

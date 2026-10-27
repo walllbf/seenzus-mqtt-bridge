@@ -95,6 +95,7 @@ class FakeConfig:
         return str(Path(tempfile.gettempdir()) / "seenzus-empty-test-config" / filename)
     def __init__(self, data: dict | None = None) -> None:
         self._data = data or {"location_name": "Home"}
+        self.language = self._data.get("language", "en")
 
     def as_dict(self) -> dict:
         return dict(self._data)
@@ -262,6 +263,7 @@ class FakeHass:
         self.data: dict = {}
         self.scheduled_tasks: list[asyncio.Task] = []
         self.state = CoreState.running
+        self.shutdown_jobs = []
 
         def _register_view(view):
             self.http.registered_views.append(view)
@@ -270,6 +272,11 @@ class FakeHass:
 
     def async_add_job(self, callback, *args):
         return callback(*args)
+
+    def async_add_shutdown_job(self, job, *args):
+        value = (job, args)
+        self.shutdown_jobs.append(value)
+        return lambda: self.shutdown_jobs.remove(value)
 
     def verify_event_loop_thread(self, _action: str) -> None:
         return None
