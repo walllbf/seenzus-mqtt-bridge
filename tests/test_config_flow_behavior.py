@@ -250,13 +250,17 @@ async def test_user_step_shows_mode_selection_form(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_user_step_seamless_skips_environment_and_launches_relay_after_scope(monkeypatch) -> None:
+async def test_user_step_seamless_skips_environment_and_launches_local_handoff_after_scope(monkeypatch) -> None:
+    from seenzus_bridge.quick_pair import _encode_jwt
+
     flow = _new_config_flow()
     flow.hass = FakeHass()
     monkeypatch.setattr(flow, "_async_current_entries", lambda: [])
+    redirect_uri = f"http://homeassistant.local:8123{QUICK_PAIR_CALLBACK_PATH}"
+    token = _encode_jwt(flow.hass, {"flow_id": "first-install", "redirect_uri": redirect_uri})
     monkeypatch.setattr(
         "seenzus_bridge.config_flow._build_quick_pair_callback_context",
-        lambda *_a, **_k: (f"http://homeassistant.local:8123{QUICK_PAIR_CALLBACK_PATH}", "ps", "jwt"),
+        lambda *_a, **_k: (redirect_uri, "ps", token),
     )
     monkeypatch.setattr(
         "seenzus_bridge.config_flow.resolve_dev_pairing_api_base", _dev_override_none
@@ -282,7 +286,7 @@ async def test_user_step_seamless_skips_environment_and_launches_relay_after_sco
     assert result["type"] == "external"
     assert result["step_id"] == "seamless_authorize"
     assert create_calls == []
-    assert result["url"].startswith("https://app.seenzus.cn/ha-connect?")
+    assert result["url"].startswith("http://homeassistant.local:8123/api/seenzus_bridge/quick_pair/origin?")
 
 
 @pytest.mark.asyncio

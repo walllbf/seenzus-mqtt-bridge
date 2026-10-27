@@ -78,7 +78,7 @@ from .const import (
 )
 from .dev_override import DevOverrideError, resolve_dev_pairing_api_base
 from .device_access import CONF_SCOPE, CONF_DEVICES, CONF_ENTITIES, SCOPE_KEYS
-from .environments import CONF_ENVIRONMENT, CONF_WORLD_ID, CONF_WORLD_NAME, ENVIRONMENTS, ENVIRONMENT_SLOTS, bootstrap_url, entry_environment, environment_for_api
+from .environments import CONF_ENVIRONMENT, CONF_WORLD_ID, CONF_WORLD_NAME, ENVIRONMENTS, ENVIRONMENT_SLOTS, entry_environment, environment_for_api
 from .mqtt_transport import MqttTransportError, validate_mqtt_transport
 from .ui_text import async_prepare_ui_text
 from .mqtt_settings import (
@@ -96,6 +96,7 @@ from .pairing_models import (
     PairingSessionCreateResult,
     PairingStatusResult,
 )
+from .pairing_origin import build_pairing_origin_url
 
 # Re-export only the quick-pair names resolved through config_flow's namespace —
 # either by the mixin's call sites or by tests' monkeypatch
@@ -736,22 +737,12 @@ class _QuickPairFlowMixin:
                 self._quick_pair_session_id = result.session_id
                 self._quick_pair_app_return_url = _sanitize_app_return_url(getattr(result, "app_return_url", None))
                 return await self.async_step_seamless_authorize()
-            # This hint controls only the relay's recovery picker, never the
-            # environment of an existing app launch or the destination API.
-            try:
-                developer_preset = await resolve_dev_pairing_api_base(self.hass)
-            except DevOverrideError:
-                developer_preset = None
-            available_environments = ["cn", "global"]
-            if developer_preset:
-                available_environments.append("uat")
-            self._quick_pair_page_url = bootstrap_url(api_base, {
+            self._quick_pair_page_url = build_pairing_origin_url(self.hass, {
                 "state": token, "redirect_uri": redirect_uri,
                 "ha_instance_id": ha_instance_id, "bridge_name": _backend_bridge_name(self.hass),
                 "expected_world_id": existing.get(CONF_WORLD_ID),
                 "expected_source_id": existing.get(CONF_SOURCE_ID) if not existing.get(CONF_WORLD_ID) else None,
                 "configured_environments": ",".join(sorted(self._configured_environments())),
-                "available_environments": ",".join(available_environments),
             })
             return await self.async_step_seamless_authorize()
         except DevOverrideError:

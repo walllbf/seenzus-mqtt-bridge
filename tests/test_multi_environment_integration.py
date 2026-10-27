@@ -105,24 +105,30 @@ async def test_scope_menu_preserves_local_budget_transport_and_credentials(home)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("preset,expected", [(None, "cn,global"), ("http://dev.local/api", "cn,global,uat")])
-async def test_relay_recovery_choices_follow_local_developer_preset(home, monkeypatch, preset, expected):
+@pytest.mark.parametrize("preset", [None, "http://dev.local/api"])
+async def test_automatic_origin_handoff_does_not_read_global_developer_preset(home, monkeypatch, preset):
     from seenzus_bridge.config_flow import SavanAIBridgeConfigFlow
+    from seenzus_bridge.quick_pair import _encode_jwt
 
     hass, _, _, _, _ = home
     flow = SavanAIBridgeConfigFlow()
     flow.hass = hass
     flow.context = {"source": "user"}
-    flow.flow_id = "relay-choices"
+    flow.flow_id = "origin-choices"
     flow.async_external_step = lambda **kwargs: kwargs
-    monkeypatch.setattr("seenzus_bridge.config_flow.resolve_dev_pairing_api_base", AsyncMock(return_value=preset))
+    resolve = AsyncMock(return_value=preset)
+    monkeypatch.setattr("seenzus_bridge.config_flow.resolve_dev_pairing_api_base", resolve)
     monkeypatch.setattr("seenzus_bridge.config_flow._resolve_ha_instance_id", AsyncMock(return_value="ha-install"))
+    callback = "http://ha.local/api/seenzus_bridge/quick_pair/callback"
+    token = _encode_jwt(hass, {"flow_id": flow.flow_id, "redirect_uri": callback})
     monkeypatch.setattr("seenzus_bridge.config_flow._build_quick_pair_callback_context", lambda *_: (
-        "http://ha.local/api/seenzus_bridge/quick_pair/callback", "nonce", "signed-state",
+        callback, "nonce", token,
     ))
     result = await flow.async_step_seamless({})
-    assert parse_qs(urlparse(result["url"]).query)["available_environments"] == [expected]
-    assert urlparse(result["url"]).netloc == "app.seenzus.cn"
+    assert parse_qs(urlparse(result["url"]).query) == {"state": [token]}
+    assert urlparse(result["url"]).netloc == "ha.local"
+    assert urlparse(result["url"]).path == "/api/seenzus_bridge/quick_pair/origin"
+    resolve.assert_not_awaited()
 
 
 @pytest.mark.asyncio
