@@ -4,7 +4,7 @@ domains: [Home-Assistant, pairing, browser]
 evidence: [tests/test_pairing_origin.py, tools/direct_pairing_preview/browser-tests.cjs]
 ---
 
-# 应用来源自动配对验证版 · 0.2.16b1
+# 应用来源自动配对验证版 · 0.2.16b2
 
 本版用于验证「从哪个应用发起，就回哪个环境授权」，无需选择环境、额外初始化桥接入口或输入引导码。首次使用 My Home Assistant 时，仍按它原有的流程确认自己的 HA 地址。当前交付为电脑浏览器验证版，包含 #77 基线 `b1cc89318d1a997a21603ba542a5d097dc38c33c` 的多环境及设备范围功能。#77 保持未合并。
 
@@ -12,7 +12,7 @@ evidence: [tests/test_pairing_origin.py, tools/direct_pairing_preview/browser-te
 
 1. 在 HA 中创建完整备份，并额外保存当前 `custom_components/seenzus_bridge` 文件夹。
 2. 将本次 ZIP 中的 `custom_components/seenzus_bridge` 整个文件夹覆盖到 HA 配置目录下的同名位置，包含 `translations`。不要嵌套成两层 `seenzus_bridge`。
-3. 完整重启 HA，强制刷新 HA 页面。版本应为 `0.2.16b1`。
+3. 完整重启 HA，强制刷新 HA 页面。版本应为 `0.2.16b2`。
 4. 先在电脑浏览器登录 [UAT 应用](https://uat.seenzus.ai)，再在同一浏览器打开 [UAT 来源配对验证入口](https://uat.seenzus.ai/ha-connect-direct)。
 
    ![UAT 来源配对验证入口，点击连接后保持本页打开](entry.png)
@@ -26,7 +26,7 @@ evidence: [tests/test_pairing_origin.py, tools/direct_pairing_preview/browser-te
 
 ## 已有 UAT 条目时
 
-同一环境仍只能有一个条目。若 HA 已经配好了 UAT，本次新增应提示该环境已配置，不应创建第二个条目。这个结果可以验证来源识别与重复保护。
+同一环境仍只能有一个条目。若 HA 已经配好了 UAT，本次新增应在 HA 提示该环境已配置，不应创建第二个条目。此版本修复了旧验证包在该场景显示英文回调提示的问题。这个结果可以验证来源识别与重复保护。
 
 验证完整的首次新增，需要没有 UAT 条目的测试 HA。已有 UAT 条目的「重新配对」会沿用保存的 UAT 地址，可以验证重授权，但不能代替首次来源识别验收。不要为了本轮验证直接删除现有条目。
 
@@ -42,8 +42,8 @@ evidence: [tests/test_pairing_origin.py, tools/direct_pairing_preview/browser-te
 
 | 范围 | 结果 |
 | --- | --- |
-| HA Core 2025.1.4 / Python 3.13 | 642 项测试通过 |
-| HA Core 2026.10.2 / Python 3.14 | 642 项测试通过 |
+| HA Core 2025.1.4 / Python 3.13 | 645 项测试通过 |
+| HA Core 2026.10.2 / Python 3.14 | 645 项测试通过 |
 | Chromium 窗口通信、跨源隔离与 CSP | 8 项通过；覆盖三个环境、发起页关闭、COOP 阻断、旧窗口、两端时钟差异和重复环境 |
 | 真实 UAT 静态入口 + 真实 My Home Assistant 跳转 | 1 项通过；HA 页、交接上下文和授权目的页采用测试夹具 |
 | 用户实际 HA 首次添加、真实授权、MQTT 上线及设备范围 | 等待用户验收 |

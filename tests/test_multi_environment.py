@@ -70,10 +70,71 @@ async def test_duplicate_is_blocked_before_session_and_callback_exchange(monkeyp
     automatic._quick_pair_api_base = None
     automatic._quick_pair_callback_state = "nonce"
     automatic._quick_pair_callback_state_token = "signed-state"
+    automatic.async_external_step_done = lambda **kwargs: {"type": "external_done", **kwargs}
     result = await automatic.async_step_seamless_authorize({"state": {"pairing_state": "nonce"},
         "environment": "cn", "session_id": "wps_test", "code": "unused"})
-    assert result["reason"] == "environment_already_configured"
+    assert result["type"] == "external_done"
+    assert (await automatic.async_step_seamless_finish())["reason"] == "environment_already_configured"
     create.assert_not_awaited()
+    exchange.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_callback_finishes_external_step_before_abort():
+    flow = flow_for(FakeHass())
+    flow._quick_pair_api_base = None
+    flow._quick_pair_callback_state = "nonce"
+    flow._quick_pair_callback_state_token = "signed-state"
+    flow.async_external_step_done = lambda **kwargs: {"type": "external_done", **kwargs}
+    result = await flow.async_step_seamless_authorize({
+        "state": {"pairing_state": "nonce"}, "error": "environment_already_configured",
+    })
+    assert result == {"type": "external_done", "next_step_id": "seamless_finish"}
+    assert (await flow.async_step_seamless_finish())["reason"] == "environment_already_configured"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("callback", ["error", "code"])
+async def test_duplicate_callback_uses_real_ha_external_step_transition(callback, monkeypatch):
+    from homeassistant.data_entry_flow import FlowManager, FlowResultType
+    from seenzus_bridge.quick_pair import SeenzusQuickPairCallbackView, _encode_jwt
+
+    class Manager(FlowManager):
+        async def async_create_flow(self, handler_key, *, context=None, data=None):
+            raise NotImplementedError
+
+        async def async_finish_flow(self, flow, result):
+            return result
+
+    hass = FakeHass()
+    hass.bus.async_fire_internal = lambda *_: None
+    hass.config_entries.entries.append(FakeConfigEntry(data={"environment": "uat", "world_id": "world-a"}))
+    manager = Manager(hass)
+    hass.config_entries.flow = manager
+    flow = SavanAIBridgeConfigFlow()
+    flow.hass = hass
+    flow.handler = "seenzus_bridge"
+    flow.flow_id = "real-flow"
+    flow.context = {"source": "user"}
+    flow._quick_pair_api_base = None
+    flow._quick_pair_callback_state = "nonce"
+    flow._quick_pair_page_url = "http://ha.local/origin"
+    flow._quick_pair_callback_state_token = _encode_jwt(hass, {
+        "flow_id": flow.flow_id, "flow_manager": "config", "pairing_state": "nonce",
+    })
+    flow.cur_step = flow.async_external_step(step_id="seamless_authorize", url=flow._quick_pair_page_url)
+    manager._async_add_flow_progress(flow)
+    exchange = AsyncMock()
+    monkeypatch.setattr("seenzus_bridge.config_flow.exchange_web_pairing_callback_code", exchange)
+    query = {"state": flow._quick_pair_callback_state_token}
+    query.update({"error": "environment_already_configured"} if callback == "error"
+                 else {"environment": "uat", "session_id": "wps_test", "code": "unused"})
+    response = await SeenzusQuickPairCallbackView().get(SimpleNamespace(app={"hass": hass}, query=query))
+    assert response.status == 200
+    assert flow.cur_step["type"] == FlowResultType.EXTERNAL_STEP_DONE
+    result = await manager.async_configure(flow.flow_id)
+    assert result["type"] == FlowResultType.ABORT
+    assert result["reason"] == "environment_already_configured"
     exchange.assert_not_awaited()
 
 

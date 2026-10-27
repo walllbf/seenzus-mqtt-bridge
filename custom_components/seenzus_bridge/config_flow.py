@@ -771,8 +771,9 @@ class _QuickPairFlowMixin:
                     self._quick_pair_finish_error = "quick_pair_callback_state_mismatch"
                 elif user_input.get("error"):
                     if user_input["error"] == "environment_already_configured":
-                        return self.async_abort(reason="environment_already_configured")
-                    self._quick_pair_finish_error = "environment_required" if user_input["error"] == "environment_required" and not self._current_config() else "quick_pair_authorization_failed"
+                        self._quick_pair_finish_error = "environment_already_configured"
+                    else:
+                        self._quick_pair_finish_error = "environment_required" if user_input["error"] == "environment_required" and not self._current_config() else "quick_pair_authorization_failed"
                 elif not self._quick_pair_callback_state_token:
                     self._quick_pair_finish_error = "quick_pair_missing_context"
                 else:
@@ -785,7 +786,8 @@ class _QuickPairFlowMixin:
                     else:
                         raise ValueError("invalid_environment")
                     if environment_for_api(self._quick_pair_api_base) in self._configured_environments():
-                        return self.async_abort(reason="environment_already_configured")
+                        self._quick_pair_finish_error = "environment_already_configured"
+                        return self.async_external_step_done(next_step_id="seamless_finish")
                     session_id = user_input.get("session_id", self._quick_pair_session_id)
                     if self._quick_pair_session_id and session_id != self._quick_pair_session_id:
                         raise ValueError("session_mismatch")
@@ -829,6 +831,8 @@ class _QuickPairFlowMixin:
 
     async def async_step_seamless_finish(self, user_input: dict | None = None):
         self._clear_pairing_parked()
+        if self._quick_pair_finish_error == "environment_already_configured":
+            return self.async_abort(reason="environment_already_configured")
         if self._quick_pair_finish_error == "environment_required":
             return await self.async_step_environment()
         # 中转路径（自动识别）没有可用回调时——中转页未部署或不可达——按中转页
