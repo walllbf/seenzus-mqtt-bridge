@@ -34,6 +34,7 @@ from .quick_pair import (
     _clear_quick_pair_notifications,
     _format_quick_pair_diagnostic,
     _notify_app_return,
+    _record_committed_return,
 )
 from .ui_text import async_prepare_ui_text, ui_text
 
@@ -253,6 +254,7 @@ async def _async_commit(hass: HomeAssistant, entry_id: str) -> None:
 
             return_url = _sanitize_app_return_url(result.app_return_url)
             if return_url:
+                _record_committed_return(hass, session_id, return_url)
                 _notify_app_return(hass, return_url, entry_id)
             else:
                 _clear_quick_pair_notifications(hass, entry_id)

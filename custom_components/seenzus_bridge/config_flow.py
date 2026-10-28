@@ -110,6 +110,7 @@ from .quick_pair import (  # noqa: F401
     FLOW_MANAGER_OPTIONS,
     QUICK_PAIR_CALLBACK_PATH,
     SavanAIQuickPairCallbackView,
+    _build_app_return_transit_url,
     _build_quick_pair_callback_context,
     _clear_quick_pair_notifications,
     _format_quick_pair_diagnostic,
@@ -788,6 +789,7 @@ class _QuickPairFlowMixin:
             # deployment's sources; the commit's own notification links the Source.
             self._quick_pair_app_return_url = _deployment_return_url(self._quick_pair_api_base)
             self._quick_pair_return_fallback = self._quick_pair_app_return_url is not None
+            self._quick_pair_return_session = getattr(status_result, "session_id", None) or self._quick_pair_session_id
         result = self._finish_quick_pair(data)
         _mark_quick_pair_completed(self.hass, self._quick_pair_callback_state, data)
         return result
@@ -805,6 +807,13 @@ class _QuickPairFlowMixin:
             self.hass.config_entries.async_update_entry(self._config_entry, title=self._entry_title,
                 unique_id=data[CONF_ENVIRONMENT])
         if self._quick_pair_app_return_url:
+            link = self._quick_pair_app_return_url
+            if getattr(self, "_quick_pair_return_fallback", False):
+                # Shown before the commit creates the Source: HA's own transit page
+                # opens the Source once the commit has returned its link.
+                link = _build_app_return_transit_url(
+                    self.hass, link, self._notification_scope(),
+                    session_id=getattr(self, "_quick_pair_return_session", None)) or link
             # Durable, path-independent surface for the return link: the
             # create-entry success page shows it inline on the first-time config
             # flow, but that page is transient and the options / re-pair flow
@@ -814,7 +823,7 @@ class _QuickPairFlowMixin:
                 title=self._entry_title,
                 data=data,
                 description="app_return",
-                description_placeholders={"app_return_url": self._quick_pair_app_return_url},
+                description_placeholders={"app_return_url": link},
             )
         # No return link this time (manual / no-URL re-pair). Still a success, so
         # clear any stale return-link or failure notification from a prior attempt

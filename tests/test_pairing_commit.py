@@ -22,6 +22,8 @@ from seenzus_bridge.pairing_commit import (
     async_schedule_commit,
     pairing_journal,
 )
+from seenzus_bridge.const import DOMAIN
+from seenzus_bridge.quick_pair import QUICK_PAIR_COMMITTED_RETURNS
 
 API_PATH = "/api/seenzus"
 
@@ -126,6 +128,20 @@ async def test_commits_after_the_entry_exists_and_then_forgets_the_candidate(tmp
         await drive(hass, entry)
         assert backend.calls == [("commit", {"sessionId": "wps_new", "commitToken": "t" * 43})]
         assert await journal_on_disk(tmp_path) == []
+    finally:
+        await hass.async_stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_a_commit_remembers_the_source_link_for_return_links_shown_earlier(tmp_path, backend):
+    source = "https://app.seenzus.cn/integrations/sources/src-1?justPaired=1&pairedSource=src-1"
+    backend.commit_replies = [(200, {"ok": True, "state": "committed", "sourceId": "src-1", "appReturnUrl": source})]
+    hass = await start_core(tmp_path)
+    try:
+        await pairing_journal(hass).async_record(marker(backend))
+        entry = add_entry(hass, core_entry("entry-new", data={"pairing_session_id": "wps_new"}))
+        await drive(hass, entry)
+        assert hass.data[DOMAIN][QUICK_PAIR_COMMITTED_RETURNS] == {"wps_new": source}
     finally:
         await hass.async_stop(force=True)
 

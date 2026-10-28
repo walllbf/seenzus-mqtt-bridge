@@ -59,6 +59,10 @@ FLOW_MANAGER_OPTIONS = "options"
 MAX_FLOW_RESUME_STEPS = 4
 # Grace for a live HA dialog to resume a browser-path flow before the bridge does.
 UNATTENDED_RESUME_DELAY_SECONDS = 5
+# Source links learned at commit, by pairing session, for return links shown earlier.
+QUICK_PAIR_COMMITTED_RETURNS = "quick_pair_committed_returns"
+# A return link clicked right after pairing waits this long for the commit's Source link.
+RETURN_LINK_COMMIT_WAIT_SECONDS = 8
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -353,6 +357,9 @@ class SeenzusAppReturnView(http.HomeAssistantView):
 
         scope_id = str(payload.get("notification_scope", ""))
         target = str(payload.get("app_return_url", "") or "").strip()
+        if session_id := str(payload.get("session_id", "") or ""):
+            # Shown before the commit created the Source: prefer the Source link.
+            target = await _await_committed_return(hass, session_id) or target
         scheme = urlsplit(target).scheme.lower()
         if scheme not in APP_RETURN_URL_ALLOW_SCHEMES:
             return web.Response(text="Invalid return URL", status=400)
@@ -419,7 +426,27 @@ def _ensure_quick_pair_app_return_view(hass: HomeAssistant) -> None:
     )
 
 
-def _build_app_return_transit_url(hass: HomeAssistant, app_return_url: str, scope_id: str = "") -> str | None:
+def _record_committed_return(hass: HomeAssistant, session_id: str, app_return_url: str) -> None:
+    """Remember the Source link a commit returned, for return links shown before it."""
+    returns = hass.data.setdefault(DOMAIN, {}).setdefault(QUICK_PAIR_COMMITTED_RETURNS, {})
+    returns.pop(session_id, None)
+    while len(returns) >= QUICK_PAIR_CALLBACK_PAYLOAD_LIMIT:
+        returns.pop(next(iter(returns)))
+    returns[session_id] = app_return_url
+
+
+async def _await_committed_return(hass: HomeAssistant, session_id: str) -> str | None:
+    deadline = time.monotonic() + RETURN_LINK_COMMIT_WAIT_SECONDS
+    while True:
+        url = hass.data.get(DOMAIN, {}).get(QUICK_PAIR_COMMITTED_RETURNS, {}).get(session_id)
+        if url or time.monotonic() >= deadline:
+            return url
+        await asyncio.sleep(0.25)
+
+
+def _build_app_return_transit_url(
+    hass: HomeAssistant, app_return_url: str, scope_id: str = "", session_id: str | None = None,
+) -> str | None:
     """Relative transit URL for the notification link (dismiss + redirect).
 
     相对路径（不用 get_url 拼绝对地址）：链接随用户当前访问 HA 的 base 解析，
@@ -428,7 +455,10 @@ def _build_app_return_transit_url(hass: HomeAssistant, app_return_url: str, scop
     """
     try:
         _ensure_quick_pair_app_return_view(hass)
-        token = _encode_jwt(hass, {"app_return_url": app_return_url, "notification_scope": scope_id})
+        payload = {"app_return_url": app_return_url, "notification_scope": scope_id}
+        if session_id:
+            payload["session_id"] = session_id
+        token = _encode_jwt(hass, payload)
         return f"{QUICK_PAIR_APP_RETURN_PATH}?token={quote(token, safe='')}"
     except Exception:  # noqa: BLE001
         _LOGGER.debug("building app return transit link failed", exc_info=True)

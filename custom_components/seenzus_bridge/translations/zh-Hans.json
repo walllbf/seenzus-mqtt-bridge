@@ -86,7 +86,7 @@
       }
     },
     "create_entry": {
-      "app_return": "seenzus MQTT Bridge 已成功绑定，集成已添加完成。\n\n## 👉 [返回 seenzus 应用]({app_return_url})\n\n&nbsp;"
+      "app_return": "seenzus MQTT Bridge 已成功绑定，集成已添加完成。\n\n## 👉 <a href=\"{app_return_url}\" target=\"_blank\">返回 seenzus 应用</a>\n\n&nbsp;"
     },
     "error": {
       "host_required": "MQTT Broker 地址不能为空",
@@ -228,7 +228,7 @@
       }
     },
     "create_entry": {
-      "app_return": "seenzus MQTT Bridge 已成功绑定，集成已添加完成。\n\n## 👉 [返回 seenzus 应用]({app_return_url})\n\n&nbsp;"
+      "app_return": "seenzus MQTT Bridge 已成功绑定，集成已添加完成。\n\n## 👉 <a href=\"{app_return_url}\" target=\"_blank\">返回 seenzus 应用</a>\n\n&nbsp;"
     },
     "error": {
       "host_required": "MQTT Broker 地址不能为空",

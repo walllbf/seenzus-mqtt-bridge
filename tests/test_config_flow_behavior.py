@@ -1767,6 +1767,8 @@ async def test_deferred_pairing_success_page_returns_to_the_deployment(monkeypat
     notification (with the Source link) is pushed, never a second fallback one."""
     notified: list = []
     monkeypatch.setattr("seenzus_bridge.config_flow._notify_app_return", lambda *args: notified.append(args))
+    signed: list[dict] = []
+    monkeypatch.setattr("seenzus_bridge.quick_pair._encode_jwt", lambda _hass, payload: signed.append(payload) or "t")
     flow = _new_config_flow()
     flow.hass = FakeHass()
     flow._quick_pair_api_base = api_base
@@ -1784,8 +1786,11 @@ async def test_deferred_pairing_success_page_returns_to_the_deployment(monkeypat
 
     assert (await flow.async_step_seamless_finish())["type"] == "create_entry"
     if expected:
+        # HA's transit page opens the Source once the commit returned its link,
+        # and falls back to the deployment's source list.
         assert created[0]["description"] == "app_return"
-        assert created[0]["description_placeholders"] == {"app_return_url": expected}
+        assert created[0]["description_placeholders"] == {"app_return_url": f"{QUICK_PAIR_APP_RETURN_PATH}?token=t"}
+        assert signed == [{"app_return_url": expected, "notification_scope": flow.flow_id, "session_id": "wps_1"}]
     else:
         assert "description" not in created[0]
     from homeassistant.config_entries import ConfigEntryState
@@ -1795,6 +1800,28 @@ async def test_deferred_pairing_success_page_returns_to_the_deployment(monkeypat
     flow.hass.config_entries.entries.append(entry)
     flow.async_remove()
     assert notified == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("committed", "expected"), [
+    ("https://app.seenzus.cn/integrations/sources/src-1?justPaired=1&pairedSource=src-1",
+     "https://app.seenzus.cn/integrations/sources/src-1?justPaired=1&pairedSource=src-1"),
+    (None, "https://app.seenzus.cn/integrations"),  # commit never returned a link in time
+])
+async def test_return_link_shown_before_the_commit_opens_the_paired_source(monkeypatch, committed, expected) -> None:
+    from seenzus_bridge.quick_pair import QUICK_PAIR_COMMITTED_RETURNS, _record_committed_return
+    monkeypatch.setattr("seenzus_bridge.quick_pair.RETURN_LINK_COMMIT_WAIT_SECONDS", 0)
+    monkeypatch.setattr("seenzus_bridge.quick_pair.persistent_notification",
+                        SimpleNamespace(async_dismiss=lambda _hass, notification_id: None))
+    monkeypatch.setattr("seenzus_bridge.quick_pair._decode_jwt", lambda _hass, _token: {
+        "app_return_url": "https://app.seenzus.cn/integrations", "notification_scope": "flow-1", "session_id": "wps_1"})
+    hass = FakeHass()
+    if committed:
+        _record_committed_return(hass, "wps_1", committed)
+    response = await SeenzusAppReturnView().get(SimpleNamespace(app={"hass": hass}, query={"token": "signed"}))
+    assert response.status == 302
+    assert response.headers["Location"] == expected
+    assert len(hass.data.get("seenzus_bridge", {}).get(QUICK_PAIR_COMMITTED_RETURNS, {})) == (1 if committed else 0)
 
 def _async_result(values: dict):
     async def _runner(*_args, **_kwargs):
