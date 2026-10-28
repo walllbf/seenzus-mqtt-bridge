@@ -946,6 +946,9 @@ def _build_quick_pair_callback_request(
     """
     hass = FakeHass()
     state = state or {"flow_id": "flow-1", "pairing_state": "pairing-state"}
+    if state.get("flow_id") and state.get("pairing_state"):
+        manager = state.get("flow_manager", "config")
+        hass.data.setdefault("seenzus_bridge", {}).setdefault("quick_pair_active_states", {})[(manager, state["flow_id"])] = state["pairing_state"]
     monkeypatch.setattr(
         "seenzus_bridge.quick_pair._decode_jwt",
         lambda _hass, _token: state,
@@ -1059,8 +1062,16 @@ async def test_quick_pair_callback_view_treats_unknown_flow_as_success(monkeypat
         calls.append({"flow_id": flow_id, "user_input": user_input})
         if len(calls) == 1:
             return {"type": FlowResultType.EXTERNAL_STEP_DONE}
-        from seenzus_bridge.quick_pair import _mark_quick_pair_completed
-        _mark_quick_pair_completed(hass, "pairing-state")
+        from seenzus_bridge.quick_pair import _mark_quick_pair_completed, _confirm_quick_pair_completed, _quick_pair_finish_removed
+        from homeassistant.config_entries import ConfigEntryState
+        from tests.helpers import FakeConfigEntry
+        entry_data = {"pairing_session_id": "wps_test", "environment": "uat", "world_id": "world-a"}
+        entry = FakeConfigEntry(data=entry_data)
+        entry.state = ConfigEntryState.LOADED
+        hass.config_entries.entries.append(entry)
+        _mark_quick_pair_completed(hass, "pairing-state", entry_data)
+        _quick_pair_finish_removed(hass, "pairing-state")
+        assert _confirm_quick_pair_completed(hass, "pairing-state")
         raise UnknownFlow()
 
     hass.config_entries.flow.async_configure = _configure
@@ -1070,6 +1081,32 @@ async def test_quick_pair_callback_view_treats_unknown_flow_as_success(monkeypat
     assert response.status == 200
     assert "window.close()" in response.text
     assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry_saved", [False, True])
+async def test_callback_does_not_redrive_flow_while_entry_is_being_finalized(monkeypatch, entry_saved):
+    from seenzus_bridge.quick_pair import _mark_quick_pair_completed
+    hass, request = _build_quick_pair_callback_request(monkeypatch)
+    data = {"pairing_session_id": "wps_test", "environment": "uat", "world_id": "world-a"}
+    _mark_quick_pair_completed(hass, "pairing-state", data)
+    if entry_saved:
+        from tests.helpers import FakeConfigEntry
+        hass.config_entries.entries.append(FakeConfigEntry(data=data))
+    response = await SavanAIQuickPairCallbackView().get(request)
+    assert response.status == 202
+    assert "still being finalized" in response.text
+    assert hass.config_entries.flow.configure_calls == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_uncommitted_entry_does_not_report_success(monkeypatch):
+    from seenzus_bridge.quick_pair import _mark_quick_pair_completed
+    hass, request = _build_quick_pair_callback_request(monkeypatch)
+    _mark_quick_pair_completed(hass, "pairing-state", {"pairing_session_id": "wps_test", "environment": "uat", "world_id": "world-a"})
+    hass.config_entries.flow.async_get = lambda _: (_ for _ in ()).throw(UnknownFlow())
+    response = await SavanAIQuickPairCallbackView().get(request)
+    assert response.status == 410
 
 
 @pytest.mark.asyncio
@@ -1114,6 +1151,7 @@ async def test_quick_pair_callback_mailbox_evicts_oldest_beyond_cap(monkeypatch)
 
     for index in range(QUICK_PAIR_CALLBACK_PAYLOAD_LIMIT + 1):
         state = {"flow_id": f"flow-{index}", "pairing_state": f"pairing-state-{index}"}
+        hass.data.setdefault("seenzus_bridge", {}).setdefault("quick_pair_active_states", {})[("config", state["flow_id"])] = state["pairing_state"]
         monkeypatch.setattr(
             "seenzus_bridge.quick_pair._decode_jwt",
             lambda _hass, _token, _state=state: _state,
@@ -1606,6 +1644,7 @@ async def test_seamless_finish_creates_entry_with_return_link(monkeypatch) -> No
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
     flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
+    flow._quick_pair_callback_state = "pairing-state"
     flow._quick_pair_exchange_result = _result_obj(
         {
             "ok": True,
@@ -1650,6 +1689,13 @@ async def test_seamless_finish_creates_entry_with_return_link(monkeypatch) -> No
     assert created[0]["description_placeholders"] == {
         "app_return_url": "seenzus://pairing/done?session=wps_1"
     }
+    assert notified == []
+    from homeassistant.config_entries import ConfigEntryState
+    from tests.helpers import FakeConfigEntry
+    entry = FakeConfigEntry(data=created[0]["data"])
+    entry.state = ConfigEntryState.LOADED
+    flow.hass.config_entries.entries.append(entry)
+    flow.async_remove()
     # The same link is also pushed as a durable persistent notification, so the
     # options / re-pair path (no create_entry success page) still surfaces it.
     # There it routes through the transit endpoint: clicking dismisses the

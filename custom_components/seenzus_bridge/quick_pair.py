@@ -17,6 +17,7 @@ from urllib.parse import quote, urlsplit
 from aiohttp import web
 
 from homeassistant.components import http, persistent_notification
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, UnknownFlow
 
@@ -30,13 +31,16 @@ from homeassistant.helpers.config_entry_oauth2_flow import (
 )
 from homeassistant.helpers.network import get_url
 
-from .const import DOMAIN, PRODUCT_NAME, QUICK_PAIR_LAST_DIAGNOSTIC
+from .const import DOMAIN, PRODUCT_NAME, QUICK_PAIR_LAST_DIAGNOSTIC, CONF_PAIRING_SESSION_ID
+from .environments import CONF_ENVIRONMENT, CONF_WORLD_ID
 from .ui_text import async_prepare_ui_text, ui_text
 
 QUICK_PAIR_CALLBACK_PATH = "/api/seenzus_bridge/quick_pair/callback"
 QUICK_PAIR_CALLBACK_VIEW_REGISTERED = "quick_pair_callback_view_registered"
 QUICK_PAIR_CALLBACK_PAYLOADS = "quick_pair_callback_payloads"
 QUICK_PAIR_COMPLETED_STATES = "quick_pair_completed_states"
+QUICK_PAIR_ACTIVE_STATES = "quick_pair_active_states"
+QUICK_PAIR_CALLBACKS_IN_FLIGHT = "quick_pair_callbacks_in_flight"
 # payload 信箱只在 flow 恢复时被 pop——若浏览器回跳后 flow 永远没恢复，
 # 条目会永久滞留。设上限并「先逐最旧、再插入」，保证刚存入的 payload 必然幸存。
 QUICK_PAIR_CALLBACK_PAYLOAD_LIMIT = 16
@@ -100,18 +104,59 @@ class SeenzusQuickPairCallbackView(http.HomeAssistantView):
         if not callback_state:
             return web.Response(text="Missing pairing state", status=400)
 
-        if not _quick_pair_was_completed(hass, callback_state):
-            _store_quick_pair_callback_payload(hass, callback_state, user_input)
+        key = (flow_manager, flow_id)
+        active = hass.data.get(DOMAIN, {}).get(QUICK_PAIR_ACTIVE_STATES, {})
+        expected = active.get(key)
+        if not isinstance(expected, str) or not secrets.compare_digest(expected, callback_state):
+            return web.Response(text="This pairing attempt has expired. Please start again in Home Assistant.", status=410)
+        in_flight = hass.data.setdefault(DOMAIN, {}).setdefault(QUICK_PAIR_CALLBACKS_IN_FLIGHT, set())
+        if key in in_flight:
+            return web.Response(text="Pairing is still being processed. Please return to Home Assistant.", status=202)
+        in_flight.add(key)
+        try:
+            return await self._resume(request, hass, state, user_input, flow_manager, flow_id, callback_state)
+        finally:
+            in_flight.discard(key)
 
+    async def _resume(self, request, hass, state, user_input, flow_manager, flow_id, callback_state):
+        """Resume one callback while the per-flow HTTP guard is held."""
         flow_manager_obj = hass.config_entries.flow
         if flow_manager == FLOW_MANAGER_OPTIONS:
             flow_manager_obj = hass.config_entries.options
+        completed = _quick_pair_was_completed(hass, callback_state)
+        pending = callback_state in hass.data.get(DOMAIN, {}).get(QUICK_PAIR_COMPLETED_STATES, {})
+        if pending:
+            try:
+                flow_manager_obj.async_get(flow_id)
+            except UnknownFlow:
+                if completed:
+                    return _quick_pair_success_response()
+                if _quick_pair_has_pending_entry(hass, callback_state):
+                    return _quick_pair_pending_response(hass)
+                return web.Response(text="Pairing was not saved. Please start again in Home Assistant.", status=410)
+            else:
+                # The integration returned CREATE_ENTRY, but HA has not yet
+                # removed the flow. Do not drive it a second time or claim it
+                # has been committed while HA may still be writing the entry.
+                return web.Response(text="Pairing is still being finalized. Please return to Home Assistant.", status=202)
+        if not completed:
+            try:
+                progress = flow_manager_obj.async_get(flow_id)
+            except UnknownFlow:
+                return web.Response(text="This pairing flow has expired or was cancelled. Please start again in Home Assistant.", status=410)
+            if progress.get("step_id") != "seamless_authorize":
+                return web.Response(text="This pairing flow has moved to another step. Please start again in Home Assistant.", status=410)
+            _store_quick_pair_callback_payload(hass, callback_state, user_input)
         app_resume = _app_resume_requested(request)
         try:
             configure = flow_manager_obj.async_configure
             result = await _call_flow_configure(configure, flow_id)
             if app_resume:
                 result = await _drive_flow_to_terminal_state(configure, flow_id, result)
+            # A user can cancel while the backend exchange is awaiting I/O. A
+            # return from configure alone does not prove that HA kept the flow.
+            if not _quick_pair_was_completed(hass, callback_state):
+                flow_manager_obj.async_get(flow_id)
         except FlowResumeLimitExceeded as err:
             _LOGGER.error(
                 "Quick pair callback could not finish %s flow %s: %s",
@@ -131,6 +176,8 @@ class SeenzusQuickPairCallbackView(http.HomeAssistantView):
             # Only a confirmed local completion can make a repeated callback a
             # success. Cancelled/expired flows must never report a new binding.
             if not _quick_pair_was_completed(hass, callback_state):
+                if _quick_pair_has_pending_entry(hass, callback_state):
+                    return _quick_pair_pending_response(hass)
                 return web.Response(text="This pairing flow has expired or was cancelled. Please start again in Home Assistant.", status=410)
             _LOGGER.info(
                 "Quick pair %s flow %s already finished elsewhere before callback resume",
@@ -157,13 +204,26 @@ class SeenzusQuickPairCallbackView(http.HomeAssistantView):
         # window.close() 只对脚本打开的窗口生效;App 内嵌 WebView / 手动新开
         # 标签页里关不掉,300ms 后跳回集成页,不再停在白屏。网页版弹窗在超时
         # 触发前就已被 close 关掉,行为不变。
-        return web.Response(
-            headers={"content-type": "text/html"},
-            text=(
-                "<script>window.close();setTimeout(function(){"
-                "location.replace('/config/integrations')},300)</script>"
-            ),
-        )
+        return _quick_pair_success_response()
+
+
+def _quick_pair_success_response() -> web.Response:
+    """Close the external window after a live handoff or confirmed completion."""
+    return web.Response(
+        headers={"content-type": "text/html"},
+        text=(
+            "<script>window.close();setTimeout(function(){"
+            "location.replace('/config/integrations')},300)</script>"
+        ),
+    )
+
+
+def _quick_pair_pending_response(hass: HomeAssistant) -> web.Response:
+    """The entry is saved but its setup may require operator attention."""
+    chinese = str(getattr(hass.config, "language", "en")).startswith("zh")
+    message = ("配对信息已提交，请在 HA 中检查集成状态。" if chinese
+               else "Pairing settings were submitted. Check the integration status in Home Assistant.")
+    return web.Response(text=message, status=202)
 
 
 def _app_resume_requested(request: web.Request) -> bool:
@@ -337,16 +397,53 @@ def _build_app_return_transit_url(hass: HomeAssistant, app_return_url: str, scop
 
 
 def _quick_pair_was_completed(hass: HomeAssistant, state: str) -> bool:
-    return state in hass.data.get(DOMAIN, {}).get(QUICK_PAIR_COMPLETED_STATES, {})
+    record = hass.data.get(DOMAIN, {}).get(QUICK_PAIR_COMPLETED_STATES, {}).get(state)
+    if not isinstance(record, dict) or not record.get("finish_removed"):
+        return False
+    return bool(record.get("confirmed") or _confirm_quick_pair_completed(hass, state))
 
 
-def _mark_quick_pair_completed(hass: HomeAssistant, state: str | None) -> None:
+def _quick_pair_finish_removed(hass: HomeAssistant, state: str | None) -> None:
+    record = hass.data.get(DOMAIN, {}).get(QUICK_PAIR_COMPLETED_STATES, {}).get(state)
+    if isinstance(record, dict):
+        record["finish_removed"] = True
+
+
+def _quick_pair_has_pending_entry(hass: HomeAssistant, state: str) -> bool:
+    record = hass.data.get(DOMAIN, {}).get(QUICK_PAIR_COMPLETED_STATES, {}).get(state)
+    if not isinstance(record, dict) or not record.get("finish_removed"):
+        return False
+    expected = record.get("expected")
+    return bool(isinstance(expected, dict) and all(expected.values()) and any(
+        all({**entry.data, **entry.options}.get(key) == value for key, value in expected.items())
+        for entry in hass.config_entries.async_entries(DOMAIN)
+    ))
+
+
+def _confirm_quick_pair_completed(hass: HomeAssistant, state: str | None) -> bool:
+    """Confirm only after Core removed the flow and a matching entry is loaded."""
+    record = hass.data.get(DOMAIN, {}).get(QUICK_PAIR_COMPLETED_STATES, {}).get(state)
+    if not isinstance(record, dict) or not record.get("finish_removed"):
+        return False
+    expected = record.get("expected")
+    if not isinstance(expected, dict) or not all(expected.values()):
+        return False
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        saved = {**entry.data, **entry.options}
+        if entry.state == ConfigEntryState.LOADED and all(saved.get(key) == value for key, value in expected.items()):
+            record["confirmed"] = True
+            return True
+    return False
+
+
+def _mark_quick_pair_completed(hass: HomeAssistant, state: str | None, data: dict) -> None:
     if not state:
         return
     completed = hass.data.setdefault(DOMAIN, {}).setdefault(QUICK_PAIR_COMPLETED_STATES, {})
     while len(completed) >= QUICK_PAIR_CALLBACK_PAYLOAD_LIMIT:
         completed.pop(next(iter(completed)))
-    completed[state] = True
+    # This records the expected result, not proof that HA has committed it.
+    completed[state] = {"expected": {key: data.get(key) for key in (CONF_PAIRING_SESSION_ID, CONF_ENVIRONMENT, CONF_WORLD_ID)}, "confirmed": False, "finish_removed": False}
 
 
 def _quick_pair_callback_payloads(hass: HomeAssistant) -> dict[str, dict[str, Any]]:
@@ -406,6 +503,11 @@ def _build_quick_pair_callback_context(
             "exp": int(time.time()) + 15 * 60,
         },
     )
+    active = hass.data.setdefault(DOMAIN, {}).setdefault(QUICK_PAIR_ACTIVE_STATES, {})
+    active.pop((flow_manager, flow_id), None)
+    while len(active) >= QUICK_PAIR_CALLBACK_PAYLOAD_LIMIT:
+        active.pop(next(iter(active)))
+    active[(flow_manager, flow_id)] = callback_state
     return redirect_uri, callback_state, callback_state_token
 
 

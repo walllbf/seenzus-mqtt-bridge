@@ -19,7 +19,7 @@ async def main():
     params = context(hass)
     # Browser tests replace timestamps inside this fixture to model a new flow.
     build_pairing_origin_url(hass, params)
-    hass.config_entries.flow.async_get = lambda _: {}
+    hass.config_entries.flow.async_get = lambda _: {"step_id": "seamless_authorize"}
     response = await PairingOriginView().get(SimpleNamespace(app={"hass": hass}, query={"state": params["state"]}))
     Path(sys.argv[1]).write_text(json.dumps({"html": response.text, "headers": dict(response.headers), "params": params}), encoding="utf-8")
 

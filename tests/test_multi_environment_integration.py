@@ -105,8 +105,13 @@ async def test_scope_menu_preserves_local_budget_transport_and_credentials(home)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("preset", [None, "http://dev.local/api"])
-async def test_automatic_origin_handoff_does_not_read_global_developer_preset(home, monkeypatch, preset):
+@pytest.mark.parametrize("preset,expected", [
+    (None, None), ("http://dev.local/api", None),
+    ("HTTP://DEV.LOCAL:80/api/seenzus", "http://dev.local"),
+    ("https://dev.local:443/api/seenzus", "https://dev.local"),
+    ("http://[::1]:3000/api/seenzus", "http://[::1]:3000"),
+])
+async def test_automatic_origin_handoff_only_allows_configured_custom_origin(home, monkeypatch, preset, expected):
     from seenzus_bridge.config_flow import SavanAIBridgeConfigFlow
     from seenzus_bridge.quick_pair import _encode_jwt
 
@@ -128,7 +133,10 @@ async def test_automatic_origin_handoff_does_not_read_global_developer_preset(ho
     assert parse_qs(urlparse(result["url"]).query) == {"state": [token]}
     assert urlparse(result["url"]).netloc == "ha.local"
     assert urlparse(result["url"]).path == "/api/seenzus_bridge/quick_pair/origin"
-    resolve.assert_not_awaited()
+    resolve.assert_awaited_once()
+    params = hass.data["seenzus_bridge"]["quick_pair_origin_contexts"][("config", flow.flow_id)]["params"]
+    assert params["developer_origin"] == expected
+    assert flow._quick_pair_api_base is None
 
 
 @pytest.mark.asyncio

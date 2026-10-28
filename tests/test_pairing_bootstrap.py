@@ -237,6 +237,27 @@ async def test_create_web_pairing_session_posts_expected_payload(monkeypatch) ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("api,reply,expected", [
+    ("https://uat.seenzus.ai/api/seenzus", {}, False),
+    ("https://uat.seenzus.ai/api/seenzus", {"protocolVersion": 2, "environment": "cn"}, False),
+    ("https://uat.seenzus.ai/api/seenzus", {"protocolVersion": 2, "environment": "uat"}, True),
+    ("http://dev.local:5078/api/seenzus", {"protocolVersion": 2, "environment": "custom"}, True),
+])
+async def test_v2_pairing_requires_matching_server_capability(monkeypatch, api, reply, expected) -> None:
+    class CapabilitySession(_FakeClientSession):
+        def post(self, url, *, json, headers=None):
+            return _FakeResponse(200, {"ok": True, "sessionId": "wps_test",
+                "pairingPageUrl": "https://uat.seenzus.ai/pair?session_id=wps_test", **reply})
+
+    monkeypatch.setattr("seenzus_bridge.pairing_bootstrap.aiohttp.ClientSession", CapabilitySession)
+    result = await create_web_pairing_session(api_base=api,
+        bridge_name="Bridge", bridge_version="1", ha_version="1", protocol_version=2)
+    assert result.ok is expected
+    if not expected:
+        assert result.error_code == ("pairing_origin_mismatch" if reply.get("protocolVersion") == 2 else "pairing_protocol_unsupported")
+
+
+@pytest.mark.asyncio
 async def test_create_web_pairing_session_omits_ha_instance_id_when_absent(monkeypatch) -> None:
     fake_session = _FakeClientSession()
     monkeypatch.setattr(

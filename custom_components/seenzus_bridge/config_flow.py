@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 import voluptuous as vol
 
@@ -11,6 +11,7 @@ from homeassistant import config_entries
 from homeassistant import data_entry_flow as data_entry_flow_module
 from homeassistant.core import callback
 from homeassistant.helpers.network import NoURLAvailableError
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers import entity_registry as er, device_registry as dr
 from homeassistant.helpers.selector import (
     BooleanSelector,
@@ -90,7 +91,9 @@ from .pairing_bootstrap import (
     create_web_pairing_session,
     exchange_web_pairing_callback_code,
     fetch_web_pairing_session_status,
+    finalize_web_pairing,
 )
+from .pairing_commit import async_resolve_orphans, pairing_journal, spawn
 from .pairing_models import (
     PairingCallbackResult,
     PairingSessionCreateResult,
@@ -112,6 +115,9 @@ from .quick_pair import (  # noqa: F401
     _format_quick_pair_diagnostic,
     _notify_app_return,
     _mark_quick_pair_completed,
+    _confirm_quick_pair_completed,
+    _quick_pair_finish_removed,
+    _quick_pair_has_pending_entry,
     _pop_quick_pair_callback_payload,
     _record_quick_pair_diagnostic,
 )
@@ -390,6 +396,15 @@ def _build_quick_pair_entry_data(
     return data
 
 
+async def _release_late_exchange(exchange_task: asyncio.Task, api_base: str | None) -> None:
+    """Cancel a candidate whose flow ended while its exchange was in flight."""
+    result = (await asyncio.gather(exchange_task, return_exceptions=True))[0]
+    token = getattr(result, "commit_token", None)
+    if token and api_base:
+        await finalize_web_pairing(api_base=api_base, session_id=result.session_id,
+                                   commit_token=token, action="cancel")
+
+
 def _diagnostic_from_result(
     result: PairingCallbackResult | PairingSessionCreateResult | PairingStatusResult,
 ) -> dict[str, str]:
@@ -566,6 +581,11 @@ class _QuickPairFlowMixin:
         self._quick_pair_callback_state: str | None = None
         self._quick_pair_callback_state_token: str | None = None
         self._quick_pair_exchange_result = None
+        self._quick_pair_exchange_in_progress = False
+        self._quick_pair_journaled = False
+        self._quick_pair_finish_started = False
+        self._quick_pair_finish_owner = None
+        self._quick_pair_removed = asyncio.Event()
         self._quick_pair_finish_error: str | None = None
         self._quick_pair_diagnostic: dict[str, str] = {}
         # App return link (backend-supplied), surfaced on HA's native create-entry
@@ -576,6 +596,123 @@ class _QuickPairFlowMixin:
         self._scope = {key: self._current_config()[key] for key in SCOPE_KEYS if key in self._current_config()}
         self._dev_api_base: str | None = None
         self._scope_only = False
+
+    @callback
+    def async_remove(self) -> None:
+        """Wake a duplicate finish only after HA removes or cancels the flow."""
+        # A user can cancel while Core is still saving. Only removal by the
+        # original finish task can confirm the result; registration alone isn't
+        # proof because Core registers an entry before awaiting its setup.
+        if self._quick_pair_finish_started and asyncio.current_task() is self._quick_pair_finish_owner:
+            _quick_pair_finish_removed(self.hass, self._quick_pair_callback_state)
+            if _confirm_quick_pair_completed(self.hass, self._quick_pair_callback_state):
+                if self._quick_pair_app_return_url:
+                    _notify_app_return(self.hass, self._quick_pair_app_return_url, self._notification_scope())
+                else:
+                    _clear_quick_pair_notifications(self.hass, self._notification_scope())
+            elif self._quick_pair_callback_state and _quick_pair_has_pending_entry(self.hass, self._quick_pair_callback_state):
+                self._watch_pairing_entry()
+        if self._quick_pair_journaled:
+            # Core saves an entry before removing its flow, so a candidate that
+            # no entry carries by now was not kept by HA.
+            spawn(self.hass, async_resolve_orphans(self.hass), f"{DOMAIN} pairing orphans")
+        self._quick_pair_removed.set()
+        super().async_remove()
+
+    @callback
+    def _watch_pairing_entry(self) -> None:
+        """Wait for HA's entry state event, including retries after long outages."""
+        watchers = self.hass.data.setdefault(DOMAIN, {}).setdefault("quick_pair_entry_watchers", {})
+        state = self._quick_pair_callback_state
+        previous = watchers.pop(state, None)
+        if previous:
+            previous()
+        while len(watchers) >= 16:
+            watchers.pop(next(iter(watchers)))()
+
+        @callback
+        def changed(_change, _entry):
+            if _confirm_quick_pair_completed(self.hass, state):
+                watchers.pop(state, lambda: None)()
+                if self._quick_pair_app_return_url:
+                    _notify_app_return(self.hass, self._quick_pair_app_return_url, self._notification_scope())
+                else:
+                    _clear_quick_pair_notifications(self.hass, self._notification_scope())
+            elif not _quick_pair_has_pending_entry(self.hass, state):
+                watchers.pop(state, lambda: None)()
+
+        watchers[state] = async_dispatcher_connect(self.hass, config_entries.SIGNAL_CONFIG_ENTRY_CHANGED, changed)
+
+    async def _finish_quick_pair_once(self, status_result):
+        """Never issue two CREATE_ENTRY results for one in-progress flow."""
+        if self._quick_pair_finish_started:
+            owner = self._quick_pair_finish_owner
+            if owner is asyncio.current_task():
+                raise data_entry_flow_module.UnknownFlow
+            removed = asyncio.create_task(self._quick_pair_removed.wait())
+            try:
+                await asyncio.wait({removed, owner}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                removed.cancel()
+            if not self._quick_pair_removed.is_set():
+                # Core's original request died during commit. Its flow cannot
+                # safely be retried in place; release it without a second write.
+                manager = self.hass.config_entries.options if self._flow_manager == FLOW_MANAGER_OPTIONS else self.hass.config_entries.flow
+                try:
+                    manager.async_abort(self.flow_id)
+                except data_entry_flow_module.UnknownFlow:
+                    pass
+            raise data_entry_flow_module.UnknownFlow
+        result = self._entry_data_or_reshow(status_result)
+        if result.get("type") == data_entry_flow_module.FlowResultType.CREATE_ENTRY:
+            self._quick_pair_finish_started = True
+            self._quick_pair_finish_owner = asyncio.current_task()
+            self._quick_pair_finish_owner.add_done_callback(self._cleanup_abandoned_finish)
+        return result
+
+    def _cleanup_abandoned_finish(self, _owner) -> None:
+        """Release a flow if Core's commit request ended without removing it."""
+        if self._quick_pair_removed.is_set() or not self.flow_id:
+            return
+        manager = self.hass.config_entries.options if self._flow_manager == FLOW_MANAGER_OPTIONS else self.hass.config_entries.flow
+        try:
+            manager.async_abort(self.flow_id)
+        except (AttributeError, data_entry_flow_module.UnknownFlow):
+            pass
+
+    async def _journal_candidate(self, result: PairingCallbackResult) -> bool:
+        """Make a deferred candidate durable before any entry can use it.
+
+        A legacy backend returns no commit token and has already finalized.
+        If the journal cannot be written, release the candidate: an entry
+        saved without a journal record could never be committed.
+        """
+        token = getattr(result, "commit_token", None)
+        if not token:
+            return True
+        marker = {
+            "session_id": result.session_id or self._quick_pair_session_id,
+            "api_base": self._quick_pair_api_base,
+            "token": token,
+            "expires_at": getattr(result, "commit_expires_at", None),
+            "flow_manager": self._flow_manager,
+            "flow_id": getattr(self, "flow_id", None),
+        }
+        entry = getattr(self, "_config_entry", None)
+        if self._flow_manager == FLOW_MANAGER_OPTIONS and entry is not None:
+            marker["entry_id"] = entry.entry_id
+        else:
+            entry = None
+        try:
+            # On a re-pair the journal records what a refusal must restore.
+            await pairing_journal(self.hass).async_record(marker, replacing=entry)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Could not journal pairing candidate %s", marker["session_id"])
+            await finalize_web_pairing(api_base=marker["api_base"], session_id=marker["session_id"],
+                                       commit_token=marker["token"], action="cancel")
+            return False
+        self._quick_pair_journaled = True
+        return True
 
     def _reshow_seamless_form(self, error_key: str) -> config_entries.ConfigFlowResult:
         """Re-show the (field-less) seamless form after a failure, with the error."""
@@ -625,7 +762,7 @@ class _QuickPairFlowMixin:
         if result_return_url:
             self._quick_pair_app_return_url = result_return_url
         result = self._finish_quick_pair(data)
-        _mark_quick_pair_completed(self.hass, self._quick_pair_callback_state)
+        _mark_quick_pair_completed(self.hass, self._quick_pair_callback_state, data)
         return result
 
     def _finish_quick_pair(self, data: dict) -> config_entries.ConfigFlowResult:
@@ -646,7 +783,6 @@ class _QuickPairFlowMixin:
             # flow, but that page is transient and the options / re-pair flow
             # doesn't render a create_entry description at all — the notification
             # covers both paths and survives the success dialog being closed.
-            _notify_app_return(self.hass, self._quick_pair_app_return_url, self._notification_scope())
             return self.async_create_entry(
                 title=self._entry_title,
                 data=data,
@@ -656,7 +792,6 @@ class _QuickPairFlowMixin:
         # No return link this time (manual / no-URL re-pair). Still a success, so
         # clear any stale return-link or failure notification from a prior attempt
         # — a leftover link would send the user back with an expired session.
-        _clear_quick_pair_notifications(self.hass, self._notification_scope())
         return self.async_create_entry(title=self._entry_title, data=data)
 
     async def _environment_choices(self) -> dict[str, str]:
@@ -732,17 +867,39 @@ class _QuickPairFlowMixin:
                     expected_source_id=existing.get(CONF_SOURCE_ID) if not existing.get(CONF_WORLD_ID) else None)
                 if not result.ok or not result.pairing_page_url or not result.session_id:
                     self._quick_pair_diagnostic = _diagnostic_from_result(result)
-                    return self._reshow_seamless_form("quick_pair_session_failed")
+                    reason = result.error_code if result.error_code in {"pairing_protocol_unsupported", "pairing_origin_mismatch"} else "quick_pair_session_failed"
+                    return self._reshow_seamless_form(reason)
                 self._quick_pair_page_url = result.pairing_page_url
                 self._quick_pair_session_id = result.session_id
                 self._quick_pair_app_return_url = _sanitize_app_return_url(getattr(result, "app_return_url", None))
                 return await self.async_step_seamless_authorize()
+            # Only an administrator's valid developer preset may add an origin
+            # beyond the three public deployments; it never retargets them.
+            try:
+                preset = await resolve_dev_pairing_api_base(self.hass)
+            except DevOverrideError:
+                preset = None
+            developer_origin = None
+            if preset and environment_for_api(preset) == "custom":
+                self._dev_api_base = preset
+                parsed = urlsplit(preset)
+                # The current app bootstrap posts to its own /api/seenzus. A
+                # differently shaped API preset remains available via explicit
+                # manual selection, but cannot claim same-origin auto pairing.
+                if parsed.path.rstrip("/") == "/api/seenzus":
+                    host = parsed.hostname or ""
+                    host = f"[{host}]" if ":" in host else host.encode("idna").decode("ascii")
+                    port = parsed.port
+                    default_port = 443 if parsed.scheme == "https" else 80
+                    netloc = f"{host}:{port}" if port and port != default_port else host
+                    developer_origin = urlunsplit((parsed.scheme, netloc, "", "", ""))
             self._quick_pair_page_url = build_pairing_origin_url(self.hass, {
                 "state": token, "redirect_uri": redirect_uri,
                 "ha_instance_id": ha_instance_id, "bridge_name": _backend_bridge_name(self.hass),
                 "expected_world_id": existing.get(CONF_WORLD_ID),
                 "expected_source_id": existing.get(CONF_SOURCE_ID) if not existing.get(CONF_WORLD_ID) else None,
                 "configured_environments": ",".join(sorted(self._configured_environments())),
+                "developer_origin": developer_origin,
             })
             return await self.async_step_seamless_authorize()
         except DevOverrideError:
@@ -753,6 +910,11 @@ class _QuickPairFlowMixin:
     async def async_step_seamless_authorize(self, user_input: dict | None = None):
         if not self._quick_pair_page_url:
             return self.async_abort(reason="quick_pair_missing_context")
+
+        # HA's frontend can also configure this flow while a callback request is
+        # waiting on the single-use code exchange. Keep it parked, not timed out.
+        if self._quick_pair_exchange_in_progress:
+            return self.async_external_step(step_id="seamless_authorize", url=self._quick_pair_page_url)
 
         if user_input is None:
             user_input = _pop_quick_pair_callback_payload(
@@ -783,6 +945,8 @@ class _QuickPairFlowMixin:
                             raise ValueError("environment_mismatch")
                     elif environment in ENVIRONMENTS:
                         self._quick_pair_api_base = ENVIRONMENTS[environment][1]
+                    elif environment == "custom" and self._dev_api_base:
+                        self._quick_pair_api_base = self._dev_api_base
                     else:
                         raise ValueError("invalid_environment")
                     if environment_for_api(self._quick_pair_api_base) in self._configured_environments():
@@ -795,16 +959,41 @@ class _QuickPairFlowMixin:
                         raise ValueError("invalid_session")
                     self._quick_pair_session_id = session_id
                     code = str(user_input.get("code", "")).strip()
-                    result = await exchange_web_pairing_callback_code(
-                        api_base=self._quick_pair_api_base,
-                        code=code,
-                        state=self._quick_pair_callback_state_token,
-                        session_id=self._quick_pair_session_id,
-                    )
+                    self._quick_pair_exchange_in_progress = True
+                    try:
+                        exchange_task = asyncio.create_task(exchange_web_pairing_callback_code(
+                            api_base=self._quick_pair_api_base,
+                            code=code,
+                            state=self._quick_pair_callback_state_token,
+                            session_id=self._quick_pair_session_id,
+                            deferred_commit=True,
+                        ))
+                        removed_task = asyncio.create_task(self._quick_pair_removed.wait())
+                        try:
+                            await asyncio.wait({exchange_task, removed_task}, return_when=asyncio.FIRST_COMPLETED)
+                            if self._quick_pair_removed.is_set() and not exchange_task.done():
+                                # Let the request finish so that a candidate it
+                                # created is released now rather than expiring.
+                                spawn(self.hass, _release_late_exchange(exchange_task, self._quick_pair_api_base),
+                                      f"{DOMAIN} release cancelled pairing")
+                                return self.async_external_step_done(next_step_id="seamless_finish")
+                            result = await exchange_task
+                        finally:
+                            removed_task.cancel()
+                            await asyncio.gather(removed_task, return_exceptions=True)
+                    finally:
+                        self._quick_pair_exchange_in_progress = False
+                    if self._quick_pair_removed.is_set():
+                        await _release_late_exchange(exchange_task, self._quick_pair_api_base)
+                        return self.async_external_step_done(next_step_id="seamless_finish")
                     if not result.ok or not result.mqtt:
                         self._quick_pair_finish_error = "quick_pair_code_exchange_failed"
                         self._quick_pair_diagnostic = _diagnostic_from_result(result)
                         _record_quick_pair_diagnostic(self.hass, "quick_pair_code_exchange_failed", self._quick_pair_diagnostic, self._notification_scope())
+                    elif not await self._journal_candidate(result):
+                        self._quick_pair_finish_error = "quick_pair_code_exchange_failed"
+                        self._quick_pair_diagnostic = {"error_code": "pairing_journal_unavailable"}
+                        _record_quick_pair_diagnostic(self.hass, "pairing_journal_unavailable", self._quick_pair_diagnostic, self._notification_scope())
                     else:
                         self._quick_pair_exchange_result = result
                         self._quick_pair_finish_error = None
@@ -846,7 +1035,7 @@ class _QuickPairFlowMixin:
             return self._reshow_seamless_form(self._quick_pair_finish_error)
 
         if self._quick_pair_exchange_result is not None:
-            return self._entry_data_or_reshow(self._quick_pair_exchange_result)
+            return await self._finish_quick_pair_once(self._quick_pair_exchange_result)
 
         status_result = None
         for _ in range(3):
@@ -864,7 +1053,7 @@ class _QuickPairFlowMixin:
             return self._reshow_seamless_form("quick_pair_bootstrap_failed")
         self._quick_pair_diagnostic = _diagnostic_from_result(status_result)
 
-        return self._entry_data_or_reshow(status_result)
+        return await self._finish_quick_pair_once(status_result)
 
     async def async_step_scope(self, user_input: dict | None = None):
         if user_input:

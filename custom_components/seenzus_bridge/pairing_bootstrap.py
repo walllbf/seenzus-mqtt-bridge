@@ -5,11 +5,14 @@ from dataclasses import dataclass
 import json
 import logging
 import re
+from typing import Literal
 
 import aiohttp
 
+from .environments import environment_for_api
 from .pairing_models import (
     PairingCallbackResult,
+    PairingCommitResult,
     PairingSessionCreateResult,
     PairingStatusResult,
 )
@@ -323,6 +326,14 @@ async def create_web_pairing_session(
 
     data = outcome.data
     payload = outcome.payload
+    if protocol_version == 2 and (payload.get("protocolVersion") != 2 or payload.get("environment") != environment_for_api(base)):
+        error = "pairing_origin_mismatch" if payload.get("protocolVersion") == 2 else "pairing_protocol_unsupported"
+        return PairingSessionCreateResult(
+            ok=False, session_id="", status="session_failed", request_url=url,
+            http_status=outcome.http_status, error_code=error,
+            message=("The pairing server returned a different environment." if error == "pairing_origin_mismatch"
+                     else "The pairing server does not support the required environment protocol."),
+        )
     return PairingSessionCreateResult(
         ok=_read_ok(payload, data),
         session_id=str(payload.get("sessionId", "")),
@@ -398,9 +409,15 @@ async def exchange_web_pairing_callback_code(
     code: str,
     state: str,
     session_id: str | None = None,
+    deferred_commit: bool = False,
     timeout_seconds: int = 10,
 ) -> PairingCallbackResult:
-    """Exchange a callback code for finalized MQTT bridge config."""
+    """Exchange a callback code for MQTT bridge config.
+
+    With ``deferred_commit`` a supporting backend returns a candidate credential
+    and a commit token, and changes nothing else until HA commits. An older
+    backend ignores the request and finalizes immediately (no token returned).
+    """
 
     base = api_base.strip().rstrip("/")
     url = f"{base}/integrations/ha/web-pairing/callback/exchange"
@@ -409,6 +426,8 @@ async def exchange_web_pairing_callback_code(
         "state": state,
         "sessionId": session_id,
     }
+    if deferred_commit:
+        body["commitMode"] = "deferred"
 
     outcome = await _call_pairing_api(
         "POST",
@@ -441,9 +460,65 @@ async def exchange_web_pairing_callback_code(
         confirmed_at=str(payload.get("confirmedAt", "")) or None,
         app_return_url=_read_app_return_url(payload),
         mqtt=payload.get("mqtt") if isinstance(payload.get("mqtt"), dict) else None,
+        commit_token=_read_commit(payload, "token"),
+        commit_expires_at=_read_commit(payload, "expiresAt"),
         message=_read_message(data, "ok"),
         request_url=url,
         http_status=outcome.http_status,
         error_code=_success_error_code(payload, data),
+        response_summary=outcome.response_summary,
+    )
+
+
+def _read_commit(payload: dict, key: str) -> str | None:
+    commit = payload.get("commit")
+    value = commit.get(key) if isinstance(commit, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
+async def finalize_web_pairing(
+    *,
+    api_base: str,
+    session_id: str,
+    commit_token: str,
+    action: Literal["commit", "cancel"],
+    timeout_seconds: int = 15,
+) -> PairingCommitResult:
+    """Commit (HA saved the entry) or cancel (it did not) a deferred pairing."""
+
+    base = api_base.strip().rstrip("/")
+    url = f"{base}/integrations/ha/web-pairing/callback/{action}"
+    outcome = await _call_pairing_api(
+        "POST",
+        url,
+        json_body={"sessionId": session_id, "commitToken": commit_token},
+        timeout_seconds=timeout_seconds,
+        log_label=f"Quick pair {action}",
+        request_log_suffix=f" session={session_id}",
+    )
+    payload = outcome.payload if isinstance(outcome.payload, dict) else {}
+    status = outcome.http_status
+    error_code = None if outcome.error is None else type(outcome.error).__name__
+    if outcome.error is None and status is not None and status >= 400:
+        error_code = _read_error_code(outcome.data, f"http_{status}")
+    already_committed = action == "cancel" and status == 409 and error_code == "pairing_already_committed"
+    ok = outcome.error is None and ((status == 200 and bool(payload.get("ok", True))) or already_committed)
+    # Only the pairing API's own answers are final: it holds no live candidate
+    # for this token and kept its previous Source. A bare 404 (an instance or
+    # proxy without these routes during a rollout), network failures, 409 and
+    # 5xx may still resolve on retry.
+    rejected = not ok and outcome.error is None and (
+        status == 410 or (status, error_code) in {(404, "pairing_commit_not_found"), (400, "invalid_commit_request")}
+    )
+    return PairingCommitResult(
+        ok=ok,
+        rejected=rejected,
+        state=str(payload.get("state") or "") or ("committed" if already_committed else None),
+        source_id=str(payload.get("sourceId", "")) or None,
+        app_return_url=_read_app_return_url(payload),
+        message=_read_message(outcome.data, "ok") if outcome.error is None else str(outcome.error),
+        request_url=url,
+        http_status=status,
+        error_code=error_code,
         response_summary=outcome.response_summary,
     )

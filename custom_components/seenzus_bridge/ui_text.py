@@ -14,6 +14,9 @@ ENGLISH_TEXT = {
     "manual_return": "If the link does not open, open this address manually: `{url}`",
     "opening_app": "Opening the seenzus app…",
     "return_fallback": "If you are not redirected automatically, click here",
+    "pairing_unconfirmed_title": "seenzus Bridge pairing not confirmed",
+    "pairing_restored_message": "seenzus did not confirm the new pairing, so the previous connection was restored and nothing changed in the app. Open Configure → Re-pair or manual setup to pair again.",
+    "pairing_rejected_message": "seenzus did not confirm this pairing, so its credentials are not valid. Open this entry's Configure → Re-pair or manual setup to pair again.",
 }
 
 

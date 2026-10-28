@@ -25,6 +25,7 @@ from .coordinator import (  # noqa: F401
     BridgeCoordinator,
 )
 from .mqtt_requirements import async_ensure_mqtt_requirements
+from .pairing_commit import async_resolve_orphans, async_schedule_commit, spawn
 from .mqtt_transport import MqttTransportError, validate_mqtt_transport
 
 PLATFORMS = ["sensor"]
@@ -34,6 +35,8 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Prepare the integration before config flows and entries start."""
     await async_ensure_mqtt_requirements(hass)
+    # Candidates journaled before a restart whose entry was never saved.
+    spawn(hass, async_resolve_orphans(hass), f"{DOMAIN} pairing orphans")
     return True
 
 
@@ -83,7 +86,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN].pop(entry.entry_id, None)
         await coordinator.async_stop()
         raise
+    async_schedule_commit(hass, entry)
     return True
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """A deleted entry no longer carries its uncommitted candidate."""
+    spawn(hass, async_resolve_orphans(hass, entry.entry_id), f"{DOMAIN} pairing orphans")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
