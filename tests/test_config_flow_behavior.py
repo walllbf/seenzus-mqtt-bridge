@@ -1729,7 +1729,7 @@ async def test_seamless_finish_creates_entry_with_return_link(monkeypatch) -> No
     # The success-page link stays the raw app URL (the dialog is HA-native and
     # cannot be closed from a link click, so no transit indirection there).
     assert created[0]["description_placeholders"] == {
-        "app_return_url": "seenzus://pairing/done?session=wps_1"
+        "app_return_link": '<a href="seenzus://pairing/done?session=wps_1" target="_blank">Return to seenzus</a>'
     }
     assert notified == []
     from homeassistant.config_entries import ConfigEntryState
@@ -1789,7 +1789,8 @@ async def test_deferred_pairing_success_page_returns_to_the_deployment(monkeypat
         # HA's transit page opens the Source once the commit returned its link,
         # and falls back to the deployment's source list.
         assert created[0]["description"] == "app_return"
-        assert created[0]["description_placeholders"] == {"app_return_url": f"{QUICK_PAIR_APP_RETURN_PATH}?token=t"}
+        assert created[0]["description_placeholders"] == {
+            "app_return_link": f'<a href="{QUICK_PAIR_APP_RETURN_PATH}?token=t" target="_blank">Return to seenzus</a>'}
         assert signed == [{"app_return_url": expected, "notification_scope": flow.flow_id, "session_id": "wps_1"}]
     else:
         assert "description" not in created[0]

@@ -4,7 +4,7 @@ domains: [Home-Assistant, pairing, browser]
 evidence: [tests/test_pairing_origin.py, tests/test_pairing_commit.py, tests/test_pairing_commit_contract.py, tools/direct_pairing_preview/origin-claim-browser-test.cjs]
 ---
 
-# 来源识别与两阶段提交验证版 · 0.2.16b6
+# 来源识别与两阶段提交验证版 · 0.2.16b7
 
 本版在 0.2.16b2（电脑浏览器来源识别，已在 UAT 网页端验收）基础上增加两项：
 
@@ -12,6 +12,8 @@ evidence: [tests/test_pairing_origin.py, tests/test_pairing_commit.py, tests/tes
 - **手机端来源识别**：Android、iOS、鸿蒙从应用发起时不依赖 `window.opener`，HA 页面经各环境的 `/ha-origin-claim/` 读取「刚从这里发起」的记录，自动进入发起环境。
 
 0.2.16b6：HA「配对成功」页的「返回 seenzus 应用」直接打开刚配对的数据源详情页。按钮经 HA 本机中转：提交完成后服务端返回的数据源链接即为目标；点击时提交尚未完成会最多等待 8 秒，仍未取得时打开发起环境的设备管理页。提交完成后 HA 通知中同样有指向该数据源的链接。
+
+0.2.16b7：修正 b6 在「配对成功」页显示「Translation error: INVALID_TAG」、按钮不出现的问题。HA 前端按 ICU 消息格式解析翻译文本，带属性的链接标签只能经占位符传入。
 
 0.2.16b4 修正手机实测中发现的问题：
 
@@ -35,7 +37,7 @@ evidence: [tests/test_pairing_origin.py, tests/test_pairing_commit.py, tests/tes
 
 1. 在 HA 中创建完整备份，并额外保存当前 `custom_components/seenzus_bridge` 文件夹。
 2. 将 ZIP 中的 `custom_components/seenzus_bridge` 整个文件夹覆盖到 HA 配置目录下的同名位置，包含 `translations`。不要嵌套成两层 `seenzus_bridge`。
-3. 完整重启 HA，强制刷新 HA 页面。版本应为 `0.2.16b6`。
+3. 完整重启 HA，强制刷新 HA 页面。版本应为 `0.2.16b7`。
 
 ## 验收清单
 
@@ -67,8 +69,8 @@ evidence: [tests/test_pairing_origin.py, tests/test_pairing_commit.py, tests/tes
 
 | 范围 | 结果 |
 | --- | --- |
-| HA Core 2025.1.4 / Python 3.13 | 705 项测试通过（含 4 项跨仓库契约） |
-| HA Core 2026.10.2 / Python 3.14 | 705 项测试通过（含 4 项跨仓库契约） |
+| HA Core 2025.1.4 / Python 3.13 | 708 项测试通过（含 4 项跨仓库契约） |
+| HA Core 2026.10.2 / Python 3.14 | 708 项测试通过（含 4 项跨仓库契约） |
 | 跨仓库契约（真实应用配对路由，内存库） | 4 项通过：保存后才提交、取消重配保留原连接、HA 重启与服务端崩溃后的提交、拒绝后回滚 |
 | 认领页链路与页面选择，Chromium 与 WebKit | 各 12 项通过；页面与授权结果为测试夹具 |
 | 用户实际 HA、真实账号授权、手机安装包 | 等待用户验收 |

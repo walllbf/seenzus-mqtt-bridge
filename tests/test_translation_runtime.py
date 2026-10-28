@@ -40,3 +40,16 @@ async def test_custom_integration_text_loads_in_real_ha(tmp_path, language, cate
             )
     finally:
         await hass.async_stop(force=True)
+
+
+@pytest.mark.parametrize("source", ["strings.json", "translations/en.json", "translations/zh-Hans.json"])
+def test_frontend_text_has_no_markup(source):
+    """The frontend formats flow text as ICU messages, which reject HTML tags.
+
+    A tag such as ``<a href=...>`` renders as "Translation error: INVALID_TAG";
+    markup has to arrive through a placeholder instead.
+    """
+    shipped = json.loads((INTEGRATION_PATH / source).read_text(encoding="utf-8"))
+    for category in ("config", "options"):
+        tagged = {key for key, text in recursive_flatten("", shipped[category]).items() if "<" in text}
+        assert not tagged, f"{source} {category}: {sorted(tagged)}"

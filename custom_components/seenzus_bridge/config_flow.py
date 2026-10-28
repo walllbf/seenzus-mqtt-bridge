@@ -110,6 +110,7 @@ from .quick_pair import (  # noqa: F401
     FLOW_MANAGER_OPTIONS,
     QUICK_PAIR_CALLBACK_PATH,
     SavanAIQuickPairCallbackView,
+    _app_return_link_html,
     _build_app_return_transit_url,
     _build_quick_pair_callback_context,
     _clear_quick_pair_notifications,
@@ -823,7 +824,7 @@ class _QuickPairFlowMixin:
                 title=self._entry_title,
                 data=data,
                 description="app_return",
-                description_placeholders={"app_return_url": link},
+                description_placeholders={"app_return_link": _app_return_link_html(self.hass, link)},
             )
         # No return link this time (manual / no-URL re-pair). Still a success, so
         # clear any stale return-link or failure notification from a prior attempt

@@ -627,6 +627,23 @@ def _record_quick_pair_diagnostic(hass: HomeAssistant, reason: str, diagnostic: 
         pass
 
 
+def _app_return_link_html(hass: HomeAssistant, link_url: str) -> str:
+    """The 「返回 seenzus」 anchor for HA's markdown surfaces.
+
+    必须用带 target 的内联 HTML 锚点，不能用 markdown [x](url) 语法：前端对
+    「同源 + 无 target」的 <a> 会拦截成 SPA pushState 路由（frontend
+    is-navigation-click.ts），请求根本不会发到中转 view——表现为点击后通知
+    仍在、第二次点击（地址未变）完全无操作。带 target 的锚点被放行为真实
+    浏览器导航；HA 的 markdown 渲染（xss 库白名单 a[target|href|title]）
+    会保留 target 属性。锚点只能经占位符传入：前端用 ICU 消息格式翻译，
+    翻译文本里带属性的标签会报 「Translation error: INVALID_TAG」。
+    """
+    return (
+        f'<a href="{_html_escape(link_url, quote=True)}" target="_blank">'
+        f'{_html_escape(ui_text(hass, "return_label"))}</a>'
+    )
+
+
 def _notify_app_return(hass: HomeAssistant, app_return_url: str, scope_id: str = "") -> None:
     """Surface the backend's 'return to seenzus app' link as a persistent notification.
 
@@ -649,18 +666,7 @@ def _notify_app_return(hass: HomeAssistant, app_return_url: str, scope_id: str =
     real production failure is still traceable instead of fully silent.
     """
     transit_url = _build_app_return_transit_url(hass, app_return_url, scope_id)
-    link_url = transit_url or app_return_url
-    # 必须用带 target 的内联 HTML 锚点，不能用 markdown [x](url) 语法：前端对
-    # 「同源 + 无 target」的 <a> 会拦截成 SPA pushState 路由（frontend
-    # is-navigation-click.ts），请求根本不会发到中转 view——表现为点击后通知
-    # 仍在、第二次点击（地址未变）完全无操作。带 target 的锚点被放行为真实
-    # 浏览器导航；HA 的 markdown 渲染（xss 库白名单 a[target|href|title]）
-    # 会保留 target 属性。
-    link_html = (
-        f'<a href="{_html_escape(link_url, quote=True)}" target="_blank">'
-        f'{_html_escape(ui_text(hass, "return_label"))}</a>'
-    )
-    message = ui_text(hass, "paired_message", link=link_html)
+    message = ui_text(hass, "paired_message", link=_app_return_link_html(hass, transit_url or app_return_url))
     if transit_url is None:
         # 回退直链时，seenzus:// 这类自定义 scheme 的 href 会被前端 markdown
         # 的 xss 过滤器清空（js-xss 默认 safeAttrValue 只放行 http(s)/mailto
