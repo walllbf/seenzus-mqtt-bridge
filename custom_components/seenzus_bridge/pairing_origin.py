@@ -41,6 +41,7 @@ ORIGIN_SCRIPT = r"""
   const context = JSON.parse(document.getElementById('context').textContent);
   const status = document.getElementById('status');
   const manual = document.getElementById('manual');
+  const environments = document.getElementById('environments');
   const query = new URLSearchParams(location.search);
   // getRandomValues also works on a local HA served over plain HTTP.
   const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('');
@@ -53,12 +54,27 @@ ORIGIN_SCRIPT = r"""
     clearTimeout(deadline);
     window.removeEventListener('message', receive);
   };
-  const fail = () => {
+  // In-app WebViews cannot get back to HA's dialog, so the choice is offered here,
+  // unless deployments would refuse to return to this HA address anyway.
+  const offered = (context.params.manual_environments || '').split(',').filter(key => context.origins[key]);
+  const fail = (here = true) => {
     stop();
+    const choices = here ? offered : [];
     status.textContent = context.chinese
-      ? '无法自动识别环境。可返回 HA 手动选择，或取消本次配对并从应用重新发起。'
-      : 'The environment could not be detected. Choose it in HA, or cancel and restart from the app.';
-    manual.hidden = false;
+      ? (choices.length ? '无法自动识别环境。请选择要连接的环境，或取消本次配对并从应用重新发起。'
+        : '无法自动识别环境。可返回 HA 手动选择，或取消本次配对并从应用重新发起。')
+      : (choices.length ? 'The environment could not be detected. Choose one, or cancel and restart from the app.'
+        : 'The environment could not be detected. Choose it in HA, or cancel and restart from the app.');
+    if (!choices.length) { manual.hidden = false; return; }
+    for (const key of choices) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = (context.labels || {})[key] || key;
+      button.addEventListener('click', () => route(key));
+      environments.append(button);
+    }
+    environments.hidden = false;
+    environments.style.display = 'flex';
   };
   const route = (environment) => {
     stop();
@@ -112,7 +128,7 @@ ORIGIN_SCRIPT = r"""
   const probe = async () => {
     if (done) return;
     stop();
-    if (!returnable()) { fail(); return; }
+    if (!returnable()) { fail(false); return; }
     status.textContent = context.chinese ? '正在识别发起配对的应用…' : 'Identifying the app that started pairing…';
     // A developer origin goes first: public claim pages only continue to public deployments.
     const keys = Object.keys(context.origins).sort((a, b) => (b === 'custom') - (a === 'custom'));
@@ -157,6 +173,14 @@ ORIGIN_SCRIPT = r"""
   ask();
 })();
 """
+
+
+# Same names as the environment selector in translations/*.json.
+_ENVIRONMENT_LABELS = {
+    "zh": {"cn": "国内 PRD", "global": "境外 PRD", "uat": "UAT（开发）", "custom": "Dev Server（开发预设）"},
+    "en": {"cn": "Mainland PRD", "global": "Overseas PRD", "uat": "UAT (development)",
+           "custom": "Dev Server (developer preset)"},
+}
 
 
 def _prune(contexts: dict) -> None:
@@ -217,7 +241,8 @@ class PairingOriginView(http.HomeAssistantView):
         chinese = str(getattr(hass.config, "language", "en")).startswith("zh")
         payload = {"params": context["params"], "chinese": chinese,
                    "origins": {key: urlunsplit((*urlsplit(api)[:2], "", "", ""))
-                               for key, (_, api) in ENVIRONMENTS.items()}}
+                               for key, (_, api) in ENVIRONMENTS.items()},
+                   "labels": _ENVIRONMENT_LABELS["zh" if chinese else "en"]}
         if context["params"].get("developer_origin"):
             payload["origins"]["custom"] = context["params"]["developer_origin"]
         # JSON is embedded in HTML, including HA's user-supplied location name.
@@ -235,6 +260,7 @@ class PairingOriginView(http.HomeAssistantView):
                 "<title>seenzus · Home Assistant</title>"
                 "<style>body{font:16px system-ui;max-width:560px;margin:12vh auto;padding:24px;line-height:1.8}</style>"
                 f"</head><body><h1>seenzus</h1><p id=status>{title}</p><button id=manual hidden>{manual}</button>"
+                "<div id=environments hidden style='flex-direction:column;gap:12px;max-width:280px'></div>"
                 f"<script id=context type=application/json>{encoded}</script>"
                 + f"<script>{ORIGIN_SCRIPT}</script></body></html>")
         return web.Response(text=body, content_type="text/html", headers=headers)

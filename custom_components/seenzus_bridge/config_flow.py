@@ -716,6 +716,9 @@ class _QuickPairFlowMixin:
 
     def _reshow_seamless_form(self, error_key: str) -> config_entries.ConfigFlowResult:
         """Re-show the (field-less) seamless form after a failure, with the error."""
+        # Waiting on the user, so a new pairing may take over the slot: this
+        # dialog can be out of reach in an in-app WebView or app hand-off.
+        self._mark_pairing_parked()
         return _show_form_with_diagnostic(
             self,
             step_id="seamless",
@@ -818,6 +821,7 @@ class _QuickPairFlowMixin:
             if CONF_SCOPE in self._scope:
                 return await self._after_scope()
             return await self.async_step_scope()
+        self._mark_pairing_parked()
         return self.async_show_form(step_id="environment", data_schema=vol.Schema({
             vol.Required(CONF_ENVIRONMENT): SelectSelector(SelectSelectorConfig(
                 options=list(choices), mode=SelectSelectorMode.LIST, translation_key="environment")),
@@ -893,12 +897,16 @@ class _QuickPairFlowMixin:
                     default_port = 443 if parsed.scheme == "https" else 80
                     netloc = f"{host}:{port}" if port and port != default_port else host
                     developer_origin = urlunsplit((parsed.scheme, netloc, "", "", ""))
+            # The origin page offers the same explicit choices as HA's environment
+            # step: in-app WebViews cannot return to that HA dialog.
+            manual = ["cn", "global"] + (["uat"] if preset else []) + (["custom"] if developer_origin else [])
             self._quick_pair_page_url = build_pairing_origin_url(self.hass, {
                 "state": token, "redirect_uri": redirect_uri,
                 "ha_instance_id": ha_instance_id, "bridge_name": _backend_bridge_name(self.hass),
                 "expected_world_id": existing.get(CONF_WORLD_ID),
                 "expected_source_id": existing.get(CONF_SOURCE_ID) if not existing.get(CONF_WORLD_ID) else None,
                 "configured_environments": ",".join(sorted(self._configured_environments())),
+                "manual_environments": ",".join(manual),
                 "developer_origin": developer_origin,
             })
             return await self.async_step_seamless_authorize()

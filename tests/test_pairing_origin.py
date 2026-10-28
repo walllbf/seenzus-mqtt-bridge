@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import json
+import re
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -103,6 +104,31 @@ async def test_auto_flow_registers_local_origin_view_on_first_install(monkeypatc
     assert flow._quick_pair_api_base is None
     payload = hass.data["seenzus_bridge"][origin._CONTEXTS][("config", "first-install")]["params"]
     assert payload["developer_origin"] is None
+    # The page offers HA's own environment choices; a preset also unlocks UAT, as in HA.
+    assert payload["manual_environments"] == "cn,global,uat"
+
+
+@pytest.mark.asyncio
+async def test_origin_page_offers_production_choices_and_their_labels(monkeypatch):
+    hass = FakeHass()
+    hass.config.language = "zh-Hans"
+    flow = SavanAIBridgeConfigFlow()
+    flow.hass, flow.flow_id, flow.context = hass, "plain-install", {"source": "user"}
+    flow.async_external_step = lambda **kwargs: kwargs
+    params = context(hass, "plain-install")
+    monkeypatch.setattr("seenzus_bridge.config_flow._build_quick_pair_callback_context",
+                        lambda *_: (params["redirect_uri"], "nonce", params["state"]))
+    monkeypatch.setattr("seenzus_bridge.config_flow._resolve_ha_instance_id", AsyncMock(return_value="test-ha"))
+    monkeypatch.setattr("seenzus_bridge.config_flow.resolve_dev_pairing_api_base", AsyncMock(return_value=None))
+    await flow.async_step_seamless({})
+    stored = hass.data["seenzus_bridge"][origin._CONTEXTS][("config", "plain-install")]["params"]
+    assert stored["manual_environments"] == "cn,global"
+    hass.config_entries.flow.async_get = lambda _: {"step_id": "seamless_authorize"}
+    page = await origin.PairingOriginView().get(SimpleNamespace(app={"hass": hass}, query={"state": params["state"]}))
+    embedded = json.loads(re.search(r"<script id=context type=application/json>(.*?)</script>", page.text).group(1))
+    assert embedded["params"]["manual_environments"] == "cn,global"
+    assert embedded["labels"]["cn"] == "国内 PRD" and embedded["labels"]["global"] == "境外 PRD"
+    assert "id=environments hidden" in page.text
 
 
 @pytest.mark.asyncio

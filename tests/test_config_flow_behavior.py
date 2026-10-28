@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -983,11 +984,12 @@ async def test_quick_pair_callback_view_returns_202_when_flow_resume_fails(monke
 async def test_quick_pair_callback_view_without_app_flag_keeps_single_configure(
     monkeypatch, app_value
 ) -> None:
-    """浏览器路径(无 app 标记)行为一字不变:只 resume 一次。
+    """浏览器路径(无 app 标记)回调本身只 resume 一次。
 
-    首次 configure 停在 EXTERNAL_STEP_DONE、剩余推进交给常驻 HA 前端标签页
-    ——这是 issue #43 修复后刻意保留的网页版语义。
+    首次 configure 停在 EXTERNAL_STEP_DONE、剩余推进先交给常驻 HA 前端标签页;
+    前端已推进(此处 step 仍是 seamless_authorize)时兜底任务不再推进。
     """
+    monkeypatch.setattr("seenzus_bridge.quick_pair.UNATTENDED_RESUME_DELAY_SECONDS", 0)
     query = {"app": app_value} if app_value is not None else None
     hass, request = _build_quick_pair_callback_request(monkeypatch, query=query)
     hass.config_entries.flow.configure_results = [
@@ -999,6 +1001,44 @@ async def test_quick_pair_callback_view_without_app_flag_keeps_single_configure(
     assert response.status == 200
     assert len(hass.config_entries.flow.configure_calls) == 1
     assert "window.close()" in response.text
+    await asyncio.gather(*hass.scheduled_tasks)
+    assert len(hass.config_entries.flow.configure_calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("later", "expected_calls"), [
+    ({"step_id": "seamless_finish"}, 2),  # no dialog resumed it: the bridge finishes the flow
+    ({"step_id": "environment"}, 1),  # a live dialog already moved it on
+    (UnknownFlow(), 1),  # the dialog finished or cancelled it
+])
+async def test_browser_callback_finishes_a_flow_no_dialog_resumes(monkeypatch, later, expected_calls) -> None:
+    """Phones with the Home Assistant app keep the dialog there while authorization
+    returns to a browser: nothing resumes the flow, so the bridge does after a grace."""
+    monkeypatch.setattr("seenzus_bridge.quick_pair.UNATTENDED_RESUME_DELAY_SECONDS", 0)
+    hass, request = _build_quick_pair_callback_request(monkeypatch)
+    manager = hass.config_entries.flow
+    manager.configure_results = [
+        {"type": FlowResultType.EXTERNAL_STEP_DONE, "step_id": "seamless_finish"},
+        {"type": FlowResultType.CREATE_ENTRY, "title": "seenzus Bridge"},
+    ]
+    # Before storing the callback, right after resuming it, then when the grace ends.
+    progress = [{"step_id": "seamless_authorize"}, {"step_id": "seamless_finish"}, later]
+
+    def async_get(_flow_id):
+        step = progress.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return step
+
+    manager.async_get = async_get
+
+    response = await SavanAIQuickPairCallbackView().get(request)
+    assert response.status == 200
+    assert len(manager.configure_calls) == 1
+    await asyncio.gather(*hass.scheduled_tasks)
+
+    assert len(manager.configure_calls) == expected_calls
+    assert all(call["user_input"] is None for call in manager.configure_calls)
 
 
 @pytest.mark.asyncio
@@ -1016,9 +1056,11 @@ async def test_quick_pair_callback_view_with_app_flag_drives_flow_to_create_entr
 
     assert response.status == 200
     assert len(hass.config_entries.flow.configure_calls) == 2
-    # 关不掉的 WebView 里 300ms 后跳回集成页,不再停在白屏。
+    # In-app WebViews and app hand-offs cannot close this page: it says so instead of
+    # opening HA's dashboard in the browser.
     assert "window.close()" in response.text
-    assert "location.replace('/config/integrations')" in response.text
+    assert "/config/integrations" not in response.text
+    assert "You can close this page" in response.text
 
 
 @pytest.mark.asyncio

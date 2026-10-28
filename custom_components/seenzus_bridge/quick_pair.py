@@ -6,6 +6,7 @@ config_flow 全局解析。
 """
 from __future__ import annotations
 
+import asyncio
 from html import escape as _html_escape
 import json
 import logging
@@ -56,6 +57,8 @@ FLOW_MANAGER_OPTIONS = "options"
 # EXTERNAL_STEP_DONE 推到终态(CREATE_ENTRY / ABORT / FORM)。带上限防病态
 # flow 死循环;正常路径只需 1 次推进(external_done → seamless_finish)。
 MAX_FLOW_RESUME_STEPS = 4
+# Grace for a live HA dialog to resume a browser-path flow before the bridge does.
+UNATTENDED_RESUME_DELAY_SECONDS = 5
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -130,7 +133,7 @@ class SeenzusQuickPairCallbackView(http.HomeAssistantView):
                 flow_manager_obj.async_get(flow_id)
             except UnknownFlow:
                 if completed:
-                    return _quick_pair_success_response()
+                    return _quick_pair_success_response(hass)
                 if _quick_pair_has_pending_entry(hass, callback_state):
                     return _quick_pair_pending_response(hass)
                 return web.Response(text="Pairing was not saved. Please start again in Home Assistant.", status=410)
@@ -153,6 +156,11 @@ class SeenzusQuickPairCallbackView(http.HomeAssistantView):
             result = await _call_flow_configure(configure, flow_id)
             if app_resume:
                 result = await _drive_flow_to_terminal_state(configure, flow_id, result)
+            elif isinstance(result, dict) and result.get("type") == FlowResultType.EXTERNAL_STEP_DONE:
+                hass.async_create_background_task(
+                    _resume_if_unattended(flow_manager_obj, flow_id),
+                    f"{DOMAIN} resume unattended quick pair",
+                )
             # A user can cancel while the backend exchange is awaiting I/O. A
             # return from configure alone does not prove that HA kept the flow.
             if not _quick_pair_was_completed(hass, callback_state):
@@ -201,19 +209,27 @@ class SeenzusQuickPairCallbackView(http.HomeAssistantView):
             flow_manager,
             flow_id,
         )
-        # window.close() 只对脚本打开的窗口生效;App 内嵌 WebView / 手动新开
-        # 标签页里关不掉,300ms 后跳回集成页,不再停在白屏。网页版弹窗在超时
-        # 触发前就已被 close 关掉,行为不变。
-        return _quick_pair_success_response()
+        return _quick_pair_success_response(hass)
 
 
-def _quick_pair_success_response() -> web.Response:
-    """Close the external window after a live handoff or confirmed completion."""
+def _quick_pair_success_response(hass: HomeAssistant) -> web.Response:
+    """Close the external window, or say so where the page cannot close itself.
+
+    window.close() only works for script-opened windows. In-app WebViews and tabs
+    handed over by the Home Assistant app keep this page; it must not navigate to
+    HA's dashboard there, which would open a second HA session in the browser.
+    """
+    chinese = str(getattr(hass.config, "language", "en")).startswith("zh")
+    message = ("授权完成，Home Assistant 正在保存配对。可以关闭此页面。" if chinese
+               else "Authorization complete. Home Assistant is saving the pairing. You can close this page.")
     return web.Response(
         headers={"content-type": "text/html"},
         text=(
-            "<script>window.close();setTimeout(function(){"
-            "location.replace('/config/integrations')},300)</script>"
+            "<!doctype html><meta charset=utf-8>"
+            "<meta name=viewport content='width=device-width,initial-scale=1'>"
+            "<title>seenzus · Home Assistant</title>"
+            "<style>body{font:16px system-ui;max-width:560px;margin:12vh auto;padding:24px;line-height:1.8}</style>"
+            f"<p>{_html_escape(message)}</p><script>window.close()</script>"
         ),
     )
 
@@ -245,6 +261,29 @@ async def _call_flow_configure(configure, flow_id: str) -> Any:
             return await configure(flow_id)
         except TypeError:
             return await configure()
+
+
+async def _resume_if_unattended(manager, flow_id: str) -> None:
+    """Finish a browser-path flow that no HA dialog picked up.
+
+    The HA dialog that started the flow normally resumes it at once. On phones
+    the dialog may live in the Home Assistant app while authorization returned
+    to a browser, leaving the flow parked at EXTERNAL_STEP_DONE forever. A flow
+    still parked there after the grace period has no live dialog: drive it on.
+    """
+    await asyncio.sleep(UNATTENDED_RESUME_DELAY_SECONDS)
+    try:
+        if manager.async_get(flow_id).get("step_id") != "seamless_finish":
+            return  # a dialog already moved it on
+        result = await _drive_flow_to_terminal_state(
+            manager.async_configure, flow_id, {"type": FlowResultType.EXTERNAL_STEP_DONE})
+    except UnknownFlow:
+        return
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.warning("Quick pair could not finish unattended flow %s: %s", flow_id, err)
+        return
+    _LOGGER.info("Quick pair finished unattended flow %s, final type=%s", flow_id,
+                 result.get("type") if isinstance(result, dict) else type(result).__name__)
 
 
 async def _drive_flow_to_terminal_state(configure, flow_id: str, result: Any) -> Any:

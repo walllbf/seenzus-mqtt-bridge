@@ -4,12 +4,21 @@ domains: [Home-Assistant, pairing, browser]
 evidence: [tests/test_pairing_origin.py, tests/test_pairing_commit.py, tests/test_pairing_commit_contract.py, tools/direct_pairing_preview/origin-claim-browser-test.cjs]
 ---
 
-# 来源识别与两阶段提交验证版 · 0.2.16b3
+# 来源识别与两阶段提交验证版 · 0.2.16b4
 
 本版在 0.2.16b2（电脑浏览器来源识别，已在 UAT 网页端验收）基础上增加两项：
 
 - **两阶段提交**：服务端先签发候选凭证，HA 确认条目已保存到磁盘后才提交；取消、断网、重启或服务端拒绝后，HA 与应用两端回到同一个连接。
 - **手机端来源识别**：Android、iOS、鸿蒙从应用发起时不依赖 `window.opener`，HA 页面经各环境的 `/ha-origin-claim/` 读取「刚从这里发起」的记录，自动进入发起环境。
+
+0.2.16b4 修正手机实测中发现的问题：
+
+- 手机上装有 Home Assistant App 时，HA 的添加对话框在 App 里，授权却回到浏览器，流程停在授权完成后无人推进。现在授权回跳 5 秒后若没有对话框继续，HA 自行完成保存并提交。
+- 授权回跳页不再跳到浏览器里的 HA 集成页，只提示「可以关闭此页面」。
+- 无法自动识别时，直接在识别页上选择国内 PRD／境外 PRD（有开发预设时另含 UAT 与 Dev Server），不再回到 App 内看不到的 HA 对话框。
+- 停在表单步骤、实际无人操作的旧配对流程不再占用配对位置，新的配对直接接管，无需重启 HA。
+
+服务端需包含 seenzus PR #2247（`claim.js` 允许跨源探测），否则手机端识别必然失败；三个环境已部署。
 
 包含 #77 基线 `b1cc89318d1a997a21603ba542a5d097dc38c33c` 的多环境及设备范围功能。#77 保持未合并。
 
@@ -24,7 +33,7 @@ evidence: [tests/test_pairing_origin.py, tests/test_pairing_commit.py, tests/tes
 
 1. 在 HA 中创建完整备份，并额外保存当前 `custom_components/seenzus_bridge` 文件夹。
 2. 将 ZIP 中的 `custom_components/seenzus_bridge` 整个文件夹覆盖到 HA 配置目录下的同名位置，包含 `translations`。不要嵌套成两层 `seenzus_bridge`。
-3. 完整重启 HA，强制刷新 HA 页面。版本应为 `0.2.16b3`。
+3. 完整重启 HA，强制刷新 HA 页面。版本应为 `0.2.16b4`。
 
 ## 验收清单
 
@@ -48,7 +57,7 @@ evidence: [tests/test_pairing_origin.py, tests/test_pairing_commit.py, tests/tes
 
 ## 异常和回退
 
-- 无法识别时显示「无法自动识别环境」并提供手动选择，不会自行切到国内或境外。
+- 无法识别时显示「无法自动识别环境」并在页面上列出可选环境，不会自行切到国内或境外。HA 地址为非本地 http 时改为回到 HA 选择。
 - 服务端拒绝提交时，HA 恢复服务端保留的连接并发出通知；新条目被拒绝时保留在 HA 中，需手动删除后重新配对。
 - 回退插件时恢复原插件目录并重启。本版包含 #77 的条目版本 2；要回退到不支持版本 2 的旧正式版，应恢复安装前的完整 HA 备份。
 
@@ -56,10 +65,10 @@ evidence: [tests/test_pairing_origin.py, tests/test_pairing_commit.py, tests/tes
 
 | 范围 | 结果 |
 | --- | --- |
-| HA Core 2025.1.4 / Python 3.13 | 694 项测试通过 |
-| HA Core 2026.10.2 / Python 3.14 | 694 项测试通过 |
+| HA Core 2025.1.4 / Python 3.13 | 699 项测试通过（含 4 项跨仓库契约） |
+| HA Core 2026.10.2 / Python 3.14 | 699 项测试通过（含 4 项跨仓库契约） |
 | 跨仓库契约（真实应用配对路由，内存库） | 4 项通过：保存后才提交、取消重配保留原连接、HA 重启与服务端崩溃后的提交、拒绝后回滚 |
-| 认领页链路，Chromium 与 WebKit | 各 10 项通过；页面与授权结果为测试夹具 |
+| 认领页链路与页面选择，Chromium 与 WebKit | 各 12 项通过；页面与授权结果为测试夹具 |
 | 用户实际 HA、真实账号授权、手机安装包 | 等待用户验收 |
 
 浏览器夹具证明路由交接行为，不代表真实账号授权已经完成。

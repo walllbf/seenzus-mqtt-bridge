@@ -23,12 +23,15 @@ const origins = { cn: 'https://app.seenzus.cn', global: 'https://seenzus.ai', ua
 const custom = 'http://dev.localhost:3000';
 const LAUNCH_KEY = 'seenzus:ha-origin-launch:v1';
 
-function originPage({ configured = '', withCustom = false }) {
-  const params = { ...fixture.params, redirect_uri: callbackUrl(), configured_environments: configured };
+const labels = { cn: '国内 PRD', global: '境外 PRD', uat: 'UAT（开发）', custom: 'Dev Server（开发预设）' };
+
+function originPage({ configured = '', withCustom = false, choices = 'cn,global' }) {
+  const params = { ...fixture.params, redirect_uri: callbackUrl(), configured_environments: configured,
+    manual_environments: choices };
   params.state = `fixture.${Buffer.from(JSON.stringify({ flow_id: 'fixture', redirect_uri: callbackUrl() })).toString('base64url')}.fixture`;
   const all = withCustom ? { ...origins, custom } : origins;
   const body = fixture.html.replace(/(<script id=context type=application\/json>).*?(<\/script>)/s,
-    (_, before, after) => before + JSON.stringify({ params, chinese: true, origins: all }).replaceAll('<', '\\u003c') + after);
+    (_, before, after) => before + JSON.stringify({ params, chinese: true, origins: all, labels }).replaceAll('<', '\\u003c') + after);
   const headers = { ...fixture.headers };
   // The view derives connect-src from the same origins it embeds.
   headers['Content-Security-Policy'] = headers['Content-Security-Policy']
@@ -37,10 +40,11 @@ function originPage({ configured = '', withCustom = false }) {
 }
 
 /** One browser profile: every deployment, My HA and HA itself are routed fixtures. */
-async function exercise(browser, name, { launches, unreachable = [], configured = '', withCustom = false, systemBrowser = false, expect }) {
+async function exercise(browser, name, { launches, unreachable = [], configured = '', withCustom = false,
+  choices, systemBrowser = false, expect }) {
   const context = await browser.newContext();
   const visited = [];
-  const page = originPage({ configured, withCustom });
+  const page = originPage({ configured, withCustom, choices });
   await context.route('**/*', async (route) => {
     const url = new URL(route.request().url());
     visited.push(url.origin + url.pathname);
@@ -53,14 +57,15 @@ async function exercise(browser, name, { launches, unreachable = [], configured 
         location.replace('https://my.home-assistant.io/redirect/config_flow_start/?domain=seenzus_bridge')</script>` });
     }
     if (deployment && url.pathname.startsWith('/ha-origin-claim/')) {
-      const file = url.pathname.endsWith('.js') ? 'claim.js' : 'index.html';
-      return route.fulfill({ headers: { 'Content-Type': file.endsWith('.js') ? 'text/javascript' : 'text/html',
-        'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store',
+      const file = path.basename(url.pathname.endsWith('/') ? 'index.html' : url.pathname);
+      const type = { 'claim.js': 'text/javascript', 'style.css': 'text/css' }[file] || 'text/html';
+      // Production keeps everything same-origin except the claim script, which HA's page
+      // fetches cross-origin as its reachability probe. Routed responses bypass CORP, so the
+      // app's own header test covers that contract.
+      return route.fulfill({ headers: { 'Content-Type': type, 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store',
+        'Cross-Origin-Resource-Policy': file === 'claim.js' ? 'cross-origin' : 'same-origin',
         'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'" },
         body: fs.readFileSync(path.join(publicDir, 'ha-origin-claim', file)) });
-    }
-    if (deployment && url.pathname === '/ha-origin-start/style.css') {
-      return route.fulfill({ contentType: 'text/css', body: fs.readFileSync(path.join(publicDir, 'ha-origin-start', 'style.css')) });
     }
     if (deployment && url.pathname === '/pair/bootstrap') return route.fulfill({ contentType: 'text/html', body: 'Authorization fixture' });
     if (url.origin === 'https://my.home-assistant.io') return route.fulfill({ contentType: 'text/html', body: `<script>location.replace('${ha}/config/integrations')</script>` });
@@ -87,7 +92,15 @@ async function exercise(browser, name, { launches, unreachable = [], configured 
     const next = systemBrowser ? context.waitForEvent('page') : Promise.resolve(tab);
     await tab.locator('button').click();
     const external = await next;
-    if (expect.manual) {
+    if (expect.offers) {
+      await external.locator('#environments').waitFor({ state: 'visible' });
+      assert.deepEqual(await external.locator('#environments button').allTextContents(), expect.offers.map((key) => labels[key]));
+      assert(await external.locator('#manual').isHidden());
+    } else if (expect.choose) {
+      await external.getByRole('button', { name: labels[expect.choose] }).click();
+      await external.waitForURL(`${origins[expect.choose]}/pair/bootstrap?**`);
+      assert.equal(new URL(external.url()).searchParams.get('state'), page.state);
+    } else if (expect.manual) {
       await external.locator('#manual').waitFor({ state: 'visible' });
       await external.locator('#manual').click();
       await external.waitForURL(`${callbackUrl()}?**`);
@@ -116,7 +129,10 @@ async function exercise(browser, name, { launches, unreachable = [], configured 
     await exercise(browser, 'newest launch wins over an earlier one', { launches: [origins.uat, origins.global], expect: { origin: origins.global } });
     await exercise(browser, 'unreachable deployment is skipped', { launches: [origins.global], unreachable: [origins.cn], expect: { origin: origins.global } });
     await exercise(browser, 'developer origin claims first', { launches: [custom], withCustom: true, expect: { origin: custom } });
-    await exercise(browser, 'no launch falls back to an explicit choice', { launches: [], expect: { manual: true } });
+    await exercise(browser, 'no launch offers the environment choice on this page', { launches: [], expect: { choose: 'global' } });
+    await exercise(browser, 'no reachable deployment offers the choice too',
+      { launches: [], unreachable: Object.values(origins), expect: { offers: ['cn', 'global'] } });
+    await exercise(browser, 'without page choices it falls back to HA', { launches: [], choices: '', expect: { manual: true } });
     await exercise(browser, 'configured environment is reported, not duplicated', { launches: [origins.cn], configured: 'cn', expect: { error: 'environment_already_configured' } });
     // Deployments only return to HTTPS or local HA addresses; others get the choice, not a dead end.
     ha = 'http://homeassistant:8123';

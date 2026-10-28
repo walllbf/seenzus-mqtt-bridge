@@ -675,6 +675,33 @@ async def test_new_pairing_supersedes_flow_parked_at_external_step(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_new_pairing_supersedes_flow_waiting_on_an_unreachable_form(monkeypatch):
+    """An in-app WebView or the Home Assistant app can leave the dialog that shows
+    the environment form out of reach. That flow holds no candidate, so a new
+    pairing takes over instead of reporting "another entry is pairing"."""
+    hass = FakeHass()
+    first, second = flow_for(hass), flow_for(hass)
+    first.flow_id, second.flow_id = "unreachable-flow", "fresh-flow"
+    assert first._claim_pairing_slot()
+    first.async_show_form = lambda **kwargs: kwargs
+    first.async_external_step_done = lambda *, next_step_id: {"type": "external_step_done", "next_step_id": next_step_id}
+    first._selected_environment = "auto"
+    first._quick_pair_api_base = None
+    first._quick_pair_session_id = None
+    first._quick_pair_external_opened = True
+    first._quick_pair_page_url = "http://homeassistant.local:8123/api/seenzus_bridge/quick_pair/origin?state=x"
+    await first.async_step_seamless_authorize()
+    assert (await first.async_step_seamless_finish())["step_id"] == "environment"
+
+    aborted: list[str] = []
+    monkeypatch.setattr(hass.config_entries.flow, "async_progress", lambda: [{"flow_id": "unreachable-flow"}])
+    hass.config_entries.flow.async_abort = lambda flow_id: aborted.append(flow_id)
+    assert second._claim_pairing_slot()
+    assert aborted == ["unreachable-flow"]
+    assert hass.data["seenzus_bridge"]["pairing_flow_owner"] == ("config", "fresh-flow")
+
+
+@pytest.mark.asyncio
 async def test_pending_pairing_serializes_entries_but_cancelled_flow_releases_slot(monkeypatch):
     hass = FakeHass()
     first, second = flow_for(hass), flow_for(hass, "world-b")
