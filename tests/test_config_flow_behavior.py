@@ -1754,6 +1754,48 @@ async def test_seamless_finish_creates_entry_with_return_link(monkeypatch) -> No
     ]
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("api_base", "expected"), [
+    ("https://app.seenzus.cn/api/seenzus", "https://app.seenzus.cn/integrations"),
+    ("https://seenzus.ai/api/seenzus", "https://seenzus.ai/integrations"),
+    ("http://192.168.1.20:5078/api/seenzus", None),  # developer preset: no public app to return to
+])
+async def test_deferred_pairing_success_page_returns_to_the_deployment(monkeypatch, api_base, expected) -> None:
+    """A deferred commit has no Source yet, so the server sends no return link. The
+    success page still offers one to the deployment's sources; only the commit's
+    notification (with the Source link) is pushed, never a second fallback one."""
+    notified: list = []
+    monkeypatch.setattr("seenzus_bridge.config_flow._notify_app_return", lambda *args: notified.append(args))
+    flow = _new_config_flow()
+    flow.hass = FakeHass()
+    flow._quick_pair_api_base = api_base
+    flow._quick_pair_session_id = "wps_1"
+    flow._quick_pair_page_url = "http://ha.local:8123/api/seenzus_bridge/quick_pair/origin?state=x"
+    flow._quick_pair_callback_state = "pairing-state"
+    flow._quick_pair_exchange_result = _result_obj({
+        "ok": True, "session_id": "wps_1", "config_source": "web_pair", "confirmed_at": "2026-10-28T07:25:35Z",
+        "commit_token": "commit-token",
+        "mqtt": {"host": "broker.example.com", "scheme": "mqtts", "port": 8883, "username": "user-1",
+                 "password": "pass-1", "topicRoot": "seenzus/v2", "bridgeId": "ha-web-bridge"},
+    })
+    created: list[dict] = []
+    flow.async_create_entry = lambda **kwargs: created.append(kwargs) or {"type": "create_entry", "data": kwargs["data"]}
+
+    assert (await flow.async_step_seamless_finish())["type"] == "create_entry"
+    if expected:
+        assert created[0]["description"] == "app_return"
+        assert created[0]["description_placeholders"] == {"app_return_url": expected}
+    else:
+        assert "description" not in created[0]
+    from homeassistant.config_entries import ConfigEntryState
+    from tests.helpers import FakeConfigEntry
+    entry = FakeConfigEntry(data=created[0]["data"])
+    entry.state = ConfigEntryState.LOADED
+    flow.hass.config_entries.entries.append(entry)
+    flow.async_remove()
+    assert notified == []
+
 def _async_result(values: dict):
     async def _runner(*_args, **_kwargs):
         return _result_obj(values)

@@ -431,6 +431,18 @@ def _diagnostic_from_result(
 _APP_RETURN_URL_ALLOW_SCHEMES = APP_RETURN_URL_ALLOW_SCHEMES
 
 
+def _deployment_return_url(api_base: str | None) -> str | None:
+    """The source list of a public deployment, for a return link without a Source yet.
+
+    Built only from the fixed environment table, never from a server reply.
+    """
+    environment = environment_for_api(api_base) if api_base else None
+    if environment not in ENVIRONMENTS:
+        return None
+    origin = urlsplit(ENVIRONMENTS[environment][1])
+    return _sanitize_app_return_url(f"{origin.scheme}://{origin.netloc}/integrations")
+
+
 def _sanitize_app_return_url(value: object) -> str | None:
     """Validate a backend-supplied app return URL before rendering it as a link.
 
@@ -527,6 +539,11 @@ class _QuickPairFlowMixin:
     _flow_manager: str
     _entry_title: str
 
+    @property
+    def _quick_pair_notify_url(self) -> str | None:
+        """Notify with the server's link only; the commit notifies after a fallback."""
+        return None if getattr(self, "_quick_pair_return_fallback", False) else self._quick_pair_app_return_url
+
     def _notification_scope(self) -> str:
         return getattr(getattr(self, "_config_entry", None), "entry_id", None) or getattr(self, "flow_id", "")
 
@@ -592,6 +609,7 @@ class _QuickPairFlowMixin:
         # success page after the entry is committed (so the link can never abandon
         # the flow before it completes).
         self._quick_pair_app_return_url: str | None = None
+        self._quick_pair_return_fallback = False
         self._selected_environment = entry_environment(self._current_config()) if self._current_config() else "auto"
         self._scope = {key: self._current_config()[key] for key in SCOPE_KEYS if key in self._current_config()}
         self._dev_api_base: str | None = None
@@ -606,8 +624,8 @@ class _QuickPairFlowMixin:
         if self._quick_pair_finish_started and asyncio.current_task() is self._quick_pair_finish_owner:
             _quick_pair_finish_removed(self.hass, self._quick_pair_callback_state)
             if _confirm_quick_pair_completed(self.hass, self._quick_pair_callback_state):
-                if self._quick_pair_app_return_url:
-                    _notify_app_return(self.hass, self._quick_pair_app_return_url, self._notification_scope())
+                if self._quick_pair_notify_url:
+                    _notify_app_return(self.hass, self._quick_pair_notify_url, self._notification_scope())
                 else:
                     _clear_quick_pair_notifications(self.hass, self._notification_scope())
             elif self._quick_pair_callback_state and _quick_pair_has_pending_entry(self.hass, self._quick_pair_callback_state):
@@ -634,8 +652,8 @@ class _QuickPairFlowMixin:
         def changed(_change, _entry):
             if _confirm_quick_pair_completed(self.hass, state):
                 watchers.pop(state, lambda: None)()
-                if self._quick_pair_app_return_url:
-                    _notify_app_return(self.hass, self._quick_pair_app_return_url, self._notification_scope())
+                if self._quick_pair_notify_url:
+                    _notify_app_return(self.hass, self._quick_pair_notify_url, self._notification_scope())
                 else:
                     _clear_quick_pair_notifications(self.hass, self._notification_scope())
             elif not _quick_pair_has_pending_entry(self.hass, state):
@@ -764,6 +782,12 @@ class _QuickPairFlowMixin:
         result_return_url = _sanitize_app_return_url(getattr(status_result, "app_return_url", None))
         if result_return_url:
             self._quick_pair_app_return_url = result_return_url
+        elif not self._quick_pair_app_return_url:
+            # A deferred commit creates the Source only after HA saves this entry,
+            # so the server has no Source link yet. The success page links to the
+            # deployment's sources; the commit's own notification links the Source.
+            self._quick_pair_app_return_url = _deployment_return_url(self._quick_pair_api_base)
+            self._quick_pair_return_fallback = self._quick_pair_app_return_url is not None
         result = self._finish_quick_pair(data)
         _mark_quick_pair_completed(self.hass, self._quick_pair_callback_state, data)
         return result
