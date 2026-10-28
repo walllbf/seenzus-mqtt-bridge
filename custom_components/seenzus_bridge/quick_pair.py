@@ -213,6 +213,8 @@ class SeenzusQuickPairCallbackView(http.HomeAssistantView):
             flow_manager,
             flow_id,
         )
+        if "error" in user_input:
+            return _quick_pair_declined_response(hass, str(user_input["error"]))
         return _quick_pair_success_response(hass)
 
 
@@ -226,6 +228,38 @@ def _quick_pair_success_response(hass: HomeAssistant) -> web.Response:
     chinese = str(getattr(hass.config, "language", "en")).startswith("zh")
     message = ("授权完成，Home Assistant 正在保存配对。可以关闭此页面。" if chinese
                else "Authorization complete. Home Assistant is saving the pairing. You can close this page.")
+    return _quick_pair_page(message, "<script>window.close()</script>")
+
+
+_DECLINED_MESSAGES = {
+    "environment_already_configured": (
+        "Home Assistant 里已经有这个环境的 seenzus 条目，本次没有新建配对。"
+        "如需重新配对，请先在 Home Assistant 中删除该条目，再从应用发起。",
+        "Home Assistant already has a seenzus entry for this environment, so no new pairing was made. "
+        "To pair again, delete that entry in Home Assistant first, then start from the app.",
+    ),
+    "environment_required": (
+        "未能识别发起配对的环境，本次没有配对。请回到 Home Assistant 选择环境，或从应用重新发起。",
+        "The environment that started pairing could not be identified, so nothing was paired. "
+        "Choose it in Home Assistant, or start again from the app.",
+    ),
+}
+
+
+def _quick_pair_declined_response(hass: HomeAssistant, error: str) -> web.Response:
+    """A callback that carries no authorization must not read as a saved pairing.
+
+    The page stays open (no window.close) so the reason can be read.
+    """
+    chinese = str(getattr(hass.config, "language", "en")).startswith("zh")
+    zh, en = _DECLINED_MESSAGES.get(error, (
+        "授权未完成，本次没有配对。请从应用重新发起。",
+        "Authorization was not completed, so nothing was paired. Start again from the app.",
+    ))
+    return _quick_pair_page(zh if chinese else en)
+
+
+def _quick_pair_page(message: str, script: str = "") -> web.Response:
     return web.Response(
         headers={"content-type": "text/html"},
         text=(
@@ -233,7 +267,7 @@ def _quick_pair_success_response(hass: HomeAssistant) -> web.Response:
             "<meta name=viewport content='width=device-width,initial-scale=1'>"
             "<title>seenzus · Home Assistant</title>"
             "<style>body{font:16px system-ui;max-width:560px;margin:12vh auto;padding:24px;line-height:1.8}</style>"
-            f"<p>{_html_escape(message)}</p><script>window.close()</script>"
+            f"<p>{_html_escape(message)}</p>{script}"
         ),
     )
 

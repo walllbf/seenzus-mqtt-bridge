@@ -1064,6 +1064,33 @@ async def test_quick_pair_callback_view_with_app_flag_drives_flow_to_create_entr
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("error", "language", "expected"), [
+    ("environment_already_configured", "zh-Hans", "已经有这个环境的 seenzus 条目"),
+    ("environment_required", "en", "could not be identified"),
+    ("access_denied", "en", "Authorization was not completed"),
+])
+async def test_a_declined_callback_does_not_claim_the_pairing_is_being_saved(
+    monkeypatch, error, language, expected,
+) -> None:
+    """The origin page declines an already-configured environment without authorization."""
+    hass, request = _build_quick_pair_callback_request(monkeypatch)
+    hass.config.language = language
+    del request.query["code"]
+    request.query["error"] = error
+    hass.config_entries.flow.configure_results = [
+        {"type": FlowResultType.EXTERNAL_STEP_DONE, "step_id": "seamless_finish"},
+    ]
+
+    response = await SavanAIQuickPairCallbackView().get(request)
+
+    assert response.status == 200
+    assert hass.config_entries.flow.configure_calls[0]["user_input"] is None
+    assert expected in response.text
+    assert "授权完成" not in response.text and "Authorization complete" not in response.text
+    assert "window.close()" not in response.text
+
+
+@pytest.mark.asyncio
 async def test_quick_pair_callback_view_with_app_flag_stops_at_form(monkeypatch) -> None:
     """FORM 是合法终点(code exchange 失败重显表单),不能再推。"""
     hass, request = _build_quick_pair_callback_request(monkeypatch, query={"app": "1"})
