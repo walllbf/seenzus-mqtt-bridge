@@ -65,7 +65,7 @@ config/custom_components/seenzus_bridge/
 
 - 添加时选择 `快速配对（推荐）` 或 `手动配置（高级）`，以及设备范围（全部或指定）。
 - 快速配对默认跟随应用环境；HA 直接添加可以选择国内 PRD 或境外 PRD，自动识别失败时明确选择一次。
-- 从 UAT 应用发起可直接配对，无需开发配置文件。在 HA 中直接选择 UAT／Dev Server 时，在 HA 配置目录放置 `<config>/seenzus_bridge_dev.json`（例如 `{"pairing_api_base":"http://192.168.x.x:5078/api"}`）。它只提供开发入口及预设，不修改既有条目；重新配对沿用条目保存的地址。
+- 从 UAT 应用发起可直接配对，无需开发配置文件。在 HA 中直接选择 UAT／Dev Server 时，在 HA 配置目录放置 `<config>/seenzus_bridge_dev.json`（例如 `{"pairing_api_base":"http://192.168.x.x:5078/api/seenzus"}`）。它只提供开发入口及预设，不修改既有条目；重新配对沿用条目保存的地址。V2 配对要求应用页面与对外配对 API 同源；若服务内部使用不同地址，需配置同源反向代理。自动识别还要求 API 前缀为 `/api/seenzus`；其他前缀需配置代理或从 HA 手动选择开发预设。
 - 外部授权成功后，浏览器会直接回跳到 HA 本地 callback，由插件自动兑换 MQTT 桥接配置并创建 entry
 - 手动配置页仍保留 MQTT 连接参数、手动配对参数和高级参数
 - 保存后会自动重载集成，配置立即生效，无需手动重启 HA

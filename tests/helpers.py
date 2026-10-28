@@ -133,6 +133,9 @@ class FakeFlowManager:
     def async_progress(self):
         return []
 
+    def async_get(self, _flow_id):
+        return {"step_id": "seamless_authorize"}
+
     async def async_configure(self, *, flow_id: str, user_input: dict):
         self.configure_calls.append(
             {"flow_id": flow_id, "user_input": dict(user_input) if user_input is not None else None}
@@ -283,6 +286,11 @@ class FakeHass:
 
     def async_create_task(self, coro):
         task = asyncio.create_task(coro)
+        self.scheduled_tasks.append(task)
+        return task
+
+    def async_create_background_task(self, coro, name: str):
+        task = asyncio.create_task(coro, name=name)
         self.scheduled_tasks.append(task)
         return task
 

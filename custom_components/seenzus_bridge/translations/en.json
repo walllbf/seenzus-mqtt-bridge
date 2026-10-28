@@ -86,12 +86,14 @@
       }
     },
     "create_entry": {
-      "app_return": "seenzus MQTT Bridge is paired and the integration has been added.\n\n## [Return to seenzus]({app_return_url})\n\n&nbsp;"
+      "app_return": "seenzus MQTT Bridge is paired and the integration has been added.\n\n## {app_return_link}\n\n&nbsp;"
     },
     "error": {
       "host_required": "Enter the MQTT broker address.",
       "dev_override_invalid": "The developer override file seenzus_bridge_dev.json is invalid: its JSON is malformed or pairing_api_base is not a valid HTTP(S) URL. Correct or remove the file and try again.",
       "quick_pair_session_failed": "Could not create a quick pairing session. Check the seenzus API address, DNS, and service status.",
+      "pairing_protocol_unsupported": "This seenzus server does not support the required pairing protocol. Update the server and try again.",
+      "pairing_origin_mismatch": "The app and pairing service do not match. Check the server domain and proxy configuration.",
       "quick_pair_bootstrap_failed": "Could not read the final web pairing status. Confirm that pairing was completed on the web page.",
       "quick_pair_mqtt_missing": "The backend did not return MQTT bridge settings. Quick pairing cannot finish.",
       "quick_pair_callback_unavailable": "Could not generate the Home Assistant callback URL. Check the current address or the instance URL settings.",
@@ -226,12 +228,14 @@
       }
     },
     "create_entry": {
-      "app_return": "seenzus MQTT Bridge is paired and the integration has been added.\n\n## [Return to seenzus]({app_return_url})\n\n&nbsp;"
+      "app_return": "seenzus MQTT Bridge is paired and the integration has been added.\n\n## {app_return_link}\n\n&nbsp;"
     },
     "error": {
       "host_required": "Enter the MQTT broker address.",
       "dev_override_invalid": "The developer override file seenzus_bridge_dev.json is invalid: its JSON is malformed or pairing_api_base is not a valid HTTP(S) URL. Correct or remove the file and try again.",
       "quick_pair_session_failed": "Could not create a quick pairing session. Check the seenzus API address, DNS, and service status.",
+      "pairing_protocol_unsupported": "This seenzus server does not support the required pairing protocol. Update the server and try again.",
+      "pairing_origin_mismatch": "The app and pairing service do not match. Check the server domain and proxy configuration.",
       "quick_pair_bootstrap_failed": "Could not read the final web pairing status. Confirm that pairing was completed on the web page.",
       "quick_pair_mqtt_missing": "The backend did not return MQTT bridge settings. Quick pairing cannot finish.",
       "quick_pair_callback_unavailable": "Could not generate the Home Assistant callback URL. Check the current address or the instance URL settings.",
@@ -339,6 +343,9 @@
     "return_label": "Return to seenzus",
     "manual_return": "If the link does not open, open this address manually: `{url}`",
     "opening_app": "Opening the seenzus app…",
-    "return_fallback": "If you are not redirected automatically, click here"
+    "return_fallback": "If you are not redirected automatically, click here",
+    "pairing_unconfirmed_title": "seenzus Bridge pairing not confirmed",
+    "pairing_restored_message": "seenzus did not confirm the new pairing, so the previous connection was restored and nothing changed in the app. Open Configure → Re-pair or manual setup to pair again.",
+    "pairing_rejected_message": "seenzus did not confirm this pairing, so its credentials are not valid. Open this entry's Configure → Re-pair or manual setup to pair again."
   }
 }
