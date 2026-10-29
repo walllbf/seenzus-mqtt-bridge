@@ -7,6 +7,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import service as service_helper
+from .device_access import DeviceAccess, SAFE_SERVICES
 from .sensor_display import async_prepare_sensor_display, sensor_display_attributes
 
 
@@ -33,6 +34,7 @@ class DispatchPolicy:
     allow_template: bool = False
     allow_dangerous_services: bool = False
     expose_full_config: bool = False
+    access: DeviceAccess | None = None
 
 
 DEFAULT_POLICY = DispatchPolicy()
@@ -87,6 +89,8 @@ async def dispatch(
     """
     policy = policy or DEFAULT_POLICY
     method = (method or "GET").upper()
+    access = policy.access
+    restricted = access is not None and access.restricted
 
     if method == "GET" and re.fullmatch(r"/api/?", path):
         try:
@@ -97,22 +101,28 @@ async def dispatch(
 
     if method == "GET" and path == "/api/config":
         data = hass.config.as_dict()
+        if restricted:
+            data = {k: v for k, v in data.items() if k in {"version", "unit_system", "time_zone"}}
         if not policy.expose_full_config and isinstance(data, dict):
             data = {k: v for k, v in data.items() if k not in _SENSITIVE_CONFIG_KEYS}
         return DispatchResult(status=200, data=data, touched_entities=[])
 
     if method == "GET" and path == "/api/states":
-        states = hass.states.async_all()
+        states = [s for s in hass.states.async_all() if access is None or access.allows(s.entity_id)]
         await async_prepare_sensor_display(hass, [s.entity_id for s in states])
         data = []
         for state in states:
-            item = dict(state.as_dict())
+            item = access.state(state) if access else dict(state.as_dict())
             item["attributes"] = sensor_display_attributes(hass, state.entity_id, item.get("attributes", {}))
             data.append(item)
         return DispatchResult(status=200, data=data, touched_entities=[])
 
     if method == "GET" and path == "/api/services":
         descriptions = await service_helper.async_get_all_descriptions(hass)
+        if restricted:
+            # Do not expose instance-specific descriptions/options mentioning other devices.
+            descriptions = {domain: {name: {} for name in services if name in SAFE_SERVICES.get(domain, {})}
+                            for domain, services in descriptions.items() if domain in SAFE_SERVICES}
         return DispatchResult(status=200, data=descriptions, touched_entities=[])
 
     if method == "GET" and path == "/api/seenzus/services/index":
@@ -121,6 +131,8 @@ async def dispatch(
             if not re.fullmatch(r"[a-z0-9_]+", domain):
                 return DispatchResult(status=500, data={"error": "invalid_service_registry"}, touched_entities=[])
             for service in definitions:
+                if restricted and service not in SAFE_SERVICES.get(domain, {}):
+                    continue
                 if not re.fullmatch(r"[a-z0-9_]+", service):
                     return DispatchResult(status=500, data={"error": "invalid_service_registry"}, touched_entities=[])
                 services.append(f"{domain}.{service}")
@@ -131,10 +143,12 @@ async def dispatch(
     state_match = re.fullmatch(r"/api/states/(.+)", path)
     if method == "GET" and state_match:
         entity_id = state_match.group(1)
+        if access and not access.allows(entity_id):
+            return DispatchResult(status=404, data={"message": "Entity not found"}, touched_entities=[])
         state = hass.states.get(entity_id)
         if state:
             await async_prepare_sensor_display(hass, [entity_id])
-            data = dict(state.as_dict())
+            data = access.state(state) if access else dict(state.as_dict())
             data["attributes"] = sensor_display_attributes(hass, entity_id, data.get("attributes", {}))
             return DispatchResult(status=200, data=data, touched_entities=[entity_id])
         return DispatchResult(status=404, data={"message": f"Entity not found: {entity_id}"}, touched_entities=[])
@@ -142,6 +156,10 @@ async def dispatch(
     service_match = re.fullmatch(r"/api/services/([^/]+)/([^/]+)", path)
     if method == "POST" and service_match:
         domain, service = service_match.group(1), service_match.group(2)
+        if restricted:
+            body = access.service_body(domain, service, body)
+            if body is None:
+                return DispatchResult(status=403, data={"message": "Service or target outside this bridge's device grant"}, touched_entities=[])
         if not policy.allow_dangerous_services and _is_dangerous_service(domain, service):
             return DispatchResult(
                 status=403,
@@ -154,11 +172,13 @@ async def dispatch(
 
     event_match = re.fullmatch(r"/api/events/([^/]+)", path)
     if method == "POST" and event_match:
+        if restricted:
+            return DispatchResult(status=403, data={"message": "Events unavailable for selected-device bridges"}, touched_entities=[])
         hass.bus.async_fire(event_match.group(1), body or {})
         return DispatchResult(status=200, data={"message": "Event fired."}, touched_entities=[])
 
     if method == "POST" and path == "/api/template":
-        if not policy.allow_template:
+        if restricted or not policy.allow_template:
             return DispatchResult(
                 status=403,
                 data={"message": "Template rendering disabled by bridge security policy"},

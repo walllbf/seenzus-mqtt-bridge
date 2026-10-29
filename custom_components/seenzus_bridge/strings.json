@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Set up seenzus MQTT Bridge",
-        "description": "Choose a pairing mode to open its setup form.",
+        "description": "Quick pairing follows the environment of the Seenzus app and asks for device access next. If it cannot identify an environment, you will choose one. Use manual environment selection for Dev Server.",
         "data": {
           "pairing_mode": "Pairing mode"
         },
@@ -11,7 +11,7 @@
       },
       "seamless": {
         "title": "Quick pair",
-        "description": "The integration creates a web pairing session through the seenzus API and opens seenzus for authorization. Select Submit to continue; no fields are required.",
+        "description": "Continue authorization. Re-pairing preserves this entry's environment, World, and device access.",
         "data": {},
         "sections": {}
       },
@@ -53,15 +53,47 @@
             }
           }
         }
+      },
+      "environment": {
+        "title": "Choose pairing environment",
+        "description": "Each environment supports one entry. Developer presets enable UAT and Dev Server.",
+        "data": {
+          "environment": "Environment"
+        }
+      },
+      "scope": {
+        "title": "Device access",
+        "description": "All devices includes future devices. For selected access, choose devices first and standalone entities next.",
+        "data": {
+          "device_scope": "Device access"
+        }
+      },
+      "devices": {
+        "title": "Choose devices",
+        "description": "A whole device includes its entities. Areas add current devices only. Leave empty to grant only standalone entities in the next step.",
+        "data": {
+          "areas": "Add current devices by area",
+          "allowed_device_ids": "Devices"
+        }
+      },
+      "entities": {
+        "title": "Choose standalone entities (optional)",
+        "description": "Only registered entities without a device are listed. Whole-device grants already include their entities. An empty selected scope revokes all access.",
+        "data": {
+          "areas": "Add current standalone entities by area",
+          "entities": "Standalone entities"
+        }
       }
     },
     "create_entry": {
-      "app_return": "seenzus MQTT Bridge is paired and the integration has been added.\n\n## [Return to seenzus]({app_return_url})\n\n&nbsp;"
+      "app_return": "seenzus MQTT Bridge is paired and the integration has been added.\n\n## {app_return_link}\n\n&nbsp;"
     },
     "error": {
       "host_required": "Enter the MQTT broker address.",
       "dev_override_invalid": "The developer override file seenzus_bridge_dev.json is invalid: its JSON is malformed or pairing_api_base is not a valid HTTP(S) URL. Correct or remove the file and try again.",
       "quick_pair_session_failed": "Could not create a quick pairing session. Check the seenzus API address, DNS, and service status.",
+      "pairing_protocol_unsupported": "This seenzus server does not support the required pairing protocol. Update the server and try again.",
+      "pairing_origin_mismatch": "The app and pairing service do not match. Check the server domain and proxy configuration.",
       "quick_pair_bootstrap_failed": "Could not read the final web pairing status. Confirm that pairing was completed on the web page.",
       "quick_pair_mqtt_missing": "The backend did not return MQTT bridge settings. Quick pairing cannot finish.",
       "quick_pair_callback_unavailable": "Could not generate the Home Assistant callback URL. Check the current address or the instance URL settings.",
@@ -73,11 +105,20 @@
       "invalid_mqtt_packet_size": "Enter an integer from 1 to 262144 (KiB) that does not exceed the broker's packet size limit.",
       "mqtt_packet_size_too_small_for_topic": "This limit cannot fit the minimum offline message for the current topic. Increase the limit or shorten the topic or Bridge ID.",
       "mqtt_transport_required": "The MQTT transport protocol is missing or invalid. Select mqtts/wss. For quick pairing, have the backend supply a valid protocol and pair again. Plaintext fallback is not allowed.",
-      "mqtt_tls_required": "This broker requires TLS (mqtts or wss). Plaintext MQTT/WebSocket is allowed only for explicit local or loopback IP addresses. Check the protocol and port."
+      "mqtt_tls_required": "This broker requires TLS (mqtts or wss). Plaintext MQTT/WebSocket is allowed only for explicit local or loopback IP addresses. Check the protocol and port.",
+      "world_identity_missing": "World identity is missing. Update the Seenzus backend. If the entry has no original Source identity, remove it and pair again.",
+      "world_mismatch": "Re-pairing must use the original World. To change Worlds, remove the original entry and pair again.",
+      "ha_identity_unavailable": "Could not read this Home Assistant installation identity. Try again later.",
+      "stable_entity_required": "Choose registered standalone entities with a stable identity. For entities belonging to a device, select that device.",
+      "pairing_in_progress": "Another entry is pairing. Complete or cancel it before trying again."
     },
     "abort": {
       "already_configured": "seenzus MQTT Bridge is already configured. Only one instance is supported.",
-      "quick_pair_missing_context": "The quick pairing session was lost. Start again."
+      "quick_pair_missing_context": "The quick pairing session was lost. Start again.",
+      "invalid_environment": "Invalid environment. Choose again.",
+      "pairing_in_progress": "Another pairing is in progress. Complete or cancel it first.",
+      "environment_already_configured": "This environment already has an entry. Configure or re-pair that entry. Another World cannot create a second entry in the same environment.",
+      "all_environments_configured": "All four environments already have entries. Manage the existing entries."
     }
   },
   "options": {
@@ -87,7 +128,8 @@
         "description": "Change MQTT connection settings or pair again. Saving settings automatically reloads the integration.",
         "menu_options": {
           "connection_settings": "MQTT connection settings",
-          "pairing": "Re-pair or manual setup"
+          "pairing": "Re-pair or manual setup",
+          "device_access": "Device access"
         }
       },
       "seamless": {
@@ -137,9 +179,10 @@
       },
       "pairing": {
         "title": "Re-pair or manual setup",
-        "description": "Choose a pairing mode to open its setup form. Saving automatically reloads the integration to apply the settings.",
+        "description": "Re-pairing preserves the environment, World, and device access. Manual connection changes are available for manually configured entries.",
         "data": {
-          "pairing_mode": "Pairing mode"
+          "pairing_mode": "Pairing mode",
+          "action": "Action"
         },
         "sections": {}
       },
@@ -152,15 +195,47 @@
         "data_description": {
           "mqtt_max_packet_size_kib": "Local sending limit; must not exceed the broker's packet size limit. 1024 KiB = 1 MiB; 2048 KiB = 2 MiB. This does not change the broker configuration."
         }
+      },
+      "environment": {
+        "title": "Choose pairing environment",
+        "description": "Each environment supports one entry. Developer presets enable UAT and Dev Server.",
+        "data": {
+          "environment": "Environment"
+        }
+      },
+      "scope": {
+        "title": "Device access",
+        "description": "All devices includes future devices. For selected access, choose devices first and standalone entities next.",
+        "data": {
+          "device_scope": "Device access"
+        }
+      },
+      "devices": {
+        "title": "Choose devices",
+        "description": "A whole device includes its entities. Areas add current devices only. Leave empty to grant only standalone entities in the next step.",
+        "data": {
+          "areas": "Add current devices by area",
+          "allowed_device_ids": "Devices"
+        }
+      },
+      "entities": {
+        "title": "Choose standalone entities (optional)",
+        "description": "Only registered entities without a device are listed. Whole-device grants already include their entities. An empty selected scope revokes all access.",
+        "data": {
+          "areas": "Add current standalone entities by area",
+          "entities": "Standalone entities"
+        }
       }
     },
     "create_entry": {
-      "app_return": "seenzus MQTT Bridge is paired and the integration has been added.\n\n## [Return to seenzus]({app_return_url})\n\n&nbsp;"
+      "app_return": "seenzus MQTT Bridge is paired and the integration has been added.\n\n## {app_return_link}\n\n&nbsp;"
     },
     "error": {
       "host_required": "Enter the MQTT broker address.",
       "dev_override_invalid": "The developer override file seenzus_bridge_dev.json is invalid: its JSON is malformed or pairing_api_base is not a valid HTTP(S) URL. Correct or remove the file and try again.",
       "quick_pair_session_failed": "Could not create a quick pairing session. Check the seenzus API address, DNS, and service status.",
+      "pairing_protocol_unsupported": "This seenzus server does not support the required pairing protocol. Update the server and try again.",
+      "pairing_origin_mismatch": "The app and pairing service do not match. Check the server domain and proxy configuration.",
       "quick_pair_bootstrap_failed": "Could not read the final web pairing status. Confirm that pairing was completed on the web page.",
       "quick_pair_mqtt_missing": "The backend did not return MQTT bridge settings. Quick pairing cannot finish.",
       "quick_pair_callback_unavailable": "Could not generate the Home Assistant callback URL. Check the current address or the instance URL settings.",
@@ -172,10 +247,19 @@
       "invalid_mqtt_packet_size": "Enter an integer from 1 to 262144 (KiB) that does not exceed the broker's packet size limit.",
       "mqtt_packet_size_too_small_for_topic": "This limit cannot fit the minimum offline message for the current topic. Increase the limit or shorten the topic or Bridge ID.",
       "mqtt_transport_required": "The MQTT transport protocol is missing or invalid. Select mqtts/wss. For quick pairing, have the backend supply a valid protocol and pair again. Plaintext fallback is not allowed.",
-      "mqtt_tls_required": "This broker requires TLS (mqtts or wss). Plaintext MQTT/WebSocket is allowed only for explicit local or loopback IP addresses. Check the protocol and port."
+      "mqtt_tls_required": "This broker requires TLS (mqtts or wss). Plaintext MQTT/WebSocket is allowed only for explicit local or loopback IP addresses. Check the protocol and port.",
+      "world_identity_missing": "World identity is missing. Update the Seenzus backend. If the entry has no original Source identity, remove it and pair again.",
+      "world_mismatch": "Re-pairing must use the original World. To change Worlds, remove the original entry and pair again.",
+      "ha_identity_unavailable": "Could not read this Home Assistant installation identity. Try again later.",
+      "stable_entity_required": "Choose registered standalone entities with a stable identity. For entities belonging to a device, select that device.",
+      "pairing_in_progress": "Another entry is pairing. Complete or cancel it before trying again."
     },
     "abort": {
-      "quick_pair_missing_context": "The quick pairing session was lost. Start again."
+      "quick_pair_missing_context": "The quick pairing session was lost. Start again.",
+      "invalid_environment": "Invalid environment. Choose again.",
+      "pairing_in_progress": "Another pairing is in progress. Complete or cancel it first.",
+      "environment_already_configured": "This environment already has an entry. Configure or re-pair that entry. Another World cannot create a second entry in the same environment.",
+      "all_environments_configured": "All four environments already have entries. Manage the existing entries."
     }
   },
   "exceptions": {
@@ -189,8 +273,9 @@
   "selector": {
     "pairing_mode": {
       "options": {
-        "seamless": "Quick pair (recommended)",
-        "manual": "Manual setup (advanced)"
+        "seamless": "Quick pair (detect environment, recommended)",
+        "manual": "Manual setup (advanced)",
+        "choose_environment": "Quick pair (choose environment)"
       }
     },
     "mqtt_scheme": {
@@ -199,6 +284,26 @@
         "wss": "MQTT over secure WebSocket",
         "mqtt": "MQTT (local IP only)",
         "ws": "WebSocket (local IP only)"
+      }
+    },
+    "environment": {
+      "options": {
+        "cn": "Mainland PRD",
+        "global": "Overseas PRD",
+        "uat": "UAT (development)",
+        "custom": "Dev Server (developer preset)"
+      }
+    },
+    "device_scope": {
+      "options": {
+        "all": "All devices",
+        "selected": "Selected devices"
+      }
+    },
+    "pairing_action": {
+      "options": {
+        "repair": "Re-pair (preserve environment, World, and device access)",
+        "manual": "Manual connection settings"
       }
     }
   },
@@ -238,6 +343,9 @@
     "return_label": "Return to seenzus",
     "manual_return": "If the link does not open, open this address manually: `{url}`",
     "opening_app": "Opening the seenzus app…",
-    "return_fallback": "If you are not redirected automatically, click here"
+    "return_fallback": "If you are not redirected automatically, click here",
+    "pairing_unconfirmed_title": "seenzus Bridge pairing not confirmed",
+    "pairing_restored_message": "seenzus did not confirm the new pairing, so the previous connection was restored and nothing changed in the app. Open Configure → Re-pair or manual setup to pair again.",
+    "pairing_rejected_message": "seenzus did not confirm this pairing, so its credentials are not valid. Open this entry's Configure → Re-pair or manual setup to pair again."
   }
 }

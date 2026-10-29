@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -51,6 +52,20 @@ from seenzus_bridge.quick_pair import (
     _record_quick_pair_diagnostic,
 )
 from tests.helpers import FakeConfig, FakeConfigEntry, FakeHass
+
+
+@pytest.fixture(autouse=True)
+def stable_ha_identity(monkeypatch):
+    async def identity(_hass):
+        return "ha-install-test"
+    monkeypatch.setattr("seenzus_bridge.config_flow._resolve_ha_instance_id", identity)
+
+
+def _new_config_flow():
+    flow = SavanAIBridgeConfigFlow()
+    flow.hass = FakeHass()
+    flow.context = {"source": "user"}
+    return flow
 
 
 def _schema_field_names(schema) -> set[str]:
@@ -122,6 +137,7 @@ def test_build_quick_pair_callback_context_uses_plugin_callback(monkeypatch) -> 
         return "jwt-state"
 
     monkeypatch.setattr("seenzus_bridge.quick_pair._encode_jwt", _fake_encode)
+    monkeypatch.setattr("seenzus_bridge.quick_pair.time.time", lambda: 1789500000.125)
 
     redirect_uri, callback_state, callback_state_token = _build_quick_pair_callback_context(
         hass,
@@ -138,6 +154,8 @@ def test_build_quick_pair_callback_context_uses_plugin_callback(monkeypatch) -> 
             "flow_manager": FLOW_MANAGER_OPTIONS,
             "redirect_uri": f"http://homeassistant.local:8123{QUICK_PAIR_CALLBACK_PATH}",
             "pairing_state": "pairing-state",
+            "pairing_started_at": 1789500000125,
+            "exp": 1789500900,
         }
     ]
     assert len(hass.http.registered_views) == 1
@@ -168,7 +186,7 @@ async def test_quick_pair_callback_view_routes_options_flow(monkeypatch) -> None
 
 @pytest.mark.asyncio
 async def test_seamless_authorize_consumes_stored_callback_payload(monkeypatch) -> None:
-    flow = SavanAIBridgeConfigFlow()
+    flow = _new_config_flow()
     flow.hass = FakeHass()
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
@@ -216,7 +234,7 @@ async def test_seamless_authorize_consumes_stored_callback_payload(monkeypatch) 
 
 @pytest.mark.asyncio
 async def test_user_step_shows_mode_selection_form(monkeypatch) -> None:
-    flow = SavanAIBridgeConfigFlow()
+    flow = _new_config_flow()
     monkeypatch.setattr(flow, "_async_current_entries", lambda: [])
     flow.async_show_form = lambda *, step_id, data_schema, errors=None: {
         "type": "form",
@@ -233,15 +251,17 @@ async def test_user_step_shows_mode_selection_form(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_user_step_seamless_launches_pairing_directly(monkeypatch) -> None:
-    # 选中快速配对即直接发起配对(跳过无字段的确认页):不显示表单,直接
-    # 创建会话并进入外部授权步骤。
-    flow = SavanAIBridgeConfigFlow()
+async def test_user_step_seamless_skips_environment_and_launches_local_handoff_after_scope(monkeypatch) -> None:
+    from seenzus_bridge.quick_pair import _encode_jwt
+
+    flow = _new_config_flow()
     flow.hass = FakeHass()
     monkeypatch.setattr(flow, "_async_current_entries", lambda: [])
+    redirect_uri = f"http://homeassistant.local:8123{QUICK_PAIR_CALLBACK_PATH}"
+    token = _encode_jwt(flow.hass, {"flow_id": "first-install", "redirect_uri": redirect_uri})
     monkeypatch.setattr(
         "seenzus_bridge.config_flow._build_quick_pair_callback_context",
-        lambda *_a, **_k: (f"http://homeassistant.local:8123{QUICK_PAIR_CALLBACK_PATH}", "ps", "jwt"),
+        lambda *_a, **_k: (redirect_uri, "ps", token),
     )
     monkeypatch.setattr(
         "seenzus_bridge.config_flow.resolve_dev_pairing_api_base", _dev_override_none
@@ -261,16 +281,18 @@ async def test_user_step_seamless_launches_pairing_directly(monkeypatch) -> None
         "url": url,
     }
 
-    result = await flow.async_step_user({CONF_PAIRING_MODE: "seamless"})
+    assert (await flow.async_step_user({CONF_PAIRING_MODE: "seamless"}))["step_id"] == "scope"
+    result = await flow.async_step_scope({"device_scope": "all"})
 
     assert result["type"] == "external"
     assert result["step_id"] == "seamless_authorize"
-    assert len(create_calls) == 1
+    assert create_calls == []
+    assert result["url"].startswith("http://homeassistant.local:8123/api/seenzus_bridge/quick_pair/origin?")
 
 
 @pytest.mark.asyncio
 async def test_user_step_routes_to_manual_form(monkeypatch) -> None:
-    flow = SavanAIBridgeConfigFlow()
+    flow = _new_config_flow()
     monkeypatch.setattr(flow, "_async_current_entries", lambda: [])
     flow.async_show_form = lambda *, step_id, data_schema, errors=None: {
         "type": "form",
@@ -279,7 +301,9 @@ async def test_user_step_routes_to_manual_form(monkeypatch) -> None:
         "errors": errors or {},
     }
 
-    result = await flow.async_step_user({CONF_PAIRING_MODE: "manual"})
+    assert (await flow.async_step_user({CONF_PAIRING_MODE: "manual"}))["step_id"] == "environment"
+    assert (await flow.async_step_environment({"environment": "cn"}))["step_id"] == "scope"
+    result = await flow.async_step_scope({"device_scope": "all"})
 
     assert result["step_id"] == "manual"
     assert CONF_MQTT_SETTINGS in _schema_field_names(result["data_schema"])
@@ -287,7 +311,8 @@ async def test_user_step_routes_to_manual_form(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_seamless_step_starts_external_quick_pair(monkeypatch, bridge_manifest_version) -> None:
-    flow = SavanAIBridgeConfigFlow()
+    flow = _new_config_flow()
+    flow._selected_environment = "global"
     flow.hass = FakeHass()
     monkeypatch.setattr(flow, "_async_current_entries", lambda: [])
     create_calls: list[dict] = []
@@ -345,7 +370,8 @@ async def test_seamless_step_starts_external_quick_pair(monkeypatch, bridge_mani
 @pytest.mark.asyncio
 async def test_seamless_uses_dev_override_api_base_when_present(monkeypatch) -> None:
     # 存在合法 dev 覆盖文件 → 配对连联调地址而非生产默认。
-    flow = SavanAIBridgeConfigFlow()
+    flow = _new_config_flow()
+    flow._selected_environment = "custom"
     flow.hass = FakeHass()
     monkeypatch.setattr(flow, "_async_current_entries", lambda: [])
     monkeypatch.setattr(
@@ -380,7 +406,8 @@ async def test_seamless_uses_dev_override_api_base_when_present(monkeypatch) -> 
 @pytest.mark.asyncio
 async def test_seamless_dev_override_invalid_blocks_pairing(monkeypatch) -> None:
     # fail-loud:dev 文件存在但非法 → 报错拦住配对,绝不静默连生产,不创建会话。
-    flow = SavanAIBridgeConfigFlow()
+    flow = _new_config_flow()
+    flow._selected_environment = "custom"
     flow.hass = FakeHass()
     monkeypatch.setattr(flow, "_async_current_entries", lambda: [])
     monkeypatch.setattr(
@@ -415,7 +442,7 @@ async def test_seamless_dev_override_invalid_blocks_pairing(monkeypatch) -> None
 
 @pytest.mark.asyncio
 async def test_seamless_authorize_exchanges_callback_code(monkeypatch) -> None:
-    flow = SavanAIBridgeConfigFlow()
+    flow = _new_config_flow()
     flow.hass = FakeHass()
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
@@ -464,7 +491,7 @@ async def test_seamless_authorize_exchanges_callback_code(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_seamless_authorize_rejects_mismatched_state(monkeypatch) -> None:
-    flow = SavanAIBridgeConfigFlow()
+    flow = _new_config_flow()
     flow.hass = FakeHass()
     flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
     flow._quick_pair_callback_state = "expected-state"
@@ -486,7 +513,7 @@ async def test_seamless_authorize_rejects_mismatched_state(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_seamless_authorize_does_not_raise_when_exchange_fails(monkeypatch) -> None:
-    flow = SavanAIBridgeConfigFlow()
+    flow = _new_config_flow()
     flow.hass = FakeHass()
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
@@ -520,7 +547,7 @@ async def test_seamless_authorize_does_not_raise_when_exchange_fails(monkeypatch
 
 @pytest.mark.asyncio
 async def test_seamless_finish_creates_entry_with_bootstrapped_mqtt(monkeypatch) -> None:
-    flow = SavanAIBridgeConfigFlow()
+    flow = _new_config_flow()
     flow.hass = FakeHass()
     flow.hass.config = FakeConfig({"version": "2026.3.0"})
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
@@ -566,7 +593,7 @@ async def test_seamless_finish_creates_entry_with_bootstrapped_mqtt(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_seamless_finish_creates_entry_with_web_pairing_mqtt(monkeypatch) -> None:
-    flow = SavanAIBridgeConfigFlow()
+    flow = _new_config_flow()
     flow.hass = FakeHass()
     flow.hass.config = FakeConfig({"version": "2026.3.0"})
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
@@ -618,7 +645,7 @@ async def test_options_init_offers_connection_settings_without_repairing() -> No
 
     assert result["type"] == FlowResultType.MENU
     assert result["step_id"] == "init"
-    assert result["menu_options"] == ["connection_settings", "pairing"]
+    assert result["menu_options"] == ["connection_settings", "device_access", "pairing"]
 
 
 @pytest.mark.asyncio
@@ -630,6 +657,7 @@ async def test_options_flow_creates_entry_with_flattened_data() -> None:
     )()
     flow = SavanAIBridgeOptionsFlow(config_entry)
     flow.async_create_entry = lambda *, title, data: {"type": "create_entry", "data": data}
+    flow.hass = FakeHass()
 
     result = await flow.async_step_manual(
         {
@@ -645,7 +673,7 @@ async def test_options_flow_creates_entry_with_flattened_data() -> None:
 
 @pytest.mark.asyncio
 async def test_options_seamless_step_uses_options_flow_manager(monkeypatch, bridge_manifest_version) -> None:
-    config_entry = FakeConfigEntry(data={"mqtt_host": "old-broker"})
+    config_entry = FakeConfigEntry(data={"mqtt_host": "old-broker", "source_id": "source-1", "pairing_api_base": "https://uat.seenzus.ai/api/seenzus"})
     flow = SavanAIBridgeOptionsFlow(config_entry)
     flow.hass = FakeHass()
     flow.flow_id = "options-flow-7"
@@ -692,7 +720,8 @@ async def test_options_seamless_step_uses_options_flow_manager(monkeypatch, brid
 
     assert context_calls == [(flow.hass, "options-flow-7", FLOW_MANAGER_OPTIONS)]
     # 模型 A:重配对无视 entry 存值,无 dev 文件 → 内置生产默认。
-    assert create_calls[0]["api_base"] == DEFAULT_PAIRING_API_BASE
+    assert create_calls[0]["api_base"] == "https://uat.seenzus.ai/api/seenzus"
+    assert create_calls[0]["expected_source_id"] == "source-1"
     assert create_calls[0]["bridge_version"] == bridge_manifest_version
     assert create_calls[0]["state"] == "jwt-state"
     assert result["type"] == "external"
@@ -701,7 +730,7 @@ async def test_options_seamless_step_uses_options_flow_manager(monkeypatch, brid
 
 
 @pytest.mark.asyncio
-async def test_options_seamless_form_has_no_fields_ignoring_stored_api_base() -> None:
+async def test_options_seamless_retry_form_has_no_editable_binding() -> None:
     # 即使 entry 里残留联调地址,options 快速配对表单也是零字段——地址只在
     # 配对发起时由 dev_override 解析,重配对绝不沿用 entry 存值(模型 A)。
     config_entry = FakeConfigEntry(
@@ -723,7 +752,7 @@ async def test_options_seamless_form_has_no_fields_ignoring_stored_api_base() ->
 
     assert result["type"] == "form"
     assert result["step_id"] == "seamless"
-    assert result["errors"] == {}
+    assert result["errors"] == {"base": "quick_pair_missing_context"}
     assert _schema_field_names(result["data_schema"]) == set()
 
 
@@ -761,14 +790,14 @@ async def test_options_seamless_finish_creates_entry_with_empty_title() -> None:
     result = await flow.async_step_seamless_finish()
 
     assert result["type"] == "create_entry"
-    assert result["title"] == ""
+    assert result["title"].endswith(" · 世界甲")
     assert result["data"]["mqtt_host"] == "broker.example.com"
     assert result["data"][CONF_BRIDGE_ID] == "ha-web-bridge"
 
 
 @pytest.mark.asyncio
 async def test_seamless_finish_error_reshows_seamless_form_without_placeholder_support() -> None:
-    flow = SavanAIBridgeConfigFlow()
+    flow = _new_config_flow()
     flow.hass = FakeHass()
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
@@ -795,7 +824,7 @@ async def test_seamless_finish_error_reshows_seamless_form_without_placeholder_s
 
 @pytest.mark.asyncio
 async def test_seamless_finish_polls_legacy_status_until_bound(monkeypatch) -> None:
-    flow = SavanAIBridgeConfigFlow()
+    flow = _new_config_flow()
     flow.hass = FakeHass()
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
@@ -847,7 +876,7 @@ async def test_seamless_finish_polls_legacy_status_until_bound(monkeypatch) -> N
     assert all(call["api_base"] == "https://api.seenzus.xxx/api" for call in status_calls)
     assert sleeps == [1]
     assert result["type"] == "create_entry"
-    assert result["title"] == PLUGIN_NAME
+    assert result["title"].endswith(" · 世界甲")
     assert result["data"][CONF_CONFIG_SOURCE] == "web_pair"
     assert result["data"]["mqtt_host"] == "broker.example.com"
     assert result["data"][CONF_BRIDGE_ID] == "ha-web-bridge"
@@ -855,7 +884,7 @@ async def test_seamless_finish_polls_legacy_status_until_bound(monkeypatch) -> N
 
 @pytest.mark.asyncio
 async def test_seamless_finish_reshows_form_when_session_never_bound(monkeypatch) -> None:
-    flow = SavanAIBridgeConfigFlow()
+    flow = _new_config_flow()
     flow.hass = FakeHass()
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
@@ -918,6 +947,9 @@ def _build_quick_pair_callback_request(
     """
     hass = FakeHass()
     state = state or {"flow_id": "flow-1", "pairing_state": "pairing-state"}
+    if state.get("flow_id") and state.get("pairing_state"):
+        manager = state.get("flow_manager", "config")
+        hass.data.setdefault("seenzus_bridge", {}).setdefault("quick_pair_active_states", {})[(manager, state["flow_id"])] = state["pairing_state"]
     monkeypatch.setattr(
         "seenzus_bridge.quick_pair._decode_jwt",
         lambda _hass, _token: state,
@@ -952,11 +984,12 @@ async def test_quick_pair_callback_view_returns_202_when_flow_resume_fails(monke
 async def test_quick_pair_callback_view_without_app_flag_keeps_single_configure(
     monkeypatch, app_value
 ) -> None:
-    """浏览器路径(无 app 标记)行为一字不变:只 resume 一次。
+    """浏览器路径(无 app 标记)回调本身只 resume 一次。
 
-    首次 configure 停在 EXTERNAL_STEP_DONE、剩余推进交给常驻 HA 前端标签页
-    ——这是 issue #43 修复后刻意保留的网页版语义。
+    首次 configure 停在 EXTERNAL_STEP_DONE、剩余推进先交给常驻 HA 前端标签页;
+    前端已推进(此处 step 仍是 seamless_authorize)时兜底任务不再推进。
     """
+    monkeypatch.setattr("seenzus_bridge.quick_pair.UNATTENDED_RESUME_DELAY_SECONDS", 0)
     query = {"app": app_value} if app_value is not None else None
     hass, request = _build_quick_pair_callback_request(monkeypatch, query=query)
     hass.config_entries.flow.configure_results = [
@@ -968,6 +1001,44 @@ async def test_quick_pair_callback_view_without_app_flag_keeps_single_configure(
     assert response.status == 200
     assert len(hass.config_entries.flow.configure_calls) == 1
     assert "window.close()" in response.text
+    await asyncio.gather(*hass.scheduled_tasks)
+    assert len(hass.config_entries.flow.configure_calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("later", "expected_calls"), [
+    ({"step_id": "seamless_finish"}, 2),  # no dialog resumed it: the bridge finishes the flow
+    ({"step_id": "environment"}, 1),  # a live dialog already moved it on
+    (UnknownFlow(), 1),  # the dialog finished or cancelled it
+])
+async def test_browser_callback_finishes_a_flow_no_dialog_resumes(monkeypatch, later, expected_calls) -> None:
+    """Phones with the Home Assistant app keep the dialog there while authorization
+    returns to a browser: nothing resumes the flow, so the bridge does after a grace."""
+    monkeypatch.setattr("seenzus_bridge.quick_pair.UNATTENDED_RESUME_DELAY_SECONDS", 0)
+    hass, request = _build_quick_pair_callback_request(monkeypatch)
+    manager = hass.config_entries.flow
+    manager.configure_results = [
+        {"type": FlowResultType.EXTERNAL_STEP_DONE, "step_id": "seamless_finish"},
+        {"type": FlowResultType.CREATE_ENTRY, "title": "seenzus Bridge"},
+    ]
+    # Before storing the callback, right after resuming it, then when the grace ends.
+    progress = [{"step_id": "seamless_authorize"}, {"step_id": "seamless_finish"}, later]
+
+    def async_get(_flow_id):
+        step = progress.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return step
+
+    manager.async_get = async_get
+
+    response = await SavanAIQuickPairCallbackView().get(request)
+    assert response.status == 200
+    assert len(manager.configure_calls) == 1
+    await asyncio.gather(*hass.scheduled_tasks)
+
+    assert len(manager.configure_calls) == expected_calls
+    assert all(call["user_input"] is None for call in manager.configure_calls)
 
 
 @pytest.mark.asyncio
@@ -985,9 +1056,38 @@ async def test_quick_pair_callback_view_with_app_flag_drives_flow_to_create_entr
 
     assert response.status == 200
     assert len(hass.config_entries.flow.configure_calls) == 2
-    # 关不掉的 WebView 里 300ms 后跳回集成页,不再停在白屏。
+    # In-app WebViews and app hand-offs cannot close this page: it says so instead of
+    # opening HA's dashboard in the browser.
     assert "window.close()" in response.text
-    assert "location.replace('/config/integrations')" in response.text
+    assert "/config/integrations" not in response.text
+    assert "You can close this page" in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("error", "language", "expected"), [
+    ("environment_already_configured", "zh-Hans", "已经有这个环境的 seenzus 条目"),
+    ("environment_required", "en", "could not be identified"),
+    ("access_denied", "en", "Authorization was not completed"),
+])
+async def test_a_declined_callback_does_not_claim_the_pairing_is_being_saved(
+    monkeypatch, error, language, expected,
+) -> None:
+    """The origin page declines an already-configured environment without authorization."""
+    hass, request = _build_quick_pair_callback_request(monkeypatch)
+    hass.config.language = language
+    del request.query["code"]
+    request.query["error"] = error
+    hass.config_entries.flow.configure_results = [
+        {"type": FlowResultType.EXTERNAL_STEP_DONE, "step_id": "seamless_finish"},
+    ]
+
+    response = await SavanAIQuickPairCallbackView().get(request)
+
+    assert response.status == 200
+    assert hass.config_entries.flow.configure_calls[0]["user_input"] is None
+    assert expected in response.text
+    assert "授权完成" not in response.text and "Authorization complete" not in response.text
+    assert "window.close()" not in response.text
 
 
 @pytest.mark.asyncio
@@ -1031,6 +1131,16 @@ async def test_quick_pair_callback_view_treats_unknown_flow_as_success(monkeypat
         calls.append({"flow_id": flow_id, "user_input": user_input})
         if len(calls) == 1:
             return {"type": FlowResultType.EXTERNAL_STEP_DONE}
+        from seenzus_bridge.quick_pair import _mark_quick_pair_completed, _confirm_quick_pair_completed, _quick_pair_finish_removed
+        from homeassistant.config_entries import ConfigEntryState
+        from tests.helpers import FakeConfigEntry
+        entry_data = {"pairing_session_id": "wps_test", "environment": "uat", "world_id": "world-a"}
+        entry = FakeConfigEntry(data=entry_data)
+        entry.state = ConfigEntryState.LOADED
+        hass.config_entries.entries.append(entry)
+        _mark_quick_pair_completed(hass, "pairing-state", entry_data)
+        _quick_pair_finish_removed(hass, "pairing-state")
+        assert _confirm_quick_pair_completed(hass, "pairing-state")
         raise UnknownFlow()
 
     hass.config_entries.flow.async_configure = _configure
@@ -1040,6 +1150,44 @@ async def test_quick_pair_callback_view_treats_unknown_flow_as_success(monkeypat
     assert response.status == 200
     assert "window.close()" in response.text
     assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry_saved", [False, True])
+async def test_callback_does_not_redrive_flow_while_entry_is_being_finalized(monkeypatch, entry_saved):
+    from seenzus_bridge.quick_pair import _mark_quick_pair_completed
+    hass, request = _build_quick_pair_callback_request(monkeypatch)
+    data = {"pairing_session_id": "wps_test", "environment": "uat", "world_id": "world-a"}
+    _mark_quick_pair_completed(hass, "pairing-state", data)
+    if entry_saved:
+        from tests.helpers import FakeConfigEntry
+        hass.config_entries.entries.append(FakeConfigEntry(data=data))
+    response = await SavanAIQuickPairCallbackView().get(request)
+    assert response.status == 202
+    assert "still being finalized" in response.text
+    assert hass.config_entries.flow.configure_calls == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_uncommitted_entry_does_not_report_success(monkeypatch):
+    from seenzus_bridge.quick_pair import _mark_quick_pair_completed
+    hass, request = _build_quick_pair_callback_request(monkeypatch)
+    _mark_quick_pair_completed(hass, "pairing-state", {"pairing_session_id": "wps_test", "environment": "uat", "world_id": "world-a"})
+    hass.config_entries.flow.async_get = lambda _: (_ for _ in ()).throw(UnknownFlow())
+    response = await SavanAIQuickPairCallbackView().get(request)
+    assert response.status == 410
+
+
+@pytest.mark.asyncio
+async def test_cancelled_quick_pair_callback_does_not_report_success(monkeypatch):
+    hass, request = _build_quick_pair_callback_request(monkeypatch, query={"app": "1"})
+    async def cancelled(**kwargs):
+        raise UnknownFlow()
+    hass.config_entries.flow.async_configure = cancelled
+    response = await SavanAIQuickPairCallbackView().get(request)
+    assert response.status == 410
+    from seenzus_bridge.quick_pair import _pop_quick_pair_callback_payload
+    assert _pop_quick_pair_callback_payload(hass, "pairing-state") is None
 
 
 @pytest.mark.asyncio
@@ -1072,6 +1220,7 @@ async def test_quick_pair_callback_mailbox_evicts_oldest_beyond_cap(monkeypatch)
 
     for index in range(QUICK_PAIR_CALLBACK_PAYLOAD_LIMIT + 1):
         state = {"flow_id": f"flow-{index}", "pairing_state": f"pairing-state-{index}"}
+        hass.data.setdefault("seenzus_bridge", {}).setdefault("quick_pair_active_states", {})[("config", state["flow_id"])] = state["pairing_state"]
         monkeypatch.setattr(
             "seenzus_bridge.quick_pair._decode_jwt",
             lambda _hass, _token, _state=state: _state,
@@ -1502,7 +1651,8 @@ def test_read_app_return_url_accepts_key_aliases() -> None:
 
 @pytest.mark.asyncio
 async def test_seamless_captures_app_return_url_from_session(monkeypatch) -> None:
-    flow = SavanAIBridgeConfigFlow()
+    flow = _new_config_flow()
+    flow._selected_environment = "global"
     flow.hass = FakeHass()
     monkeypatch.setattr(flow, "_async_current_entries", lambda: [])
     monkeypatch.setattr(
@@ -1558,11 +1708,12 @@ async def test_seamless_finish_creates_entry_with_return_link(monkeypatch) -> No
         "seenzus_bridge.quick_pair._encode_jwt",
         lambda _hass, _payload: "app-return-token",
     )
-    flow = SavanAIBridgeConfigFlow()
+    flow = _new_config_flow()
     flow.hass = FakeHass()
     flow._quick_pair_api_base = "https://api.seenzus.xxx/api"
     flow._quick_pair_session_id = "wps_1"
     flow._quick_pair_page_url = "https://app.seenzus.xxx/web-pairing/wps_1"
+    flow._quick_pair_callback_state = "pairing-state"
     flow._quick_pair_exchange_result = _result_obj(
         {
             "ok": True,
@@ -1605,8 +1756,15 @@ async def test_seamless_finish_creates_entry_with_return_link(monkeypatch) -> No
     # The success-page link stays the raw app URL (the dialog is HA-native and
     # cannot be closed from a link click, so no transit indirection there).
     assert created[0]["description_placeholders"] == {
-        "app_return_url": "seenzus://pairing/done?session=wps_1"
+        "app_return_link": '<a href="seenzus://pairing/done?session=wps_1" target="_blank">Return to seenzus</a>'
     }
+    assert notified == []
+    from homeassistant.config_entries import ConfigEntryState
+    from tests.helpers import FakeConfigEntry
+    entry = FakeConfigEntry(data=created[0]["data"])
+    entry.state = ConfigEntryState.LOADED
+    flow.hass.config_entries.entries.append(entry)
+    flow.async_remove()
     # The same link is also pushed as a durable persistent notification, so the
     # options / re-pair path (no create_entry success page) still surfaces it.
     # There it routes through the transit endpoint: clicking dismisses the
@@ -1623,6 +1781,76 @@ async def test_seamless_finish_creates_entry_with_return_link(monkeypatch) -> No
     ]
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("api_base", "expected"), [
+    ("https://app.seenzus.cn/api/seenzus", "https://app.seenzus.cn/integrations"),
+    ("https://seenzus.ai/api/seenzus", "https://seenzus.ai/integrations"),
+    ("http://192.168.1.20:5078/api/seenzus", None),  # developer preset: no public app to return to
+])
+async def test_deferred_pairing_success_page_returns_to_the_deployment(monkeypatch, api_base, expected) -> None:
+    """A deferred commit has no Source yet, so the server sends no return link. The
+    success page still offers one to the deployment's sources; only the commit's
+    notification (with the Source link) is pushed, never a second fallback one."""
+    notified: list = []
+    monkeypatch.setattr("seenzus_bridge.config_flow._notify_app_return", lambda *args: notified.append(args))
+    signed: list[dict] = []
+    monkeypatch.setattr("seenzus_bridge.quick_pair._encode_jwt", lambda _hass, payload: signed.append(payload) or "t")
+    flow = _new_config_flow()
+    flow.hass = FakeHass()
+    flow._quick_pair_api_base = api_base
+    flow._quick_pair_session_id = "wps_1"
+    flow._quick_pair_page_url = "http://ha.local:8123/api/seenzus_bridge/quick_pair/origin?state=x"
+    flow._quick_pair_callback_state = "pairing-state"
+    flow._quick_pair_exchange_result = _result_obj({
+        "ok": True, "session_id": "wps_1", "config_source": "web_pair", "confirmed_at": "2026-10-28T07:25:35Z",
+        "commit_token": "commit-token",
+        "mqtt": {"host": "broker.example.com", "scheme": "mqtts", "port": 8883, "username": "user-1",
+                 "password": "pass-1", "topicRoot": "seenzus/v2", "bridgeId": "ha-web-bridge"},
+    })
+    created: list[dict] = []
+    flow.async_create_entry = lambda **kwargs: created.append(kwargs) or {"type": "create_entry", "data": kwargs["data"]}
+
+    assert (await flow.async_step_seamless_finish())["type"] == "create_entry"
+    if expected:
+        # HA's transit page opens the Source once the commit returned its link,
+        # and falls back to the deployment's source list.
+        assert created[0]["description"] == "app_return"
+        assert created[0]["description_placeholders"] == {
+            "app_return_link": f'<a href="{QUICK_PAIR_APP_RETURN_PATH}?token=t" target="_blank">Return to seenzus</a>'}
+        assert signed == [{"app_return_url": expected, "notification_scope": flow.flow_id, "session_id": "wps_1"}]
+    else:
+        assert "description" not in created[0]
+    from homeassistant.config_entries import ConfigEntryState
+    from tests.helpers import FakeConfigEntry
+    entry = FakeConfigEntry(data=created[0]["data"])
+    entry.state = ConfigEntryState.LOADED
+    flow.hass.config_entries.entries.append(entry)
+    flow.async_remove()
+    assert notified == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("committed", "expected"), [
+    ("https://app.seenzus.cn/integrations/sources/src-1?justPaired=1&pairedSource=src-1",
+     "https://app.seenzus.cn/integrations/sources/src-1?justPaired=1&pairedSource=src-1"),
+    (None, "https://app.seenzus.cn/integrations"),  # commit never returned a link in time
+])
+async def test_return_link_shown_before_the_commit_opens_the_paired_source(monkeypatch, committed, expected) -> None:
+    from seenzus_bridge.quick_pair import QUICK_PAIR_COMMITTED_RETURNS, _record_committed_return
+    monkeypatch.setattr("seenzus_bridge.quick_pair.RETURN_LINK_COMMIT_WAIT_SECONDS", 0)
+    monkeypatch.setattr("seenzus_bridge.quick_pair.persistent_notification",
+                        SimpleNamespace(async_dismiss=lambda _hass, notification_id: None))
+    monkeypatch.setattr("seenzus_bridge.quick_pair._decode_jwt", lambda _hass, _token: {
+        "app_return_url": "https://app.seenzus.cn/integrations", "notification_scope": "flow-1", "session_id": "wps_1"})
+    hass = FakeHass()
+    if committed:
+        _record_committed_return(hass, "wps_1", committed)
+    response = await SeenzusAppReturnView().get(SimpleNamespace(app={"hass": hass}, query={"token": "signed"}))
+    assert response.status == 302
+    assert response.headers["Location"] == expected
+    assert len(hass.data.get("seenzus_bridge", {}).get(QUICK_PAIR_COMMITTED_RETURNS, {})) == (1 if committed else 0)
+
 def _async_result(values: dict):
     async def _runner(*_args, **_kwargs):
         return _result_obj(values)
@@ -1635,4 +1863,4 @@ def _result_obj(values: dict):
         def __init__(self, payload: dict) -> None:
             self.__dict__.update(payload)
 
-    return _Result(values)
+    return _Result({"world_id": "world-a", "world_name": "世界甲", **values})

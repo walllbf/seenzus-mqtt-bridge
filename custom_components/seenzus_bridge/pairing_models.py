@@ -27,6 +27,8 @@ class PairingCallbackResult:
 
     ok: bool
     session_id: str
+    world_id: str | None = None
+    world_name: str | None = None
     bridge_id: str | None = None
     source_id: str | None = None
     source_type: str | None = None
@@ -35,6 +37,30 @@ class PairingCallbackResult:
     confirmed_at: str | None = None
     app_return_url: str | None = None
     mqtt: dict[str, object] | None = None
+    # Present when the backend issued a candidate that HA must commit after saving.
+    commit_token: str | None = None
+    commit_expires_at: str | None = None
+    message: str | None = None
+    request_url: str | None = None
+    http_status: int | None = None
+    error_code: str | None = None
+    response_summary: str | None = None
+
+
+@dataclass(slots=True)
+class PairingCommitResult:
+    """Outcome of committing or cancelling a deferred pairing.
+
+    ``rejected`` means the backend definitively refused and kept its previous
+    Source and credentials; ``ok`` means the requested outcome is in place.
+    Neither means the attempt may be retried.
+    """
+
+    ok: bool
+    rejected: bool = False
+    state: str | None = None
+    source_id: str | None = None
+    app_return_url: str | None = None
     message: str | None = None
     request_url: str | None = None
     http_status: int | None = None

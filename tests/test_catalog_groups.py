@@ -23,9 +23,10 @@ def test_catalog_groups_accounts_without_splitting_devices_or_leaking_config(mon
         entities.add(entity_id, entry_id, device_id=device_id)
         hass.states.set(entity_id)
     for entry_id, title in [("xiaomi-home", "家中账号"), ("xiaomi-office", "公司账号")]:
-        hass.config_entries.entries[entry_id] = SimpleNamespace(
-            title=title, domain="xiaomi_home", data={"token": "private-token"}, options={"password": "secret"}
-        )
+        hass.config_entries.entries.append(SimpleNamespace(
+            entry_id=entry_id, title=title, domain="xiaomi_home",
+            data={"token": "private-token"}, options={"password": "secret"}
+        ))
     monkeypatch.setattr(er, "async_get", lambda _: entities)
     monkeypatch.setattr(dr, "async_get", lambda _: devices)
 

@@ -134,9 +134,9 @@ async def test_real_entity_remove_unsubscribes_before_readding(real_runtime, mon
 
 
 @pytest.mark.parametrize("language, expected", [
-    ("en", "Quick pair (recommended)"),
-    ("fr", "Quick pair (recommended)"),
-    ("zh-Hans", "快速配对（推荐）"),
+    ("en", "Quick pair (detect environment, recommended)"),
+    ("fr", "Quick pair (detect environment, recommended)"),
+    ("zh-Hans", "快速配对（自动识别环境，推荐）"),
 ])
 async def test_serialized_setup_choices_use_runtime_selector_translations(
     real_runtime, language, expected,
@@ -152,7 +152,8 @@ async def test_serialized_setup_choices_use_runtime_selector_translations(
     translations = await async_get_translations(hass, language, "selector", {DOMAIN})
     key = select["translation_key"]
     assert translations[f"component.{DOMAIN}.selector.{key}.options.seamless"] == expected
-    assert select["options"] == ["seamless", "manual"]
+    assert select["options"] == ["seamless", "choose_environment", "manual"]
+    assert translations[f"component.{DOMAIN}.selector.{key}.options.choose_environment"]
 
 
 @pytest.mark.parametrize("language, expected", [
@@ -194,6 +195,51 @@ async def test_pairing_notifications_use_real_cached_language(
     assert ("快速配对失败" if language == "zh-Hans" else "Quick pairing failed") in created[-1][0]
 
 
+@pytest.mark.parametrize("language, expected", [
+    ("en", "Return to seenzus"), ("zh-Hans", "返回 seenzus 应用"),
+])
+async def test_localized_notifications_and_return_links_keep_entry_scopes_separate(
+    real_runtime, monkeypatch, language, expected,
+):
+    hass, _, _, _ = real_runtime
+    hass.config.language = language
+    await async_get_translations(hass, language, "common", {DOMAIN})
+    active = {}
+    created = []
+
+    def create(_hass, message, **kwargs):
+        notification_id = kwargs["notification_id"]
+        active[notification_id] = message
+        created.append(notification_id)
+
+    monkeypatch.setattr("seenzus_bridge.quick_pair.persistent_notification.async_create", create)
+    monkeypatch.setattr("seenzus_bridge.quick_pair.persistent_notification.async_dismiss",
+                        lambda _hass, notification_id: active.pop(notification_id, None))
+    _record_quick_pair_diagnostic(hass, "failed-cn", {"message": "cn"}, "entry-cn")
+    cn_diagnostic = created[-1]
+    _record_quick_pair_diagnostic(hass, "failed-uat", {"message": "uat"}, "entry-uat")
+    uat_diagnostic = created[-1]
+    assert cn_diagnostic != uat_diagnostic
+
+    _notify_app_return(hass, "seenzus://pairing/done", "entry-cn")
+    cn_return = created[-1]
+    assert expected in active[cn_return]
+    assert cn_diagnostic not in active and uat_diagnostic in active
+    _notify_app_return(hass, "seenzus://pairing/done", "entry-uat")
+    uat_return = created[-1]
+    assert cn_return != uat_return
+    assert cn_return in active and uat_return in active
+
+    monkeypatch.setattr("seenzus_bridge.quick_pair._decode_jwt", lambda *_: {
+        "app_return_url": "seenzus://pairing/done", "notification_scope": "entry-cn",
+    })
+    response = await SeenzusAppReturnView().get(SimpleNamespace(
+        app={"hass": hass}, query={"token": "test-token"},
+    ))
+    assert response.status == 200
+    assert cn_return not in active and uat_return in active
+
+
 @pytest.mark.parametrize("credential", [" leading-and-trailing ", " ", "normal"])
 @pytest.mark.parametrize("source", ["manual", "quick_pair"])
 async def test_credentials_are_preserved_from_entry_to_mqtt_client(
@@ -210,6 +256,10 @@ async def test_credentials_are_preserved_from_entry_to_mqtt_client(
     else:
         flow = SavanAIBridgeConfigFlow()
         flow.hass = hass
+        flow.context = {"source": "user"}
+        await flow.async_step_user({"pairing_mode": "manual"})
+        await flow.async_step_environment({"environment": "cn"})
+        await flow.async_step_scope({"device_scope": "all"})
         result = await flow.async_step_manual({"mqtt_settings": {
             "mqtt_host": settings["host"], "mqtt_scheme": settings["scheme"],
             "mqtt_username": credential, "mqtt_password": credential,

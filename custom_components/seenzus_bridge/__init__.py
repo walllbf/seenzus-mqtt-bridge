@@ -17,11 +17,15 @@ from homeassistant.helpers.typing import ConfigType
 
 from .catalog import IOT_DEVICE_DOMAINS  # noqa: F401
 from .const import BRIDGE_VERSION, DOMAIN  # noqa: F401
+from .const import CONF_PAIRING_API_BASE, DEFAULT_PAIRING_API_BASE
+from .environments import CONF_ENVIRONMENT, entry_environment
+from .device_access import CONF_SCOPE
 from .coordinator import (  # noqa: F401
     PRESENCE_HEARTBEAT_INTERVAL_SECONDS,
     BridgeCoordinator,
 )
 from .mqtt_requirements import async_ensure_mqtt_requirements
+from .pairing_commit import async_resolve_orphans, async_schedule_commit, spawn
 from .mqtt_transport import MqttTransportError, validate_mqtt_transport
 
 PLATFORMS = ["sensor"]
@@ -31,6 +35,22 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Prepare the integration before config flows and entries start."""
     await async_ensure_mqtt_requirements(hass)
+    # Candidates journaled before a restart whose entry was never saved.
+    spawn(hass, async_resolve_orphans(hass), f"{DOMAIN} pairing orphans")
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Preserve the existing connection and whole-HA grant; learn World identity on re-pair."""
+    if entry.version > 2:
+        return False
+    if entry.version == 1:
+        data = {**entry.data}
+        config = {**data, **entry.options}
+        data.setdefault(CONF_PAIRING_API_BASE, config.get(CONF_PAIRING_API_BASE, DEFAULT_PAIRING_API_BASE))
+        data.setdefault(CONF_ENVIRONMENT, entry_environment(config))
+        data.setdefault(CONF_SCOPE, "all")
+        hass.config_entries.async_update_entry(entry, data=data, version=2, unique_id=data[CONF_ENVIRONMENT])
     return True
 
 
@@ -66,7 +86,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN].pop(entry.entry_id, None)
         await coordinator.async_stop()
         raise
+    async_schedule_commit(hass, entry)
     return True
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """A deleted entry no longer carries its uncommitted candidate."""
+    spawn(hass, async_resolve_orphans(hass, entry.entry_id), f"{DOMAIN} pairing orphans")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
