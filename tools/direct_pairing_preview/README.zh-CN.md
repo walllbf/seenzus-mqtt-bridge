@@ -4,7 +4,7 @@ domains: [Home-Assistant, pairing, browser]
 evidence: [tests/test_pairing_origin.py, tests/test_pairing_commit.py, tests/test_pairing_commit_contract.py, tools/direct_pairing_preview/origin-claim-browser-test.cjs]
 ---
 
-# 来源识别与两阶段提交验证版 · 0.2.16b7
+# 来源识别与两阶段提交验证版 · 0.2.16b8
 
 本版在 0.2.16b2（电脑浏览器来源识别，已在 UAT 网页端验收）基础上增加两项：
 
@@ -14,6 +14,8 @@ evidence: [tests/test_pairing_origin.py, tests/test_pairing_commit.py, tests/tes
 0.2.16b6：HA「配对成功」页的「返回 seenzus 应用」直接打开刚配对的数据源详情页。按钮经 HA 本机中转：提交完成后服务端返回的数据源链接即为目标；点击时提交尚未完成会最多等待 8 秒，仍未取得时打开发起环境的设备管理页。提交完成后 HA 通知中同样有指向该数据源的链接。
 
 0.2.16b7：修正 b6 在「配对成功」页显示「Translation error: INVALID_TAG」、按钮不出现的问题。HA 前端按 ICU 消息格式解析翻译文本，带属性的链接标签只能经占位符传入。
+
+0.2.16b8：识别页因「该环境已有条目」或「需手动选择环境」退回时，回调页不再显示「授权完成，正在保存配对」，改为说明原因并保持页面打开。iOS 实测中 HA 已有国内条目时，App 内看到的就是这句误导提示。
 
 0.2.16b4 修正手机实测中发现的问题：
 
@@ -37,7 +39,7 @@ evidence: [tests/test_pairing_origin.py, tests/test_pairing_commit.py, tests/tes
 
 1. 在 HA 中创建完整备份，并额外保存当前 `custom_components/seenzus_bridge` 文件夹。
 2. 将 ZIP 中的 `custom_components/seenzus_bridge` 整个文件夹覆盖到 HA 配置目录下的同名位置，包含 `translations`。不要嵌套成两层 `seenzus_bridge`。
-3. 完整重启 HA，强制刷新 HA 页面。版本应为 `0.2.16b7`。
+3. 完整重启 HA，强制刷新 HA 页面。版本应为 `0.2.16b8`。
 
 ## 验收清单
 
@@ -69,15 +71,16 @@ evidence: [tests/test_pairing_origin.py, tests/test_pairing_commit.py, tests/tes
 
 | 范围 | 结果 |
 | --- | --- |
-| HA Core 2025.1.4 / Python 3.13 | 708 项测试通过（含 4 项跨仓库契约） |
-| HA Core 2026.10.2 / Python 3.14 | 708 项测试通过（含 4 项跨仓库契约） |
+| HA Core 2025.1.4 / Python 3.13 | 711 项测试通过（含 4 项跨仓库契约） |
+| HA Core 2026.10.2 / Python 3.14 | 711 项测试通过（含 4 项跨仓库契约） |
 | 跨仓库契约（真实应用配对路由，内存库） | 4 项通过：保存后才提交、取消重配保留原连接、HA 重启与服务端崩溃后的提交、拒绝后回滚 |
 | 认领页链路与页面选择，Chromium 与 WebKit | 各 12 项通过；页面与授权结果为测试夹具 |
 | UAT 电脑网页（用户实际 HA） | 2026-10-28 通过：首次配对；授权后取消，应用未新增数据源；重新配对保留原数据源并轮换凭证 |
 | 境外 PRD · Android 安装包 beta.19 | 2026-10-28 通过：自动识别发起环境，两阶段提交（06:26 UTC） |
 | 国内 PRD · OPPO 浏览器，手机装有 HA App | 2026-10-28 通过：b4 授权交换 07:25:35、提交 07:25:36（UTC）；b7「返回 seenzus 应用」打开刚配对的数据源详情页 |
-| 重配时断网或重启 HA（真机） | 未测，仅有跨仓库契约测试 |
-| iOS、鸿蒙 | 未测：iOS 需在 Mac 上出包，鸿蒙需 DevEco 模拟器（仅境外） |
+| 国内 PRD · iOS，HA 已删除原国内条目 | 2026-10-28 b8 通过：自动识别发起环境，授权交换 09:40:24、提交 09:40:26（UTC） |
+| 国内 PRD · 重配时中断（用户实际 HA） | 2026-10-29 通过，使用仅供测试的延时版（b8 在保存条目前、提交前各等待 30 秒）：保存前重启 HA，候选在重启后取消、新凭证吊销，原连接保持（07:43:26 → 07:44:34）；保存后重启 HA，重启后补交提交，原凭证随之吊销（07:47:38 → 07:49:42）；保存后断开 HA 外网约一分钟，恢复后重试提交（07:54:19 → 07:56:30）。每次结束只有一份有效凭证，数据源未重复 |
+| 境外 PRD · 鸿蒙模拟器（HarmonyOS 6.0） | 2026-10-29 通过：自动识别发起环境，授权交换 06:54:30、提交 06:54:33（UTC）。模拟器没有系统浏览器，且系统会拦截应用跳转到非应用市场安装的测试浏览器，App 交出的链接改由命令行转给测试浏览器；App 到系统浏览器的一跳需真机确认 |
 
 浏览器夹具证明路由交接行为，不代表真实账号授权已经完成。
 
