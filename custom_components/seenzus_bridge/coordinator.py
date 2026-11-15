@@ -88,6 +88,8 @@ from .mqtt_settings import mqtt_packet_size_limit, validate_mqtt_presence_budget
 from .mqtt_transport import MqttTransportError, validate_mqtt_transport
 from .operation_store import PersistentOperationStore
 from .device_access import DeviceAccess
+from .interactive_remote import InteractiveRemotes, RemoteDenied, PATH as INTERACTIVE_REMOTE_PATH
+from .companion_roles import add_reviewed_companion_roles
 from .sensor_display import async_prepare_sensor_display, sensor_display_attributes, supports_entity_display
 
 _LOGGER = logging.getLogger(__name__)
@@ -276,6 +278,22 @@ class BridgeCoordinator:
         self._snapshot_replies: dict[str, tuple[dict, dict]] = {}
         self._snapshot_client: Any = None
         self._operation_store = PersistentOperationStore(hass, entry.entry_id)
+        self._interactive_remotes = InteractiveRemotes(
+            hass, self._conf, self._dispatch_interactive_remote, self._emit_interactive_remote,
+            lambda coro: self.hass.async_create_background_task(coro, "seenzus interactive remote"),
+        )
+
+    async def _dispatch_interactive_remote(self, service: str, body: dict):
+        domain, action = service.split(".")
+        return await dispatch(self.hass, "POST", f"/api/services/{domain}/{action}", body, self._dispatch_policy())
+
+    async def _emit_interactive_remote(self, client: Any, msg_id: str, data: dict, entity_id: str | None = None):
+        phase = data.get("phase")
+        await self._publish_result(client, msg_id, success=phase not in {"rejected", "unknown"},
+                                   status=409 if phase == "rejected" else 503 if phase == "unknown" else 202 if phase == "admitted" else 200,
+                                   data=data)
+        if entity_id and client is self._mqtt_client:
+            await self._publish_states_for_entities(client, [entity_id], correlation_id=msg_id)
 
     def register_update_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
         self._listeners.append(cb)
@@ -537,6 +555,7 @@ class BridgeCoordinator:
     async def async_stop(self, *, shutting_down: bool = False) -> None:
         """Stop the runtime without allowing external I/O to delay HA."""
         self._stopping = True
+        self._interactive_remotes.reset()
         self._unsubscribe_runtime_listeners()
         shutting_down = shutting_down or self.hass.state in {
             CoreState.stopping,
@@ -782,6 +801,7 @@ class BridgeCoordinator:
                 _LOGGER.exception("Fatal MQTT runtime error: %s", err)
                 raise
             finally:
+                self._interactive_remotes.reset()
                 self._mqtt_client = None
                 self._connected_client = None
                 await self._stop_connection_commands()
@@ -909,6 +929,7 @@ class BridgeCoordinator:
                 return False
 
             self._mqtt_client = client
+            self._interactive_remotes.reset(client)
             self.status = "active"
             self.mqtt_connected = True
             self.last_error = None
@@ -935,7 +956,8 @@ class BridgeCoordinator:
             async for message in client.messages:
                 topic = str(message.topic)
                 raw = message.payload.decode(errors="replace")
-                self._schedule_message(topic, raw, client)
+                self._schedule_message(topic, raw, client,
+                    interactive_eligible=getattr(message, "qos", 1) == 0 and not getattr(message, "retain", True))
 
         return True
 
@@ -1004,7 +1026,7 @@ class BridgeCoordinator:
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
-    def _schedule_message(self, topic: str, raw: str, client: Any) -> bool:
+    def _schedule_message(self, topic: str, raw: str, client: Any, *, interactive_eligible: bool = False) -> bool:
         if len(self._command_tasks) >= MAX_INFLIGHT_COMMANDS:
             self.err_count += 1
             self.last_error = "command_overload"
@@ -1017,7 +1039,8 @@ class BridgeCoordinator:
             return False
         task = self._entry.async_create_task(
             self.hass,
-            self._handle_message(topic, raw, client),
+            self._handle_message(topic, raw, client, interactive_eligible=True) if interactive_eligible
+            else self._handle_message(topic, raw, client),
             "seenzus command handler",
         )
         self._command_tasks.add(task)
@@ -1044,15 +1067,18 @@ class BridgeCoordinator:
             self.pairing_status = PAIRING_STATUS_WAITING_EXTERNAL_AUTH
         self._fire()
 
-    async def _handle_message(self, topic: str, raw: str, client: Any) -> None:
+    async def _handle_message(self, topic: str, raw: str, client: Any, *, interactive_eligible: bool = False) -> None:
         if self._topics and topic.startswith(f"{self._command_prefix}/"):
             msg_id = topic.removeprefix(f"{self._command_prefix}/").strip()
             _LOGGER.info("Received MQTT command topic=%s msgId=%s", topic, msg_id)
-            await self._handle_v2_command(msg_id, raw, client)
+            if interactive_eligible:
+                await self._handle_v2_command(msg_id, raw, client, interactive_eligible=True)
+            else:
+                await self._handle_v2_command(msg_id, raw, client)
         else:
             _LOGGER.debug("Ignore unsupported topic: %s", topic)
 
-    async def _handle_v2_command(self, msg_id: str, raw: str, client: Any) -> None:
+    async def _handle_v2_command(self, msg_id: str, raw: str, client: Any, *, interactive_eligible: bool = False) -> None:
         if self._topics is None:
             return
 
@@ -1072,6 +1098,16 @@ class BridgeCoordinator:
         body = req.get("body")
         body = body if isinstance(body, dict) else None
         effective_msg_id = str(req.get("msgId", req.get("correlationId", msg_id))) or msg_id
+        if path == INTERACTIVE_REMOTE_PATH:
+            # The volatile route bypasses persistent operation storage and generic
+            # execution tasks only at admission; physical calls still use one Device fence.
+            try:
+                if method.upper() != "POST" or body is None or not self.mqtt_connected or not interactive_eligible:
+                    raise RemoteDenied("remote_not_ready")
+                await self._interactive_remotes.handle(body, client, effective_msg_id)
+            except RemoteDenied as err:
+                await self._publish_result(client, effective_msg_id, success=False, status=403, error=str(err))
+            return
         operation_key = req.get("operationKey")
         operation_key = operation_key.strip() if isinstance(operation_key, str) else None
         scope_fingerprint = DeviceAccess(self.hass, self._conf()).fingerprint()
@@ -1116,6 +1152,10 @@ class BridgeCoordinator:
                     source="command",
                     correlation_id=effective_msg_id,
                 )
+                await add_reviewed_companion_roles(self.hass, catalog_payload, DeviceAccess(self.hass, self._conf()))
+                if scope_fingerprint != DeviceAccess(self.hass, self._conf()).fingerprint():
+                    await self._publish_result(client, effective_msg_id, success=False, status=409, error="device_grant_changed")
+                    return
                 if not await self._publish_result(
                     client,
                     effective_msg_id,
@@ -1160,7 +1200,8 @@ class BridgeCoordinator:
             if scope_fingerprint != DeviceAccess(self.hass, self._conf()).fingerprint():
                 await self._publish_result(client, effective_msg_id, success=False, status=409, error="device_grant_changed")
                 return
-            result = await dispatch(self.hass, method, path, body, self._dispatch_policy())
+            result = await self._interactive_remotes.dispatch_legacy(method, path, body,
+                lambda: dispatch(self.hass, method, path, body, self._dispatch_policy()))
             if scope_fingerprint != DeviceAccess(self.hass, self._conf()).fingerprint():
                 await self._publish_result(client, effective_msg_id, success=False, status=409, error="device_grant_changed")
                 return
@@ -1382,6 +1423,13 @@ class BridgeCoordinator:
         if self._topics is None:
             return
         payload = self._build_device_catalog_payload(source=source, correlation_id=correlation_id)
+        access = DeviceAccess(self.hass, self._conf())
+        fingerprint = access.fingerprint()
+        await add_reviewed_companion_roles(self.hass, payload, access)
+        if fingerprint != DeviceAccess(self.hass, self._conf()).fingerprint():
+            self._catalog_refresh_pending = True
+            self._start_catalog_refresh_if_ready()
+            return
         await self._publish_catalog_payload(client, payload, source=source)
 
     async def _publish_catalog_payload(self, client: Any, payload: dict[str, Any], *, source: str) -> None:
@@ -1801,6 +1849,7 @@ class BridgeCoordinator:
                 "recorderHistoryReplay": True,
                 "serviceIndex": 1,
                 "snapshotStream": 1,
+                "interactiveRemote": self._interactive_remotes.declaration(),
             },
         }
         if transport_ws_path is not None:
