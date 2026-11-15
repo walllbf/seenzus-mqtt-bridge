@@ -162,18 +162,35 @@ async def test_invalid_budget_stops_before_opening_connection(monkeypatch):
 @pytest.mark.asyncio
 async def test_catalog_failure_retracts_online_when_offline_diagnostics_exceed_budget(monkeypatch):
     coordinator, fake = _make_coordinator(
-        monkeypatch, data={**HAPPY_ENTRY_DATA, KEY: 1, "source_name": "x" * 450},
+        monkeypatch, data={**HAPPY_ENTRY_DATA, KEY: 1, "source_name": "x" * 350},
     )
     coordinator._on_ha_started(None)
     monkeypatch.setattr(coordinator, "_build_device_catalog_payload", lambda **_kwargs: {
         "devices": [], "entityCount": 0, "large": "x" * 1500,
     })
+    attempts = []
+    publish = coordinator._publish
+
+    async def record_publish(client, topic, payload, **kwargs):
+        attempts.append({"topic": topic, "payload": payload, **kwargs})
+        return await publish(client, topic, payload, **kwargs)
+
+    monkeypatch.setattr(coordinator, "_publish", record_publish)
 
     await asyncio.wait_for(coordinator._mqtt_loop(), timeout=1)
 
     assert len(fake.clients) == 1
     publications = fake.clients[0].published
     assert [json.loads(item["payload"])["status"] for item in publications] == ["online", "offline"]
+    # Retain the 1 KiB limit and prove each side of the failure boundary using
+    # real Paho packet encoding, including the failed full diagnostic attempt.
+    online, catalog, full_offline, minimal_offline = attempts
+    assert len(_paho_packet(online["topic"], online["payload"], online["qos"])) <= 1024
+    assert catalog["topic"] == CATALOG_TOPIC
+    assert len(_paho_packet(catalog["topic"], catalog["payload"], catalog["qos"])) > 1024
+    assert json.loads(full_offline["payload"])["lastError"] == coordinator.last_error
+    assert len(_paho_packet(full_offline["topic"], full_offline["payload"], full_offline["qos"])) > 1024
+    assert minimal_offline["payload"] == publications[-1]["payload"]
     for item in publications:
         assert item["retain"] is True
         assert len(_paho_packet(item["topic"], item["payload"], item["qos"])) <= 1024

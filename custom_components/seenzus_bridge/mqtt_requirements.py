@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sys
 from importlib import metadata
+from inspect import signature
 from pathlib import Path
 
 from homeassistant import requirements as ha_requirements
@@ -28,7 +29,11 @@ def _core_mqtt_requirements(config_dir: str) -> list[str]:
         name = canonicalize_name(req.name)
         if name in MQTT_PACKAGES:
             requirements[name] = req
-    constraints = Path(ha_requirements.pip_kwargs(config_dir)["constraints"])
+    # Core 2025.1.4 accepts config_dir; Core 2026.11.1 has a no-argument API.
+    # Inspect the callable instead of retrying an internal TypeError or guessing a version.
+    pip_kwargs = ha_requirements.pip_kwargs
+    kwargs = pip_kwargs(config_dir) if "config_dir" in signature(pip_kwargs).parameters else pip_kwargs()
+    constraints = Path(kwargs["constraints"])
     for raw in constraints.read_text(encoding="utf-8").splitlines():
         if not (line := raw.split("#", 1)[0].strip()):
             continue
