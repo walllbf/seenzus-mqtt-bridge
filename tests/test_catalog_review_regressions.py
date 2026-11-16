@@ -46,6 +46,8 @@ async def real_runtime(tmp_path, monkeypatch):
         {item.name for item in INTEGRATION_PATH.iterdir()},
     )
     hass.config_entries = ConfigEntries(hass, {})
+    # Core's entity registry waits for config-entry initialization during load.
+    await hass.config_entries.async_initialize()
     entry = _make_core_config_entry()
     hass.config_entries._entries[entry.entry_id] = entry
     hass.config_entries.async_update_entry(entry, data={
