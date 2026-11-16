@@ -89,11 +89,13 @@ class FakeStates:
 
 
 class FakeConfig:
-    def path(self, filename):
+    def path(self, *parts):
+        from pathlib import Path
+        return str(Path(self.config_dir).joinpath(*parts))
+    def __init__(self, data: dict | None = None) -> None:
         import tempfile
         from pathlib import Path
-        return str(Path(tempfile.gettempdir()) / "seenzus-empty-test-config" / filename)
-    def __init__(self, data: dict | None = None) -> None:
+        self.config_dir = str(Path(tempfile.gettempdir()) / "seenzus-empty-test-config")
         self._data = data or {"location_name": "Home"}
         self.language = self._data.get("language", "en")
 

@@ -27,6 +27,7 @@ async def real_bridge(tmp_path):
     try:
         loader.async_setup(hass)
         hass.config_entries = config_entries.ConfigEntries(hass, {})
+        await hass.config_entries.async_initialize()
         await ar.async_load(hass)
         # Newer Core bootstraps the device registry explicitly before loading it.
         # Mirror that setup; do not replace the actual registry implementation.

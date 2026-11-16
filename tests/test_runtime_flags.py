@@ -82,7 +82,9 @@ async def test_on_state_changed_ignores_events_when_state_push_disabled(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_publish_presence_includes_expected_payload(runtime_coordinator, bridge_manifest_version) -> None:
+@pytest.mark.parametrize("scope,authorized", [("all", True), ("selected", False)])
+async def test_publish_presence_includes_expected_payload(runtime_coordinator, bridge_manifest_version, scope, authorized) -> None:
+    runtime_coordinator._entry.options["device_scope"] = scope
     runtime_coordinator._mqtt_client = AsyncFakeMQTTClient()
     runtime_coordinator._topics = build_topics("seenzus/v2", "ha-demo")
 
@@ -98,6 +100,11 @@ async def test_publish_presence_includes_expected_payload(runtime_coordinator, b
         "recorderHistoryReplay": True,
         "serviceIndex": 1,
         "snapshotStream": 1,
+        "interactiveRemote": {
+            "version": 1,
+            "profiles": ["remote:tv_remote:3", "remote:dangbei_local:2"],
+            "authorized": authorized,
+        },
     }
     assert payload["droppedStateEventCount"] == 0
 

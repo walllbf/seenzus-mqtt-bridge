@@ -16,11 +16,53 @@ from homeassistant.util import package
 from packaging.requirements import Requirement
 
 import seenzus_bridge
+from seenzus_bridge.mqtt_requirements import _core_mqtt_requirements
 
 
 ROOT = Path(__file__).resolve().parents[1]
 LEGACY_CONSTRAINTS = "paho-mqtt==1.6.1\n"
 MODERN_CONSTRAINTS = "aiomqtt>=2.5.0\npaho-mqtt==2.1.0\n"
+
+
+@pytest.mark.parametrize("api_shape", ["config-dir", "no-args"])
+def test_core_constraints_use_the_running_pip_kwargs_api(monkeypatch, tmp_path, api_shape):
+    constraints = tmp_path / "core-constraints.txt"
+    constraints.write_text(
+        MODERN_CONSTRAINTS + "aiomqtt<0; python_version<'1'\nunrelated==1\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def legacy(config_dir):
+        calls.append(config_dir)
+        return {"constraints": str(constraints)}
+
+    def modern():
+        calls.append(None)
+        return {"constraints": str(constraints)}
+
+    monkeypatch.setattr(ha_requirements, "pip_kwargs", legacy if api_shape == "config-dir" else modern)
+    requirements = {req.name: req for req in map(Requirement, _core_mqtt_requirements(str(tmp_path)))}
+    assert calls == [str(tmp_path) if api_shape == "config-dir" else None]
+    assert set(requirements) == {"aiomqtt", "paho-mqtt"}
+    assert "2.5.1" in requirements["aiomqtt"].specifier
+    assert "2.4.0" not in requirements["aiomqtt"].specifier
+    assert "3.0.0" not in requirements["aiomqtt"].specifier
+    assert "2.1.0" in requirements["paho-mqtt"].specifier
+    assert "1.6.1" not in requirements["paho-mqtt"].specifier
+
+
+def test_pip_kwargs_internal_type_error_is_not_retried(monkeypatch, tmp_path):
+    calls = []
+
+    def broken(config_dir):
+        calls.append(config_dir)
+        raise TypeError("synthetic Core failure")
+
+    monkeypatch.setattr(ha_requirements, "pip_kwargs", broken)
+    with pytest.raises(TypeError, match="synthetic Core failure"):
+        _core_mqtt_requirements(str(tmp_path))
+    assert calls == [str(tmp_path)]
 
 
 def _installed_mqtt(monkeypatch, tmp_path, constraints, versions, resolved):
